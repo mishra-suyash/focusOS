@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+body {
+  min-height: 100vh;
+  background: #f8faf9;
+  color: #1c2621;
+}
+
+.dark body {
+  background: #101713;
+  color: #eef2f0;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #94a69b transparent;
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-ink-200/80 bg-white shadow-soft dark:border-ink-800 dark:bg-ink-900;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-moss-500 focus:ring-offset-2 dark:focus:ring-offset-ink-950 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-moss-600 text-white hover:bg-moss-700;
+  }
+
+  .btn-secondary {
+    @apply btn border border-ink-200 bg-white text-ink-800 hover:bg-ink-50 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800;
+  }
+
+  .input {
+    @apply w-full rounded-md border-ink-200 bg-white text-sm text-ink-900 shadow-sm focus:border-moss-500 focus:ring-moss-500 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-50;
+  }
+
+  .label {
+    @apply text-xs font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400;
+  }
+}
