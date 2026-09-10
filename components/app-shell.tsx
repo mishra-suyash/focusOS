@@ -2,45 +2,68 @@
 
 import {
   BarChart3,
-  CalendarDays,
+  BookOpen,
+  BrainCircuit,
   CalendarClock,
+  CalendarRange,
   CheckSquare,
   ClipboardList,
-  Lightbulb,
+  Flag,
+  GraduationCap,
   LayoutDashboard,
   LogOut,
   Moon,
   Settings,
+  ShieldCheck,
+  Sparkles,
   Sun
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { useTheme } from "@/components/theme-provider";
+import { DaySessionBar } from "@/components/day-session-bar";
+import { ReminderBanner } from "@/components/reminder-banner";
+import { UsageOverlay } from "@/components/usage-overlay";
 import { clsx } from "clsx";
 
 const nav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/calendar", label: "Calendar", icon: CalendarRange },
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
-  { href: "/planner", label: "Planner", icon: CalendarDays },
-  { href: "/planner/day", label: "Day Plan", icon: CalendarClock },
+  { href: "/planner/day", label: "Planner", icon: CalendarClock },
+  { href: "/courses", label: "Courses", icon: GraduationCap },
+  { href: "/goals", label: "Goals", icon: Flag },
+  { href: "/review", label: "Review", icon: BrainCircuit },
+  { href: "/papers", label: "Papers", icon: BookOpen },
   { href: "/reviews/daily", label: "Daily Review", icon: ClipboardList },
   { href: "/reviews/weekly", label: "Weekly Review", icon: ClipboardList },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/thoughts", label: "Thoughts", icon: Lightbulb },
+  { href: "/insights", label: "AI Insights", icon: Sparkles },
   { href: "/settings", label: "Settings", icon: Settings }
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { user, logOut, loading, isDemoMode } = useAuth();
+  const { user, role, logOut, loading, isDemoMode } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/public/sign-in-methods")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => setMaintenanceMode(Boolean(data?.maintenanceMode)))
+      .catch(() => undefined);
+  }, []);
 
   if (loading) {
     return <div className="flex min-h-screen items-center justify-center text-sm text-ink-500">Loading FocusOS...</div>;
   }
 
   if (!user) return null;
+
+  const items = role === "owner" || role === "admin" ? [...nav, { href: "/admin", label: "Admin", icon: ShieldCheck }] : nav;
 
   return (
     <div className="min-h-screen bg-ink-50 text-ink-950 dark:bg-ink-950 dark:text-ink-50">
@@ -53,7 +76,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </Link>
         <nav className="mt-8 space-y-1">
-          {nav.map((item) => {
+          {items.map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
             return (
@@ -78,7 +101,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <header className="sticky top-0 z-20 border-b border-ink-200 bg-white/90 px-4 py-3 backdrop-blur dark:border-ink-800 dark:bg-ink-900/90">
           <div className="flex items-center justify-between gap-3">
             <nav className="flex gap-1 overflow-x-auto lg:hidden">
-              {nav.slice(0, 7).map((item) => (
+              {items.map((item) => (
                 <Link key={item.href} href={item.href} className="btn-secondary whitespace-nowrap px-2 py-1.5 text-xs">
                   {item.label}
                 </Link>
@@ -88,12 +111,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               {isDemoMode ? (
                 <span className="rounded-md bg-amberline/15 px-2 py-1 text-xs font-medium text-amberline">Env needed</span>
               ) : null}
+              <DaySessionBar />
               <button className="btn-secondary px-2" onClick={toggleTheme} aria-label="Toggle dark mode">
                 {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
               <div className="hidden text-right sm:block">
-                <p className="text-sm font-medium">{user.displayName ?? "FocusOS Scholar"}</p>
-                <p className="text-xs text-ink-500 dark:text-ink-400">{user.email ?? "Guest session"}</p>
+                <p className="text-sm font-medium">{user.displayName ?? (user.isAnonymous ? "Guest" : "FocusOS Scholar")}</p>
+                <p className="text-xs text-ink-500 dark:text-ink-400">{user.email || "Guest session"}</p>
               </div>
               <button className="btn-secondary px-2" onClick={logOut} aria-label="Sign out">
                 <LogOut className="h-4 w-4" />
@@ -101,8 +125,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </div>
         </header>
+        {maintenanceMode ? (
+          <div className="border-b border-amberline/30 bg-amberline/10 px-4 py-2 text-center text-xs font-medium text-ink-700 dark:text-ink-200">
+            FocusOS is in maintenance mode. Some features may be limited.
+          </div>
+        ) : null}
+        <ReminderBanner />
         <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</main>
       </div>
+      <UsageOverlay />
     </div>
   );
 }

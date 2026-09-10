@@ -1,8 +1,9 @@
 "use client";
 
 import { orderBy } from "firebase/firestore";
-import { Copy, Plus, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Copy, Plus, Star, Trash2 } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -11,6 +12,7 @@ import {
   deleteDayTemplate,
   duplicateDayTemplate,
   saveDailySchedule,
+  setDefaultTemplate,
   updateDayTemplate
 } from "@/lib/firestore";
 import {
@@ -26,7 +28,16 @@ import { friendlyDate, todayKey } from "@/lib/dates";
 import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
 
 export default function DayPlannerPage() {
+  return (
+    <Suspense fallback={null}>
+      <DayPlannerContent />
+    </Suspense>
+  );
+}
+
+function DayPlannerContent() {
   const { user } = useAuth();
+  const searchParams = useSearchParams();
   const [dateKey, setDateKey] = useState(todayKey());
   const { items: schedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
   const { items: templates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
@@ -38,9 +49,8 @@ export default function DayPlannerPage() {
   const errors = validateSlots(slots);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    setDateKey(params.get("date") ?? todayKey());
-  }, []);
+    setDateKey(searchParams.get("date") ?? todayKey());
+  }, [searchParams]);
 
   useEffect(() => {
     setSlots(sortedSlots(schedule?.slots ?? []));
@@ -63,6 +73,7 @@ export default function DayPlannerPage() {
     await createDayTemplate(user.uid, {
       name: templateName.trim(),
       description: templateDescription.trim() || undefined,
+      isDefault: templates.length === 0,
       slots: sortedSlots(slots)
     });
     setTemplateName("");
@@ -71,7 +82,7 @@ export default function DayPlannerPage() {
 
   async function addSampleTemplate() {
     if (!user) return;
-    await createDayTemplate(user.uid, generateResearchWeekdayTemplate());
+    await createDayTemplate(user.uid, { ...generateResearchWeekdayTemplate(), isDefault: true });
   }
 
   return (
@@ -84,16 +95,33 @@ export default function DayPlannerPage() {
           <section className="card p-5">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold">Templates</h2>
-              <button className="btn-secondary py-1.5 text-xs" onClick={addSampleTemplate}>Sample</button>
+              {templates.length === 0 ? (
+                <button className="btn-secondary py-1.5 text-xs" onClick={addSampleTemplate}>Add sample</button>
+              ) : null}
             </div>
             <div className="space-y-3">
               {templates.map((template) => (
                 <article key={template.id} className="rounded-md border border-ink-200 p-3 dark:border-ink-800">
-                  <h3 className="font-medium">{template.name}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-medium">{template.name}</h3>
+                    {template.isDefault ? (
+                      <span className="rounded-md bg-moss-600/10 px-1.5 py-0.5 text-[11px] font-medium text-moss-700 dark:text-moss-400">Default</span>
+                    ) : null}
+                  </div>
                   {template.description ? <p className="mt-1 text-sm text-ink-500">{template.description}</p> : null}
                   <p className="mt-2 text-xs text-ink-500">{template.slots.length} slots</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button className="btn-primary py-1.5 text-xs" onClick={() => applyTemplate(template)}>Apply</button>
+                    {!template.isDefault ? (
+                      <button
+                        className="btn-secondary px-2 py-1.5"
+                        onClick={() => user && setDefaultTemplate(user.uid, templates, template.id)}
+                        aria-label="Set as default template"
+                        title="Set as default — used automatically by Start day"
+                      >
+                        <Star className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
                     <button className="btn-secondary px-2 py-1.5" onClick={() => user && duplicateDayTemplate(user.uid, template)} aria-label="Duplicate template">
                       <Copy className="h-3.5 w-3.5" />
                     </button>

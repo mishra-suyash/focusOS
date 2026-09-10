@@ -1,0 +1,430 @@
+# FocusOS v2 — Admin Panel Spec (r2)
+
+**Addendum to `FocusOS-v2-Plan.md`.** Slots in as **Phase 4.5**, after the AI layer (Phase 4).
+
+**Revision note (r2):** the previous draft managed Claude and Gemini API keys inside the panel, encrypted in Firestore. That is dropped — **cloud keys live in Vercel environment variables**. But **Ollama's address is admin-managed in the panel**, because it is not a secret and it changes. The rule the panel follows: *secrets in env, mutable non-secrets in the database.*
+
+---
+
+## 1. What changed and why it's the better call
+
+| | r1 (dropped) | r2 (build this) |
+|---|---|---|
+| Claude / Gemini keys | AES-256-GCM ciphertext in Firestore, editable in the panel | Vercel env vars, server-only |
+| `ADMIN_ENCRYPTION_KEY` | Required; losing it bricks the keys | **Gone** |
+| Ollama address | Admin-set, alongside encrypted keys | **Admin-set, in `admin/settings`** — one global endpoint, called server-side only, editable without a redeploy, plus a self-registration heartbeat (§5) |
+| Rotating a key | Instant, in the UI | Edit the env var, redeploy (~2 min) |
+| Firestore compromise | Leaks ciphertext + needs the master key | **Leaks no credentials at all** |
+| Code to write | Crypto helper, envelope versioning, rotation script, masking, key-shape validation, leak tests | None |
+
+The cost is real but small: a Vercel env var change only takes effect on a new deployment, so key rotation is an edit plus a redeploy. You will do that roughly twice a year. In exchange you delete an entire class of failure — no master key to lose, no ciphertext to migrate, no "reveal key" button anyone can be socially engineered into clicking, and no possibility of a key reaching the browser.
+
+**Model names** (`AI_MODEL_LARGE`, `AI_MODEL_SMALL`) also stay in env. They aren't secret, but they belong with the keys they're used against, and changing a model is a deliberate act that deserves a deploy.
+
+What the panel keeps from r1: roles, user management, usage meters, the AI kill switch, and the audit log. Those are the parts that need to change at runtime.
+
+---
+
+## 2. Roles
+
+Firebase **custom claims** are the mechanism — signed into the ID token, so a server route authorises from the token alone with no Firestore read per request.
+
+| Role | Can |
+|---|---|
+| `owner` | Everything. Exactly one, set at bootstrap, cannot be demoted or deleted by anyone including itself |
+| `admin` | Manage `member` users, view usage and the audit log, flip runtime switches. **Cannot** change the owner or create other admins |
+| `member` | Normal app user. No admin routes |
+| `disabled` | Rejected at the API layer and at the Firestore rules layer |
+
+Claim mechanics that will bite if ignored:
+
+- Set with `admin.auth().setCustomUserClaims(uid, { role })`.
+- Claims propagate on the **next ID-token refresh, up to an hour away.** Always follow a role change with `revokeRefreshTokens(uid)` so it takes effect immediately. Otherwise "I disabled that user" and "that user is disabled" are up to 60 minutes apart.
+- Mirror `role` onto `users/{uid}` for listing and filtering, but **authorise from the claim**. The Firestore copy is display data.
+
+**Bootstrap.** `BOOTSTRAP_OWNER_EMAIL` in env. On sign-in, if no user in the project holds the `owner` claim and the email matches, set it once and write an audit entry. Inert thereafter. No hardcoded password, no chicken-and-egg.
+
+---
+
+## 3. Data model
+
+```text
+admin/settings                         (single doc — server-only)
+admin/auditLog/{entryId}
+adminJobs/{jobId}                      (user deletion, exports)
+```
+
+```ts
+type AdminSettings = {
+  // access
+  signupMode: 'closed' | 'invite' | 'open';
+  allowedEmailDomains: string[];       // [] = any
+  maxActiveUsers: number;              // free-tier guard, §6
+  defaultUserBudgetUsd: number;
+  defaultUserBlobMb: number;
+
+  // runtime switches
+  aiGloballyEnabled: boolean;          // kill switch → everything falls to rule-based
+  cronEnabled: boolean;                // stop both daily jobs without a redeploy
+  maintenanceMode: boolean;            // members see a banner; admins still get in
+  chainOrder: ('local' | 'claude' | 'gemini')[];
+
+  // sign-in methods offered on /login — see §4.4.1
+  signInMethods: {
+    google: boolean;
+    emailPassword: boolean;
+    emailLink: boolean;                // "magic link" passwordless sign-in
+    anonymous: boolean;                // guest/testing accounts
+  };
+
+  updatedAt: Timestamp; updatedBy: string;
+};
+```
+
+`aiGloballyEnabled: false` is the most useful control in the panel. If a model starts producing nonsense or the month's budget is gone, one toggle sends the whole app down the rule-based fallback path with no deploy and no errors.
+
+`chainOrder` is safe to keep in Firestore because it references providers, not credentials. A provider named in the order but missing its env key is simply skipped.
+
+`signInMethods` is an **app-level gate on `/login`**, not the Firebase Auth project config — see §4.4.1 for the distinction; it decides which buttons render, not which providers Firebase itself will accept.
+
+### 3.1 User record
+
+```ts
+type UserRecord = {
+  uid: string; email: string; displayName?: string; photoURL?: string;
+  role: 'owner' | 'admin' | 'member' | 'disabled';   // mirror of the claim
+  status: 'active' | 'invited' | 'disabled';
+  tierId?: string;                     // which tiers/{tierId} governs this user — §3.3
+  aiEnabled: boolean;
+  monthlyBudgetUsd: number;            // initialised from the tier's limits.aiMonthlyBudgetUsd at assignment, editable per-user thereafter
+  blobQuotaMb: number;                 // initialised from the tier's limits.blobQuotaMb, same override rule
+  createdAt: Timestamp; lastSeenAt: Timestamp;
+  stats?: { aiSpendThisMonthUsd: number; blobBytes: number; docCount: number;
+            readsToday: number; writesToday: number };
+  notes?: string;                      // admin-only
+};
+```
+
+`stats` is denormalised at the evening rollup so the user list is one query, not N aggregations.
+
+`monthlyBudgetUsd` and `blobQuotaMb` are **per-user overrides**, not the source of truth — the tier is. Assigning a user to a tier (or changing that tier's limits) re-copies the tier's values onto these two fields; an admin can then hand-edit a specific user's number for a one-off exception without having to fork a whole new tier for one person. This mirrors the same "mutable copy, authoritative source elsewhere" pattern the doc already uses for `role` (claim is authoritative, `users/{uid}.role` is a mirror) — here the tier is authoritative, these two fields are the per-user override layer on top of it.
+
+### 3.2 Firestore rules
+
+```js
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /admin/{document=**} { allow read, write: if false; }   // Admin SDK only
+    match /adminJobs/{document=**} { allow read, write: if false; }
+
+    // Tiers (§3.3): every signed-in user can read their own plan's limits;
+    // only the Admin SDK can create, edit, or delete a tier.
+    match /tiers/{tierId} {
+      allow read: if request.auth != null && request.auth.token.role != 'disabled';
+      allow write: if false;
+    }
+
+    match /users/{userId} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == userId
+                         && request.auth.token.role != 'disabled';
+      match /{document=**} {
+        allow read, write: if request.auth != null
+                           && request.auth.uid == userId
+                           && request.auth.token.role != 'disabled';
+      }
+    }
+  }
+}
+```
+
+The `disabled` check matters: disabling someone cuts their data access at the database layer, not just in the UI.
+
+### 3.3 Tiers
+
+Already built ahead of Phase 4, not deferred to Phase 4.5 — see "Status" note at the end of this subsection.
+
+A tier is a **named, admin-creatable-and-deletable bundle of limits and AI-model access**, shared across every user assigned to it. Deliberately not a hardcoded enum (`'free' | 'pro' | 'enterprise'` in code) — an admin running solo, or with a handful of labmates, needs to invent and retire plans without a code change and a redeploy.
+
+```ts
+type TierLimits = {
+  maxRevisionsPerDay: number;
+  maxRevisionMinutesPerDay: number;
+  aiMonthlyBudgetUsd: number;
+  blobQuotaMb: number;
+};
+
+type Tier = {
+  id: string;                          // Firestore doc id, free-form — not a fixed enum
+  name: string;
+  description?: string;
+  isDefault: boolean;                  // exactly one tier should hold this — assigned to any user with no explicit tierId
+  limits: TierLimits;
+  allowedModels: AiProvider[];         // subset of models this tier's users may call; [] = no AI access on this tier
+  createdAt: Timestamp; updatedAt: Timestamp; updatedBy: string;
+};
+```
+
+Lives at **`tiers/{tierId}`, top-level** — not nested under `users/{uid}` — since it's a shared resource, the same way `admin/settings` is. Unlike `admin/settings`, tiers are **readable by any authenticated client** (a user should be able to see their own plan's limits on their Settings page — see the rule in §3.2) but **writable only via the Admin SDK**, same as everything else under admin control.
+
+**Two integrity rules the delete/default flow must enforce:**
+- **The default tier cannot be deleted.** Deleting it would mean every user with no explicit `tierId` — which is most users, most of the time — silently falls back to hardcoded code-level defaults with no admin visibility that this happened. Require picking a new default first (`set-default`), then allow the delete.
+- **Deleting a non-default tier reassigns its users to whichever tier is currently default**, not to a null/undefined state — surface the affected user count in the delete confirmation (as §4.2's user-deletion flow already does for a different kind of delete), so an admin isn't surprised by who moved plans.
+
+**Enforcement points — all four are now live (Phase 4 shipped the last one):**
+- **AI model gating**: every task-registry call (`lib/ai/run.ts`'s `runAiTask`) resolves the caller's tier (`lib/admin-tiers.ts`) and only attempts a cloud provider present in that tier's `allowedModels`; a provider outside the tier is skipped the same way a missing API key or an open circuit breaker is, falling through the chain rather than erroring. `allowedModels`'s element type stayed at provider granularity (`claude`/`gemini`/`ollama`/`fallback`) rather than widening to per-model ids — model *tiering* (small vs. large) is handled separately by `AI_MODEL_LARGE`/`AI_MODEL_SMALL`/`GEMINI_MODEL_LARGE`/`GEMINI_MODEL_SMALL` env vars per task, not by the tier document, since which model size a task uses is a property of the task, not of the user's plan. Local Ollama is deliberately **not** gated by `allowedModels` at all — it costs nothing and is a shared accelerator, not a metered feature.
+- **Revision daily caps**: still client-clamped only (`lib/tiers.ts`'s `useUserTier`), unchanged from before Phase 4 — same rules-tightening caveat as before.
+- **Blob quota**: unchanged — the Papers page and upload-time check read the tier's `blobQuotaMb`.
+- **`aiMonthlyBudgetUsd` is now enforced**: `lib/ai/budget.ts` tracks spend in `users/{uid}/usage/{yyyy-MM}.ai.estimatedCostUsd` (same doc the client's read/write counter already writes to) and `runAiTask` checks it before every call, using the tighter of the tier's cap and the global `AI_MONTHLY_BUDGET_USD` env ceiling. At 100%, the task's deterministic fallback runs instead — no error, no blocked screen, exactly like a missing provider key.
+
+**Status:** the data model, Firestore collection, all four enforcement points above, and a stopgap management CLI (`scripts/manage-tiers.mjs` — create/update/delete/set-default/assign, since `/admin/tiers` doesn't exist yet) all exist today, ahead of Phase 4.5. What Phase 4.5 actually adds is the **screen** (§4.7) and the **API routes** (§5) that let an admin do the same things through a UI instead of a CLI, plus wiring role-claim authorization onto what is currently an Admin-SDK-key-holder-only script.
+
+### 3.4 Ollama config — built ahead of Phase 4.5
+
+Same pattern as Tiers (§3.3): the real capability exists now, the screen (§4.5) doesn't yet. `admin/settings.ollama` (§9.2.1 of the main plan) is live — `lib/admin-ollama-settings.ts` reads/writes it, `lib/ai/providers/ollama.ts` does the cached health probe and the chat call, `lib/ai/ollama-validate.ts` enforces the SSRF rules (scheme, metadata ranges, loopback, RFC1918) at both save time and on every heartbeat, and `POST /api/admin/ollama/heartbeat` (§5) accepts the box's self-reported address exactly as specced — bearer `OLLAMA_HEARTBEAT_SECRET`, not role-gated, skips the write when the address is unchanged. The `maxConcurrent` guard is a Firestore-transaction counter (`admin/locks/ollama/counter`), not an in-memory one, so it holds across concurrent function instances.
+
+Not built: the `/admin/ollama` screen itself (§4.5) and its `GET`/`PUT`/`POST .../test` routes. Until then, `scripts/manage-ai-settings.mjs show|set|disable` is the only way to configure it — same stopgap-CLI pattern as `scripts/manage-tiers.mjs`. Defaults to `enabled: false`, so an unconfigured install behaves exactly as if Ollama didn't exist: the chain skips straight to Claude/Gemini for every `preferLocal` task.
+
+The one deliberate simplification versus §9.2.1's full spec: the circuit breaker for all three providers (`lib/ai/circuit-breaker.ts`) is in-memory per warm serverless instance, not Firestore-backed. It resets on a cold start rather than persisting the 10-minute open window across instances — acceptable since a cold start is itself a fresh start, and a Firestore-backed breaker would spend a write on every single failure to track something that already self-heals.
+
+---
+
+## 4. Screens
+
+Route group `app/(admin)/admin/**`, gated by a server-side layout that checks the `role` claim and returns **404, not 403** — don't advertise the panel's existence.
+
+### 4.1 `/admin` — Overview
+
+- **Provider status**, read-only: Claude / Gemini as `key present` or `not configured` (derived from env at request time — never the value), plus last success and last failure from `aiRuns`. If a provider is misconfigured, the fix is a link to the Vercel dashboard, not a form.
+- Month-to-date spend against the global budget.
+- **Free-tier meters** — the numbers that actually break things: Firestore reads/writes today against 50k/20k, Blob bytes against 1 GB, function invocations. Amber at 70%, red at 90%.
+- Last run and outcome for each cron. Hobby crons fire ±59 min, so show "last ran", never "next runs at".
+- Five most recent failed `aiRuns`.
+
+### 4.2 `/admin/users`
+
+Table: email, role, status, tier, last seen, MTD spend, storage, reads/writes today. Search by email; filter by role, status, and tier.
+
+| Action | Notes |
+|---|---|
+| Change role | `setCustomUserClaims` + `revokeRefreshTokens` + mirror + audit |
+| **Change tier** | `PATCH /api/admin/users/:uid/tier` (§3.3, §4.7) — re-copies the new tier's `limits` onto this user's `monthlyBudgetUsd`/`blobQuotaMb` override fields; doesn't preserve a prior custom override |
+| Toggle AI access | Flips `aiEnabled`; the server chain refuses, the app uses rule-based fallbacks |
+| Set budget / storage quota | Per-user override on top of the tier's defaults (§3.1), enforced server-side before every call and upload |
+| Disable | `status` + claim + revoke. Data retained, access cut at the rules layer |
+| Force sign-out | `revokeRefreshTokens` alone |
+| Export data | Reuses `/api/export` scoped to that uid |
+| Invite | Only when `signupMode: 'invite'`; creates a `status: 'invited'` record keyed by email, claimed on first Google sign-in |
+| **Delete** | Two-step, job-based. Below |
+
+**Deletion requirements:**
+
+1. Type the user's email to confirm. Not an "are you sure" dialog.
+2. **Export first**, offered in the same modal, defaulted on.
+3. It's a **job**, not a request — `recursiveDelete()` on `users/{uid}` plus a Blob prefix delete can exceed 300 s. Write `adminJobs/{jobId}`, delete in batches, report progress, resume on re-invoke.
+4. Order: Blob objects → Firestore subcollections → user doc → Auth record. Auth last, so a mid-way failure leaves an account you can still identify and retry.
+5. `owner` cannot be deleted; the API rejects it before the UI does.
+
+### 4.3 `/admin/usage`
+
+Spend by task and by user for the current month from `aiRuns` and `usage/{yyyy-MM}`. A table is enough. Add the per-user reads/writes columns — with several users on Spark, one person's runaway listener is the thing that takes the app down, and this is where you'd see it.
+
+### 4.4 `/admin/settings`
+
+The runtime switches from §3. Each one shows who changed it last and when.
+
+#### 4.4.1 Sign-in methods
+
+Four toggles — Google, Email/Password, Email link (magic link), Anonymous (guest) — added because guest sign-in was reintroduced post-Phase-0 specifically "for testing," and a testing convenience left permanently on in production is exactly the kind of thing this screen exists to catch.
+
+**Two layers, don't conflate them:**
+
+1. **Firebase Auth project config** — whether Google/Email-Password/Anonymous are enabled *at all* on the Firebase project. This is set once, outside the admin panel (Firebase console, or `scripts/enable-auth-providers.mjs` for the Identity Platform Admin API path — Email/Password, email-link, and Anonymous are settable that way; Google needs a support email chosen interactively in the console at least once). Flipping this off would reject sign-in attempts for anyone still holding a session created via that provider — not something to wire to a casual toggle.
+2. **`admin/settings.signInMethods`** — this screen's actual toggle. It only controls which buttons `/login` renders for *new* sign-in attempts. Turning off "Anonymous" here doesn't touch the Firebase-level provider (still enabled, still enforced by rules the same as any account) — it just stops the app from offering the "Continue as guest" button, so a stray link to `/login` doesn't invite a random visitor to create a throwaway account on your project. Already-signed-in guest sessions are unaffected either way; disabling a whole provider for existing sessions is what `user.status` / role-based disabling (§4.2) is for, not this screen.
+
+**Build note:** `/login` reads `admin/settings.signInMethods` through a public, read-only `GET /api/public/sign-in-methods` (no auth required — it has to be readable before anyone's signed in) that returns just the four booleans, backed by the same 60 s cached resolver as the other runtime switches (§8.2). Never expose the rest of `admin/settings` unauthenticated.
+
+**Acceptance:** turning off "Anonymous" hides the guest button on `/login` within the resolver's cache window (≤60 s), with no redeploy; a guest session created before the toggle was flipped keeps working exactly as before.
+
+### 4.5 `/admin/ollama`
+
+The one piece of provider configuration that does belong here, because the address changes and a redeploy per change is absurd. Full behaviour in §9.2.1–9.2.2 of the main plan; this is the UI.
+
+- **Address field** — `IP:port` or hostname. Validated on save against the SSRF rules (no metadata ranges, no loopback, http/https only). Saving writes an audit entry.
+- **Reachability warning.** All calls are made from a Vercel function, so a private address can never work. Saving one is rejected inline: *"192.168.1.50 is a private address. A Vercel function cannot reach your network — expose the box with a tunnel or a public hostname."* This is the most likely misconfiguration by a wide margin; catch it at save, not at 2am inside a cron.
+- **Test connection**, run from the server, since that's the only path that exists. Show the resolved address, the HTTP status, the round-trip time and the returned model list.
+- **Concurrency limit** — `maxConcurrent`, default 2. One box, autoscaling callers; over the limit the chain skips to Claude rather than queueing.
+- **Model picker** — populated from the live `/api/tags` response after a successful test. Never a free-text field: a typo'd model name fails at 2am inside a cron, not at save time. Plus a `fallbackModels` list for after a box rebuild.
+- **Health strip** — last seen, last reported address, consecutive failures, last error. "Last seen 4 minutes ago" is what distinguishes "the box is off" from "the app is broken", and it's the first thing you'll want when something stops working.
+- **Heartbeat status** — whether the self-registration script is reporting, and the snippet to install it on the box (§9.2.2 of the main plan), with the secret shown masked and regenerable. The snippet reports the box's **public** address; a LAN address is useless to a function.
+
+The **enable toggle** is the important control. Off means the chain skips local entirely and goes straight to Claude — which is what you want the moment the box starts returning nonsense, and it should not require touching the address.
+
+### 4.6 `/admin/audit`
+
+Reverse-chronological, filterable by actor and action. Read-only; no delete action exists anywhere.
+
+**There is no key-management screen.** If someone asks for one, the answer is the Vercel environment variables page. `/admin/ollama` (§4.5) exists because an address is not a key.
+
+### 4.7 `/admin/tiers`
+
+The UI for §3.3's data model. Everything here already works today via `scripts/manage-tiers.mjs` — this screen is that CLI's UI, not new capability.
+
+- **List**: every tier, its limits, its allowed models, and a live count of users currently on it (`where('tierId', '==', tierId)`, or `where('tierId', '==', null)` combined with an "is this the default?" check for users with no explicit assignment). The default tier is visually marked.
+- **Create / Edit**: name, description, the four `TierLimits` fields as plain number inputs, and `allowedModels` as a multi-select over whatever providers are configured in env (`ANTHROPIC_API_KEY`/`GEMINI_API_KEY` present → offer `claude`/`gemini`; once Phase 4's task registry lands, this becomes a multi-select over real model ids instead of provider names). Saving an existing tier's limits does **not** retroactively touch any user's per-user override fields (§3.1) — only new assignments copy the tier's values down.
+- **Set default**: one action, one tier at a time — flips `isDefault` on the chosen tier and off on whichever one held it, in a single transaction (avoid a window where zero or two tiers claim to be default).
+- **Delete**: blocked entirely on the default tier (button disabled with the reason shown, not just a failed request). On a non-default tier with N users assigned, the confirmation states "N users will move to the default tier" before proceeding — matching the assign-then-delete integrity rule in §3.3.
+- **Assign** (on `/admin/users`, not here — see §4.2's row actions): picking a tier for one user. Changing a user's tier re-copies that tier's `limits.aiMonthlyBudgetUsd`/`limits.blobQuotaMb` onto their `UserRecord.monthlyBudgetUsd`/`blobQuotaMb` override fields, which the admin can then further hand-edit for that one user.
+
+**There is no self-service upgrade flow.** A user's Settings page shows their current tier name and limits read-only (already built — see the main plan's README) with a note that plan changes go through an admin; this screen is where that admin action happens. Whether to ever add self-service tier switching is a product decision for whoever builds a payment flow, not something this spec assumes.
+
+---
+
+## 5. API routes
+
+All under `/api/admin/**`, Node runtime, `role` claim verified from the ID token, rate-limited to 20 req/min per uid.
+
+```
+GET    /api/admin/overview                → status, meters, recent failures
+GET    /api/admin/settings
+PUT    /api/admin/settings
+
+GET    /api/admin/users                   → paginated, cursor-based
+PATCH  /api/admin/users/:uid              → { role?, status?, aiEnabled?, monthlyBudgetUsd?, blobQuotaMb?, notes? }
+POST   /api/admin/users/:uid/revoke
+POST   /api/admin/users/invite            → { email }
+POST   /api/admin/users/:uid/delete-job   → { exportFirst: boolean } → { jobId }
+GET    /api/admin/jobs/:jobId
+
+GET    /api/admin/usage
+GET    /api/admin/audit
+
+GET    /api/admin/ollama                  → config + health + resolved transport
+PUT    /api/admin/ollama                  → { enabled?, baseUrl?, transport?, model?, fallbackModels?, timeoutMs? }
+POST   /api/admin/ollama/test             → server-side probe; returns models, status and latency
+POST   /api/admin/ollama/heartbeat        → NOT admin-gated; bearer OLLAMA_HEARTBEAT_SECRET
+
+GET    /api/admin/tiers                   → list, with a live per-tier user count
+POST   /api/admin/tiers                   → { name, description?, limits, allowedModels } → { tierId }
+PATCH  /api/admin/tiers/:tierId           → { name?, description?, limits?, allowedModels? }
+POST   /api/admin/tiers/:tierId/set-default
+DELETE /api/admin/tiers/:tierId           → 409 if this is the default tier; otherwise reassigns affected users to the default and deletes
+PATCH  /api/admin/users/:uid/tier         → { tierId } → re-copies that tier's limits onto the user's monthlyBudgetUsd/blobQuotaMb overrides
+
+GET    /api/public/sign-in-methods        → NOT admin-gated, no auth at all; { google, emailPassword, emailLink, anonymous }
+```
+
+Every `/api/admin/tiers*` route is a thin wrapper over `lib/admin-tiers.ts`, which already exists and is already exercised by `/api/insights` and the daily cron for the model-allowed check (§3.3) — building this API surface is wiring a role claim and an HTTP layer onto working logic, not writing the logic itself.
+
+`POST /api/admin/ollama/heartbeat` is the one route in this group that is **not** behind a role claim — it's called by a script on the Ollama box, authenticated by a shared secret in env. Give it its own rate limit (1 write/min), make it idempotent, and have it skip the Firestore write when the address hasn't changed. It must never accept anything except a `baseUrl`; an endpoint that lets an unauthenticated-by-claim caller change arbitrary settings is a different thing entirely.
+
+`GET /api/admin/overview` reports provider configuration as `boolean` — `!!process.env.ANTHROPIC_API_KEY`. Never the key, never a masked form of it, never its length.
+
+---
+
+## 6. Multi-user on the free tier — check this before inviting anyone
+
+The ceilings are per project, not per user.
+
+| Resource | Per active user per day | Ceiling |
+|---|---|---|
+| Firestore reads | 300–800 | 50,000/day |
+| Firestore writes | 100–400 | 20,000/day |
+| AI spend | $0.02–0.15 with small-model routing | your budget |
+| Blob | 5–50 MB/month of PDFs | 1 GB total |
+
+Reads bite around **20–40 users**; **Blob runs out first** — at 50 MB each, 1 GB is 20 users. So:
+
+- `maxActiveUsers` defaults to **10**, enforced when an invite is promoted to active.
+- `blobQuotaMb` defaults to **75** per user, enforced client-side before upload and server-side in the upload-token route.
+- Users near their quota get the "detach PDF, keep notes" action (§15 of the main plan) rather than a hard wall.
+
+Vercel Hobby remains **non-commercial**: sharing with labmates is fine, charging them is not. Past a handful of people the honest answer is Blaze with a budget alert plus Vercel Pro, not cleverer batching.
+
+A shared Ollama box helps the AI budget but is not free on Vercel: since calls are server-side, each one holds a function open for its full duration. Active CPU is unaffected (waiting on I/O doesn't count), but provisioned memory time is — roughly 180 hours of wall-clock function time per month on Hobby. That's thousands of calls, so it isn't a near-term constraint, but a slow local model is no longer costless. Route small, tolerant tasks there and keep interactive paths on the cloud models.
+
+**Per-user BYOK is the escape hatch worth considering above ~5 users** — but note it contradicts §1. If users supply their own Claude keys you're back to storing secrets, and everything r1 said about encryption applies again. The cheaper version: lean harder on the shared Ollama box for everything except PDF work, and reserve the cloud models for the owner.
+
+---
+
+## 7. Audit log
+
+```ts
+type AuditEntry = {
+  id: string; at: Timestamp;
+  actorUid: string; actorEmail: string;
+  action: 'settings.update' | 'ai.killswitch' | 'cron.toggle' | 'maintenance.toggle'
+        | 'chain.reorder' | 'user.role.change' | 'user.disable' | 'user.enable'
+        | 'user.delete' | 'user.budget.change' | 'user.invite' | 'user.export'
+        | 'ollama.config.change' | 'ollama.address.heartbeat' | 'ollama.toggle'
+        | 'signin.method.toggle'
+        | 'tier.create' | 'tier.update' | 'tier.delete' | 'tier.set-default' | 'user.tier.change';
+  targetType: 'user' | 'settings' | 'ollama' | 'tier'; targetId: string;
+  before?: unknown; after?: unknown;
+  ip?: string; userAgent?: string;
+};
+```
+
+Append-only, retained 180 days. Vercel Hobby keeps one hour of runtime logs, so this is your actual record of what happened.
+
+---
+
+## 8. Build steps (Phase 4.5)
+
+1. Role claims: bootstrap flow, `setCustomUserClaims` wrapper, `revokeRefreshTokens` on every change, updated Firestore rules deployed.
+2. `admin/settings` doc + a cached resolver (60 s TTL, module scope) so switches don't cost a Firestore read per request.
+3. Wire `aiGloballyEnabled`, `cronEnabled` and `maintenanceMode` through the app shell, the AI chain and both crons.
+4. `/admin/users` list and row actions except delete.
+5. Deletion as a resumable job with export-first.
+6. Audit writes from every mutating route; `/admin/audit`.
+7. `/admin` overview with free-tier meters and read-only provider status.
+8. Per-user budget and blob quota enforcement in `/api/ai/run` and `/api/files/upload-token`.
+9. `/admin/ollama`: address field with SSRF validation, transport resolver with its explanation line, test button per transport, model picker from `/api/tags`, health strip.
+10. Heartbeat route + the install snippet, with the unchanged-address write skip.
+11. Sign-in method toggles (§4.4.1): `signInMethods` on `admin/settings` (default all four `true`, matching the pre-panel behavior so upgrading doesn't lock anyone out), the public `/api/public/sign-in-methods` route, `/login` reading it to decide which buttons to render, and the audit write on toggle.
+12. `/admin/tiers` (§3.3, §4.7): the screen and the `/api/admin/tiers*` routes over the already-working `lib/admin-tiers.ts` and `scripts/manage-tiers.mjs` logic — list with live user counts, create/edit, set-default (transactional), delete (blocked on default, reassigns affected users otherwise), and the tier-assignment action on `/admin/users`. Audit writes on every mutation. This step is mostly UI + route wiring, since the underlying resolver, Firestore collection, and rules already exist and are already load-bearing for `/api/insights` and the daily cron.
+
+### Acceptance criteria
+
+- Grep the built client bundle and every network response for `sk-ant-` and `AIza`: zero hits. (Trivially true now, but keep the test — it catches a future regression where someone "temporarily" passes a key to the client.)
+- A non-admin hitting any `/admin` route or `/api/admin/*` gets 404, not 403.
+- Flip `aiGloballyEnabled` off: every AI button in the app shows its rule-based fallback within 60 s, no console errors.
+- Change a user's role: their next request is rejected within seconds, not within the hour.
+- Delete a test user with 5,000 docs and 200 MB of blobs across at least two invocations; no orphan blobs or Auth records remain.
+- Disable a user: their client-side Firestore reads fail at the **rules** layer, verified in the emulator.
+- Set a user's budget to $0: their next AI call is refused server-side and the UI shows the fallback, not an error.
+- Save a private IP as the Ollama address: **rejected at save** with the "a Vercel function cannot reach your network" message. Never accepted and left to time out later.
+- Exceed `maxConcurrent`: further requests route to Claude immediately; none of them queue or time out.
+- Point the address at `http://169.254.169.254/`: rejected at save.
+- Switch the box off: within one probe cycle the chain routes to Claude, no user sees an error, and the admin overview shows the box as stale.
+- Run the heartbeat with an unchanged address for an hour: zero Firestore writes.
+- Toggle "Anonymous" off in `/admin/settings`: `/login`'s guest button disappears within the resolver's cache window with no redeploy; a guest session that was already signed in keeps working; the Firebase-level Anonymous provider is untouched (still flips on in the console).
+- Create a tier that excludes a provider (e.g. `allowedModels: ['gemini']` only, no Claude) and assign a test user to it: that user's next AI call skips Claude in the chain the same way a missing API key or an open circuit breaker would, falling through to Gemini or the task's fallback — **already true today**, ahead of this panel existing; the panel-based test is that the same behavior results from creating/assigning the tier through the UI instead of `scripts/manage-tiers.mjs`.
+- Attempt to delete the default tier: rejected before any Firestore write, with the reason shown, not a generic error.
+- Delete a non-default tier with users assigned: confirmation names the affected user count; after confirming, those users' `users/{uid}.tierId` no longer resolves to a real tier and they fall back to the (new) default tier's limits with no error shown to them.
+- Change a user's tier: their `monthlyBudgetUsd`/`blobQuotaMb` override fields update to the new tier's values; a per-user override set before the tier change is not silently preserved (an admin who wants to keep a custom override re-applies it after switching tiers — the tier switch is the authoritative reset point, not a merge).
+
+---
+
+## 9. Open questions
+
+1. **Invites** — email delivery needs a provider (Resend's free tier is 100/day), or you paste a link and skip email. For under ten people the second option is fine.
+2. **Should members see each other?** Currently no — no shared data, no directory. If you ever want a shared paper library or a group revision, that's a schema change (data moves out of `users/{uid}/`), not a UI change. Decide before Phase 3, not after.
+3. **Audit retention** — 180 days as specced, or keep everything? Storage is negligible; it's a question of whether you'd ever read it.
+
+---
+
+## 10. Status — what got built
+
+Every build step in §8 landed, including the tiers/Ollama screens that were the only pieces §3.3/§3.4 had deferred. Deviations from this spec, all deliberate:
+
+- **§9 open question 1 (invites) resolved as "paste a link and skip email"** — `POST /api/admin/users/invite` writes `invites/{email}` with an optional `tierId`; there's no email delivery provider wired up, so an admin currently has to tell the invitee out-of-band that they've been invited (the invite itself still auto-claims correctly on that email's first sign-in, via `claimInviteIfAny` alongside the owner-bootstrap call).
+- **`signupMode: 'closed'`/`'invite'` is a policy flag, not an enforced gate.** The spec doesn't fully specify how a server-only setting is supposed to reach into the client-side Firebase Auth SDK's sign-in call to actually block it, and this build didn't invent a mechanism to do so — `allowedEmailDomains`/`maxActiveUsers` are likewise stored and shown but not enforced at sign-in. All three are legitimate follow-up work, not silently dropped: `admin/settings` already has the fields, so enforcing them later is additive.
+- **Free-tier meters read "today" as month-to-date.** §4.1 asks for daily read/write/invocation numbers against Spark's daily ceilings; `lib/usage.ts` (built in Phase 0) only ever accumulated a monthly total, and adding real daily-bucket tracking was out of scope for this pass. The meters still warn correctly at the same 70%/90% thresholds against the daily ceiling's *numeric value* — they just won't reset at midnight the way the label implies.
+- **No collection-group queries for cross-user aggregates** (`/admin/overview`, `/admin/usage`) — both iterate a bounded list of user documents and read each one's own `usage`/`files` subcollection directly. This was a deliberate choice to avoid needing additional Firestore collection-group field-override indexes beyond the one `aiRuns` (`ok`+`at`) and two audit-log (`actorUid`/`action` each + `at`) composite indexes already added to `firestore.indexes.json` for the failure-lookup and audit-filter queries, which *do* need collection-group scope. All three require applying via `pnpm ensure:indexes` or the console link Firestore prints — the service account used in development didn't have the IAM role to create them via the Admin API directly, same caveat the Phase 2 revision index already carried.
+- **Audit log has no expiry sweep.** §7 specs 180-day retention; nothing currently deletes an entry older than that. Storage cost is negligible at this scale, so this is a "build the cron later" gap, not a design gap.
+- **Deletion job export uses a single Vercel Blob store**, uploaded as one JSON file (built via a generic recursive Firestore subcollection walk, depth-limited to 3, rather than the hand-enumerated collection list `lib/export.ts` uses for the user-facing export) rather than per-collection files. If `BLOB_READ_WRITE_TOKEN` isn't configured, the export step is skipped (not failed) and the deletion proceeds — verified live against the real project, including the resume-after-failure path (a job that failed mid-way and was re-POSTed picked up exactly at the stage it had reached, per the `deletedCollections[]` tracking).
+- **One real bug found and fixed during this build, unrelated to the panel's own logic**: `lib/firebase-admin.ts`'s `db.settings({ignoreUndefinedProperties: true})` guard threw "Firestore has already been initialized" under Next dev's Turbopack Fast Refresh, because the module-level guard flag resets on hot reload while firebase-admin's own app/Firestore singletons (cached via `getApps()`) survive it. Fixed by catching that specific error rather than by tracking the initialized-state some other way, since the underlying Firestore instance genuinely doesn't need `settings()` called on it twice.
+- **Verified live against the real Firebase project**, not just typechecked: owner bootstrap (including idempotency on a second call), the full tier CRUD + set-default + delete-reassignment cycle, `/admin/ollama`'s config read/write, `/admin/audit`, a full disable → rejected-at-the-API-layer → re-enable cycle (confirming the `role`/`status` lockstep fix), owner-deletion and owner-role-change protection (both rejected before any write), and the resumable deletion job end-to-end (create → fail on missing Blob token → resume via `POST /api/admin/jobs/:jobId` → Firestore doc and Auth record both confirmed gone).

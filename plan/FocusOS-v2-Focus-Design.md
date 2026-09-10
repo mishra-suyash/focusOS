@@ -1,0 +1,230 @@
+# FocusOS v2 — Focus & Productivity Design
+
+**Companion to `FocusOS-v2-Plan.md`.** The main plan says what to build. This says what will make it actually change your days, and what will quietly waste your time.
+
+Read §1 before deciding which of §2–§12 to build. Most of these are small; a few are the difference between a tool you use in March and a graveyard of well-modelled data.
+
+---
+
+## 1. The failure mode to design against
+
+The realistic way this project dies is not a bug. It's week five, when logging a class, grading revisions, updating a paper's pass state and writing an evening review costs eleven minutes a day, and you skip one day, and then the data is stale, and then the Load Index is wrong, and then you stop trusting it, and then you stop opening it.
+
+Every feature below is judged against one number: **total daily interaction cost must stay under 90 seconds** for the mandatory loop (log what happened, grade what's due, accept tomorrow's plan). Anything optional can cost whatever it likes, because you'll only do it when it's worth it.
+
+Three rules that follow:
+
+- **Every mandatory input is one tap or one short line.** Attendance is a toggle. Revision grading is four keys. Accepting tomorrow's plan is one button.
+- **The app pre-fills and you correct.** Never present an empty form for something the system could have guessed. A wrong guess you fix in two seconds beats a blank field you skip.
+- **A missed day must be cheap to recover.** No streak breakage, no cascade of overdue items, no guilt UI. A "catch up" flow that batch-logs two days in thirty seconds is worth more than any motivational feature you could build.
+
+---
+
+## 2. Replace the dashboard with one decision
+
+The current dashboard is three columns of widgets. That's a status report, and status reports don't cause work. At the top of the page, above everything, put a single card that answers **"what do I do right now?"** with one recommendation and a start button.
+
+```ts
+type NextAction = {
+  kind: 'revision' | 'checkpoint-prep' | 'paper-pass' | 'task' | 'class-log' | 'rest';
+  title: string;
+  why: string;                    // "quiz in 3 days, 12 topics unrevised"
+  estimateMin: number;
+  startsTimer: boolean;
+  severity: Severity;
+  alternatives: NextAction[];     // exactly 2, behind a "something else" link
+};
+```
+
+Selection is a deterministic priority cascade, no model needed:
+
+1. An unresolved **Critical** alert (§9.4 of the main plan)
+2. Checkpoint prep inside its lead window, if today's share isn't done
+3. Revisions due, if the queue is non-empty and under the daily cap
+4. The paper pass scheduled for today
+5. The highest-priority open task with a due date this week
+6. If the Load Index is already over 1.3 by 6pm → **rest**, explicitly
+
+The "something else" link offers exactly two alternatives. Not a list. A list is a decision, and the whole point is to not spend your first ten minutes deciding.
+
+**Why this matters more than it sounds:** the gap between intention and action is almost always a small decision cost paid at exactly the moment your willpower is lowest. Removing that decision is the highest-leverage change in this document.
+
+---
+
+## 3. Revision must ask questions, not show notes
+
+The revision engine as specced shows you a topic and asks you to grade your recall. That's a re-reading loop wearing a spaced-repetition costume. Re-reading feels productive and does very little; retrieval does the work.
+
+**Change:** a revision item stores a *prompt*, not just a title.
+
+```ts
+type RevisionPrompt = {
+  question: string;              // "Why does X fail when Y is unbounded?"
+  answer: string;                // your own words, written when the topic was created
+  kind: 'recall' | 'explain' | 'apply' | 'derive';
+};
+```
+
+Generation, in order of preference:
+
+1. **You write it** at class-log time — one line, optional. The best prompts are yours.
+2. **AI generates 2–3** from the topic title and your class notes (`course.makePrompts`, small model, prefer local). You approve or edit in one tap.
+3. **Fallback with no model and no input:** "Explain \<topic\> in two sentences without looking." Generic, but still retrieval.
+
+The review UI shows the question, you think, you tap to reveal, you self-grade. Same four keys, same cost. Entirely different effect.
+
+The same applies to papers. Pass 3's structure-recall gate (§8.2 of the main plan) is the model: close the PDF, reconstruct from memory, then compare. Do that for a paper at 7 and 30 days too.
+
+---
+
+## 4. Protect one deep block; measure the longest one
+
+Total focused minutes is a vanity metric. Six pomodoros scattered across a day of interruptions is not the same work as two uninterrupted hours, and treating them as equal in the Load Index will teach you the wrong thing.
+
+**Changes:**
+
+- Track **`longestUnbrokenFocusMin`** per day: the longest span of consecutive work sessions with gaps under 10 minutes. Put it next to focused minutes on the dashboard, and in the weekly review. Trend this, not the total.
+- The day template gets a **protected block** — one 90-minute slot per weekday marked `protected: true`. The evening planner may not schedule anything into it, the reminder loop suppresses hydration prompts inside it, and it appears on the calendar as unavailable.
+- The Load Index gets a companion: **deep work hours this week vs. target**. A week at LI 1.0 made entirely of 25-minute fragments should not look like a good week, because it wasn't.
+
+---
+
+## 5. One capture inbox, triaged later
+
+Interruption is the enemy, and the most common interruption is your own brain producing an unrelated thought. If capturing it costs a navigation, you either lose the thought or lose the session.
+
+**Build:** a global quick-capture, keyboard `C` anywhere, one text field, one Enter. It writes to `tasks` with `status: 'inbox'` and nothing else — no category, no priority, no due date. That's the point; classification is a separate activity from capture.
+
+Triage happens once, in the evening rollup: each inbox item gets **Do now / Schedule / Someday / No**. The "No" button is not a delete — it records a decision, which is what stops the same idea re-arriving three times.
+
+**During a focus session, quick-capture must not leave the timer.** A small overlay, closes on Enter, timer keeps running. If capturing a thought pauses the session, you'll stop capturing.
+
+---
+
+## 6. Make starting easy, make stopping deliberate
+
+Asymmetric friction, on purpose.
+
+**Starting (remove all friction):**
+- Every schedule slot has a Start button that opens the timer pre-filled with the slot's label, category, linked task, and duration. Zero configuration.
+- The Next Action card's Start button does the same.
+- Remove the timer settings from the main view entirely — they belong in Settings, and changing a running timer's length (which currently resets the countdown and destroys in-progress time) should be impossible.
+
+**Stopping (add friction):**
+- Ending a work session early asks one question, one tap: *finished / interrupted / lost focus / switching tasks*. This is the single most useful data point you can collect about your own work, and it costs a tap.
+- Store it on the session. After a month, the weekly review can tell you that 60% of your abandoned sessions are at 3pm, or always on the same course.
+
+---
+
+## 7. Rest is planned, not failed
+
+The Load Index already flags overrun, which is right. Take it further, because a productivity tool that only ever asks for more is one you'll eventually resent.
+
+- **Planned rest days.** Mark a day as rest in advance: its `requiredMinutes` becomes 0, LI is not computed, and streaks are not broken. A rest day taken deliberately should look identical in the history to a perfect day.
+- **The streak counts LI ≥ 0.9, not pomodoros** — and it survives planned rest. A streak you can only maintain by working every single day is a streak that ends badly.
+- **After three overrun days**, the evening rollup's tomorrow proposal caps at LI 0.9 and says why. Don't ask permission; just propose the lighter day and let it be edited.
+- **No badges, no confetti, no "you're on fire".** The reward for a good day is a quiet dashboard and a short evening review. Anything more and you'll start optimising for the app instead of the PhD.
+
+---
+
+## 8. Leading indicators, not lagging ones
+
+The current analytics tell you what you did. Almost none of it predicts what will happen. Replace the headline metrics with the four that do:
+
+| Metric | Why it predicts something |
+|---|---|
+| **Coverage %** per course — topics revised ≥1× ÷ topics logged | The single best predictor of an exam result. Already specced in §10.2 |
+| **Longest unbroken focus**, weekly trend | Predicts whether hard work is possible at all |
+| **Pass-1 drop rate** on papers | Below 50% means you're reading things you decided not to read. §8.2 |
+| **Revision backlog**, 7-day trend | The leading edge of every "I'm behind" feeling, usually visible two weeks early |
+
+Keep total pomodoros and completion rate, but move them below the fold. They're for reassurance, not decisions.
+
+---
+
+## 9. Planning and doing are different modes
+
+A specific, common trap: fiddling with goals, reordering tasks and redesigning your template *feels* like work and consumes exactly the hours that deep work needs.
+
+**Change:** goals and week-level plans are editable in the **weekly review only** (plus an explicit "override" link that logs the override). During the week, goals are read-only. If you find yourself hitting the override link every Tuesday, that's real data about the plan being wrong — surface the override count in the weekly review.
+
+Same principle, smaller scale: the day planner is editable in the morning and evening; during a protected block, it isn't.
+
+---
+
+## 10. Say no on a schedule
+
+Keshav's actual productivity claim isn't the three passes. It's that the first pass exists so you can **stop** — most papers should die in ten minutes, and the method's value is the permission to abandon them.
+
+Generalise that:
+
+- **Papers:** pass-1 verdict with a reason (already specced). Track the drop rate.
+- **Tasks:** the inbox triage's "No" button (§5).
+- **Courses:** at the midpoint of a term, the weekly review asks one question per course — is the target hours/week still right? Adjust or drop.
+- **Goals:** a goal not touched in 30 days gets one prompt: *still want this?* Options are Recommit / Pause / Drop, never "remind me later". A goal list that only grows is a guilt generator.
+
+---
+
+## 11. What the AI should and shouldn't do here
+
+The temptation is to have it coach you. Don't. Generic encouragement from a model is noise, and you'll start skipping the evening rollup to avoid reading it.
+
+**Good uses, all already in the plan:**
+- Turning a messy class-log line into discrete topics
+- Generating recall prompts from your notes (§3)
+- Proposing tomorrow's *slots and tasks* as accept/edit/dismiss objects
+- Spotting patterns you can't see: "your abandoned sessions cluster after unlogged classes"
+
+**Bad uses, don't build:**
+- Freeform motivational text in the daily brief
+- Rating your day or your productivity
+- Anything that produces prose you're expected to read every morning. The brief should be scannable in ten seconds — counts, names, and one line
+
+**Rule:** if an AI output can't be acted on with a button, it probably shouldn't be generated. The evening rollup's `improvements` field should be 2–4 items, each one attached to a proposed change.
+
+---
+
+## 12. Anti-features
+
+Things that look valuable and aren't. Don't build these, and if they exist, remove them.
+
+| Don't build | Why |
+|---|---|
+| Notifications outside the hydration/break loop | Every extra notification devalues the ones that matter, and this is a study tool, not a chat app |
+| Streaks that break on rest | Trains you to work when you shouldn't and to feel bad when you don't |
+| A social or sharing layer | Nothing in your specs needs it, and it changes the whole data model (§9 Q2 of the admin doc) |
+| Time-tracking granularity below the pomodoro | You will not maintain it |
+| Auto-applied AI plans | One bad output rewrites your week and you never trust it again |
+| Progress percentages on things that aren't measurable | The papers slider is the example — "37% read" is a number that means nothing |
+| A second inbox | One capture point. The moment there are two, both rot |
+
+---
+
+## 13. If you only do three things
+
+In order of impact per hour of implementation:
+
+1. **The Next Action card** (§2). Deterministic, no AI, maybe a day of work, and it changes what happens at 9am every morning.
+2. **Recall prompts on revision items** (§3). Turns the revision engine from a review log into actual learning. A schema field, a generation task, and a reveal button.
+3. **Session-end reason + longest unbroken focus** (§4, §6). Two taps of data collection that will tell you more about your own working patterns in one month than the entire analytics page does now.
+
+Everything else in this document is worth doing, but those three are worth doing first, and they're all small.
+
+---
+
+## 14. Where these land in the phase plan
+
+| Change | Phase | Effort |
+|---|---|---|
+| Next Action card | 2 (needs the revision engine) | S |
+| Recall prompts | 2 | S |
+| Longest unbroken focus, session-end reason | 0 | S |
+| Protected block, planned rest days | 2 | S |
+| Quick capture + inbox triage | 0 | M |
+| Leading-indicator analytics | 2 | M |
+| Start-from-slot, timer settings moved | 0 | S |
+| Planning/doing mode separation | 6 | S |
+| Say-no prompts (goals, courses, papers) | 6 | M |
+| Anti-feature removals | 0 | S |
+
+Most of the high-impact items are Phase 0 or 2, which means you get the behavioural benefit long before the AI and annotation work lands. That ordering is deliberate: if the daily loop isn't habitual by the time you're building layered notes, the layered notes won't get used either.

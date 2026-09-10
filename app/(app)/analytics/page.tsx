@@ -1,20 +1,35 @@
 "use client";
 
-import { orderBy } from "firebase/firestore";
+import { orderBy, where } from "firebase/firestore";
 import { useMemo } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { SectionHeader } from "@/components/section-header";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { completedTasksByDay, completionRate, focusedMinutesByCategory, weeklyPomodoros } from "@/lib/analytics";
-import type { PomodoroSession, Task } from "@/types";
+import { todayKey } from "@/lib/dates";
+import type { Day, PomodoroSession, Task } from "@/types";
+
+const HISTORY_DAYS = 30;
 
 export default function AnalyticsPage() {
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const historyStart = useMemo(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - HISTORY_DAYS);
+    return todayKey(date);
+  }, []);
+  const { items: days } = useUserCollection<Day>(
+    "days",
+    useMemo(() => [where("date", ">=", historyStart), orderBy("date", "asc")], [historyStart])
+  );
   const pomodoros = weeklyPomodoros(sessions);
   const minutes = focusedMinutesByCategory(sessions);
   const completed = completedTasksByDay(tasks);
   const rate = completionRate(tasks);
+  const loadIndexHistory = days
+    .filter((day) => day.loadIndex)
+    .map((day) => ({ day: day.date.slice(5), value: day.loadIndex!.value }));
 
   return (
     <>
@@ -34,6 +49,26 @@ export default function AnalyticsPage() {
         <ChartCard title="Tasks completed by day">
           <BarChart data={completed}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="day" /><YAxis allowDecimals={false} /><Tooltip /><Bar dataKey="completed" fill="#315d45" radius={[4, 4, 0, 0]} /></BarChart>
         </ChartCard>
+        <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Load Index trend (last 30 days)</h2>
+          <div className="h-72">
+            {loadIndexHistory.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={loadIndexHistory}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="day" />
+                  <YAxis domain={[0, "auto"]} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="value" stroke="#4f8b67" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center text-center text-sm text-ink-500">
+                No Load Index history yet — it&apos;s recorded each time you click &ldquo;End day.&rdquo;
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </>
   );

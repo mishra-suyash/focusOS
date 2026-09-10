@@ -1,6 +1,6 @@
-import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotStatus, ScheduleSlotType, Task, Thought } from "@/types";
+import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotStatus, ScheduleSlotType, Task } from "@/types";
 
-export const slotTypes: ScheduleSlotType[] = ["deep_work", "meal", "free", "admin", "break", "commute", "sleep", "gym", "custom"];
+export const slotTypes: ScheduleSlotType[] = ["deep_work", "meal", "free", "admin", "break", "commute", "sleep", "gym", "class", "custom"];
 
 export const slotTypeLabels: Record<ScheduleSlotType, string> = {
   deep_work: "Deep work",
@@ -11,6 +11,7 @@ export const slotTypeLabels: Record<ScheduleSlotType, string> = {
   commute: "Commute",
   sleep: "Sleep",
   gym: "Gym",
+  class: "Class",
   custom: "Custom"
 };
 
@@ -23,6 +24,7 @@ export const slotTypeStyles: Record<ScheduleSlotType, string> = {
   commute: "border-violet-500 bg-violet-500/10 text-violet-700 dark:text-violet-300",
   sleep: "border-indigo-500 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300",
   gym: "border-rose-500 bg-rose-500/10 text-rose-700 dark:text-rose-300",
+  class: "border-fuchsia-500 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300",
   custom: "border-ink-400 bg-white text-ink-700 dark:bg-ink-900 dark:text-ink-200"
 };
 
@@ -107,12 +109,6 @@ export function scheduleSummary(slots: ScheduleSlot[], minute = currentMinute())
 export function taskNamesForSlot(slot: ScheduleSlot, tasks: Task[]) {
   const ids = new Set(slot.assignedTaskIds ?? []);
   return tasks.filter((task) => ids.has(task.id)).map((task) => task.title);
-}
-
-export function stableThoughtForDate(thoughts: Thought[], dateKey: string) {
-  if (thoughts.length === 0) return undefined;
-  const seed = Array.from(dateKey).reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return thoughts[seed % thoughts.length];
 }
 
 export function createSlot(partial: Partial<ScheduleSlot> = {}): ScheduleSlot {

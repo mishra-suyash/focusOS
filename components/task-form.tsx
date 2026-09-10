@@ -4,18 +4,22 @@ import { useState } from "react";
 import { categories, priorities } from "@/lib/options";
 import type { Category, NewTask, Priority } from "@/types";
 
-export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTask) => Promise<void>; compact?: boolean }) {
+const DEFAULT_EXTERNAL_LEAD_DAYS = [7, 2, 0];
+
+export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTask) => Promise<unknown>; compact?: boolean }) {
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState<Category>("research");
   const [priority, setPriority] = useState<Priority>("medium");
   const [dueDate, setDueDate] = useState("");
   const [description, setDescription] = useState("");
   const [estimatedPomodoros, setEstimatedPomodoros] = useState(1);
+  const [external, setExternal] = useState(false);
   const [saving, setSaving] = useState(false);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!title.trim()) return;
+    if (external && !dueDate) return;
     setSaving(true);
     await onCreate({
       title: title.trim(),
@@ -24,12 +28,15 @@ export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTa
       priority,
       category,
       dueDate: dueDate || undefined,
-      estimatedPomodoros
+      estimatedPomodoros,
+      kind: external ? "external" : undefined,
+      reminderLeadDays: external ? DEFAULT_EXTERNAL_LEAD_DAYS : undefined
     });
     setTitle("");
     setDescription("");
     setDueDate("");
     setEstimatedPomodoros(1);
+    setExternal(false);
     setSaving(false);
   }
 
@@ -66,7 +73,11 @@ export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTa
           aria-label="Estimated pomodoros"
         />
       </div>
-      <button className="btn-primary w-full sm:w-auto" disabled={saving}>
+      <label className="flex items-center gap-2 text-xs text-ink-500 dark:text-ink-400">
+        <input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} />
+        External deadline (visa renewal, a form, a submission portal — a hard due date required, excluded from the Load Index&apos;s required-minutes target)
+      </label>
+      <button className="btn-primary w-full sm:w-auto" disabled={saving || (external && !dueDate)}>
         Add task
       </button>
     </form>

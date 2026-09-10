@@ -12,6 +12,12 @@ export function lastSevenDays(date = new Date()) {
   return Array.from({ length: 7 }, (_, index) => todayKey(subDays(date, 6 - index)));
 }
 
+/** The 7 date keys (Mon-Sun) for the week whose Monday is `weekStart` (yyyy-MM-dd). */
+export function weekDates(weekStart: string) {
+  const start = parseISO(weekStart);
+  return Array.from({ length: 7 }, (_, index) => todayKey(addDays(start, index)));
+}
+
 export function currentWeekDays(date = new Date()) {
   const start = startOfWeek(date, { weekStartsOn: 1 });
   return Array.from({ length: 7 }, (_, index) => {

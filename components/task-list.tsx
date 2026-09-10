@@ -48,6 +48,14 @@ export function TaskList({
                 <span className="rounded bg-moss-600/10 px-1.5 py-0.5 text-[11px] font-medium text-moss-700 dark:text-moss-500">
                   {categoryLabels[task.category]}
                 </span>
+                {task.kind === "external" ? (
+                  <span
+                    className="rounded bg-sky-100 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-sky-700 dark:bg-sky-950 dark:text-sky-300"
+                    title="External deadline — excluded from the Load Index's required-minutes target"
+                  >
+                    External
+                  </span>
+                ) : null}
               </div>
               {task.description ? <p className="mt-1 text-sm text-ink-600 dark:text-ink-300">{task.description}</p> : null}
               <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-ink-500">

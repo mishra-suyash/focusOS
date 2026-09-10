@@ -1,5 +1,5 @@
 import { lastSevenDays, todayKey } from "@/lib/dates";
-import type { Category, DailyReview, PomodoroSession, Task } from "@/types";
+import type { Category, Day, PomodoroSession, Task } from "@/types";
 
 export function todayMetrics(tasks: Task[], sessions: PomodoroSession[]) {
   const today = todayKey();
@@ -24,36 +24,49 @@ export function calculateStreak(sessions: PomodoroSession[]) {
   return streak;
 }
 
-export function weeklyPomodoros(sessions: PomodoroSession[]) {
-  return lastSevenDays().map((day) => ({
+export function weeklyPomodoros(sessions: PomodoroSession[], days: string[] = lastSevenDays()) {
+  return days.map((day) => ({
     day: day.slice(5),
     pomodoros: sessions.filter((s) => s.mode === "work" && s.completedAt.startsWith(day)).length
   }));
 }
 
-export function focusedMinutesByCategory(sessions: PomodoroSession[]) {
+/** Focused minutes by category, windowed to `days` (defaults to the last 7 days). */
+export function focusedMinutesByCategory(sessions: PomodoroSession[], days: string[] = lastSevenDays()) {
+  const dateSet = new Set(days);
   const categories: Category[] = ["research", "coding", "reading", "writing", "admin", "personal"];
   return categories.map((category) => ({
     category,
     minutes: sessions
-      .filter((s) => s.mode === "work" && s.category === category)
+      .filter((s) => s.mode === "work" && s.category === category && dateSet.has(s.completedAt.slice(0, 10)))
       .reduce((sum, session) => sum + session.minutes, 0)
   }));
 }
 
-export function completedTasksByDay(tasks: Task[]) {
-  return lastSevenDays().map((day) => ({
+export function completedTasksByDay(tasks: Task[], days: string[] = lastSevenDays()) {
+  return days.map((day) => ({
     day: day.slice(5),
     completed: tasks.filter((task) => task.completedAt?.startsWith(day)).length
   }));
 }
 
-export function completionRate(tasks: Task[]) {
-  if (tasks.length === 0) return 0;
-  return Math.round((tasks.filter((task) => task.status === "done").length / tasks.length) * 100);
+/**
+ * Completion rate windowed to `days` (defaults to the last 7 days): of the tasks
+ * that were either due or completed in that window, what fraction are done.
+ * A lifetime backlog of untouched tasks no longer drags this number around.
+ */
+export function completionRate(tasks: Task[], days: string[] = lastSevenDays()) {
+  const dateSet = new Set(days);
+  const relevant = tasks.filter(
+    (task) => (task.dueDate && dateSet.has(task.dueDate)) || (task.completedAt && dateSet.has(task.completedAt.slice(0, 10)))
+  );
+  if (relevant.length === 0) return 0;
+  return Math.round((relevant.filter((task) => task.status === "done").length / relevant.length) * 100);
 }
 
-export function averageFocusRating(reviews: DailyReview[]) {
-  if (reviews.length === 0) return 0;
-  return Number((reviews.reduce((sum, review) => sum + review.focusRating, 0) / reviews.length).toFixed(1));
+/** Average focus rating over the given `days` docs only — callers scope this to a specific week. */
+export function averageFocusRating(days: Day[]) {
+  const rated = days.filter((day): day is Day & { review: { focusRating: number } } => typeof day.review?.focusRating === "number");
+  if (rated.length === 0) return 0;
+  return Number((rated.reduce((sum, day) => sum + day.review.focusRating, 0) / rated.length).toFixed(1));
 }

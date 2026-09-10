@@ -1,11 +1,12 @@
 "use client";
 
-import { Pause, Play, RotateCcw, SkipForward, Volume2 } from "lucide-react";
+import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { PomodoroSurveyModal } from "@/components/pomodoro-survey-modal";
 import { savePomodoro } from "@/lib/firestore";
 import { categories } from "@/lib/options";
-import type { Category, PomodoroSession, TimerMode } from "@/types";
+import type { Category, PomodoroSession, Task, TimerMode } from "@/types";
 
 const modeLabel: Record<TimerMode, string> = {
   work: "Focus",
@@ -13,7 +14,17 @@ const modeLabel: Record<TimerMode, string> = {
   long_break: "Long break"
 };
 
-export function PomodoroTimer({ sessions, compact = false }: { sessions: PomodoroSession[]; compact?: boolean }) {
+interface PendingSession {
+  label: string;
+  category: Category;
+  mode: TimerMode;
+  minutes: number;
+  completedAt: string;
+  cycle: number;
+  taskId?: string;
+}
+
+export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessions: PomodoroSession[]; tasks?: Task[]; compact?: boolean }) {
   const { user } = useAuth();
   const [work, setWork] = useState(25);
   const [shortBreak, setShortBreak] = useState(5);
@@ -24,7 +35,9 @@ export function PomodoroTimer({ sessions, compact = false }: { sessions: Pomodor
   const [cycle, setCycle] = useState(1);
   const [label, setLabel] = useState("writing");
   const [category, setCategory] = useState<Category>("writing");
-  const [sound, setSound] = useState(false);
+  const [taskId, setTaskId] = useState("");
+  const [pendingSession, setPendingSession] = useState<PendingSession | null>(null);
+  const openTasks = tasks.filter((task) => task.status !== "done");
 
   const duration = useMemo(() => (mode === "work" ? work : mode === "short_break" ? shortBreak : longBreak), [longBreak, mode, shortBreak, work]);
   const progress = 100 - (secondsLeft / (duration * 60)) * 100;
@@ -46,18 +59,32 @@ export function PomodoroTimer({ sessions, compact = false }: { sessions: Pomodor
     completeSession();
   }, [secondsLeft, running, user]);
 
-  async function completeSession() {
+  function completeSession() {
     setRunning(false);
-    await savePomodoro(user!.uid, {
+    const data: PendingSession = {
       label,
       category,
       mode,
       minutes: duration,
       completedAt: new Date().toISOString(),
-      cycle
+      cycle,
+      taskId: taskId || undefined
+    };
+    if (mode === "work") {
+      setPendingSession(data);
+    } else {
+      finalizeSession(data);
+    }
+  }
+
+  async function finalizeSession(data: PendingSession, survey?: { productivityRating: number; comment: string }) {
+    await savePomodoro(user!.uid, {
+      ...data,
+      productivityRating: survey?.productivityRating,
+      comment: survey?.comment || undefined
     });
-    const nextMode: TimerMode = mode === "work" ? (cycle % 4 === 0 ? "long_break" : "short_break") : "work";
-    if (mode === "work") setCycle((current) => current + 1);
+    const nextMode: TimerMode = data.mode === "work" ? (data.cycle % 4 === 0 ? "long_break" : "short_break") : "work";
+    if (data.mode === "work") setCycle((current) => current + 1);
     setMode(nextMode);
   }
 
@@ -68,14 +95,9 @@ export function PomodoroTimer({ sessions, compact = false }: { sessions: Pomodor
 
   return (
     <section className={`card ${compact ? "p-4" : "p-5"}`}>
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <p className="label">Pomodoro</p>
-          <h2 className={`${compact ? "mt-0.5 text-lg" : "mt-1 text-xl"} font-semibold`}>{modeLabel[mode]} session</h2>
-        </div>
-        <button className="btn-secondary px-2" onClick={() => setSound((current) => !current)} aria-label="Toggle sound placeholder">
-          <Volume2 className={`h-4 w-4 ${sound ? "text-moss-600" : ""}`} />
-        </button>
+      <div>
+        <p className="label">Pomodoro</p>
+        <h2 className={`${compact ? "mt-0.5 text-lg" : "mt-1 text-xl"} font-semibold`}>{modeLabel[mode]} session</h2>
       </div>
       <div className={compact ? "my-4" : "my-6"}>
         <div className="mb-3 h-2 overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
@@ -92,6 +114,16 @@ export function PomodoroTimer({ sessions, compact = false }: { sessions: Pomodor
           ))}
         </select>
       </div>
+      {openTasks.length > 0 ? (
+        <select className="input mt-3" value={taskId} onChange={(e) => setTaskId(e.target.value)} aria-label="Scheduled for task">
+          <option value="">Not tied to a task</option>
+          {openTasks.map((task) => (
+            <option key={task.id} value={task.id}>
+              {task.title}
+            </option>
+          ))}
+        </select>
+      ) : null}
       <div className="mt-4 grid grid-cols-3 gap-2">
         <button className="btn-primary" onClick={() => setRunning((current) => !current)}>
           {running ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -118,14 +150,32 @@ export function PomodoroTimer({ sessions, compact = false }: { sessions: Pomodor
         <p className="label mb-2">Today history</p>
         <div className="space-y-2">
           {sessions.slice(0, compact ? 2 : 4).map((session) => (
-            <div key={session.id} className="flex justify-between rounded-md bg-ink-50 px-3 py-2 text-sm dark:bg-ink-800">
-              <span>{session.label}</span>
-              <span className="text-ink-500">{session.minutes}m</span>
+            <div key={session.id} className="rounded-md bg-ink-50 px-3 py-2 text-sm dark:bg-ink-800">
+              <div className="flex justify-between">
+                <span>{session.label}</span>
+                <span className="text-ink-500">
+                  {session.minutes}m{session.productivityRating ? ` · ${session.productivityRating}/5` : ""}
+                </span>
+              </div>
+              {session.comment ? <p className="mt-1 text-xs text-ink-500">{session.comment}</p> : null}
             </div>
           ))}
           {sessions.length === 0 ? <p className="text-sm text-ink-500">Completed sessions will appear here.</p> : null}
         </div>
       </div>
+      {pendingSession ? (
+        <PomodoroSurveyModal
+          label={pendingSession.label}
+          onSave={(productivityRating, comment) => {
+            finalizeSession(pendingSession, { productivityRating, comment });
+            setPendingSession(null);
+          }}
+          onSkip={() => {
+            finalizeSession(pendingSession);
+            setPendingSession(null);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

@@ -1,12 +1,51 @@
 "use client";
 
+import { orderBy } from "firebase/firestore";
+import { useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useTheme } from "@/components/theme-provider";
+import { useUserCollection } from "@/hooks/use-user-collection";
+import { useUserSettings } from "@/hooks/use-user-settings";
+import { useWorkdaySession } from "@/components/workday-session-provider";
+import { downloadFullExportJson, downloadPomodoroCsv } from "@/lib/export";
+import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, DEFAULT_LADDER } from "@/lib/revision";
+import { useUserTier } from "@/lib/tiers";
+import type { DayTemplate } from "@/types";
 
 export default function SettingsPage() {
   const { user, isDemoMode } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const { hydrationMinutes, breakMinutes, setHydrationMinutes, setBreakMinutes } = useWorkdaySession();
+  const { settings, update: updateSettings } = useUserSettings();
+  const { items: templates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { tier, limits: tierLimits, allowedModels } = useUserTier();
+  const [exporting, setExporting] = useState<"json" | "csv" | null>(null);
+
+  function updateRevisionCap(field: "maxRevisionsPerDay" | "maxRevisionMinutesPerDay", value: number) {
+    const ceiling = field === "maxRevisionsPerDay" ? tierLimits.maxRevisionsPerDay : tierLimits.maxRevisionMinutesPerDay;
+    updateSettings({ [field]: Math.max(1, Math.min(value, ceiling)) });
+  }
+
+  async function exportJson() {
+    if (!user) return;
+    setExporting("json");
+    try {
+      await downloadFullExportJson(user.uid);
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  async function exportCsv() {
+    if (!user) return;
+    setExporting("csv");
+    try {
+      await downloadPomodoroCsv(user.uid);
+    } finally {
+      setExporting(null);
+    }
+  }
 
   return (
     <>
@@ -28,6 +67,113 @@ export default function SettingsPage() {
               <p className="text-xs text-ink-500">Current theme: {theme}</p>
             </div>
             <button className="btn-secondary" onClick={toggleTheme}>Toggle</button>
+          </div>
+        </section>
+        <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Reminders</h2>
+          <div className="space-y-3">
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>Hydration reminder every</span>
+              <input
+                className="input w-24"
+                type="number"
+                min={15}
+                value={hydrationMinutes}
+                onChange={(e) => setHydrationMinutes(Number(e.target.value))}
+              />
+              <span className="text-xs text-ink-500">min</span>
+            </label>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>Break reminder every</span>
+              <input className="input w-24" type="number" min={15} value={breakMinutes} onChange={(e) => setBreakMinutes(Number(e.target.value))} />
+              <span className="text-xs text-ink-500">min</span>
+            </label>
+            <p className="text-xs text-ink-500">Reminders only fire while a workday is started and this tab is open. Allow browser notifications when prompted to get alerts outside the tab.</p>
+          </div>
+        </section>
+        <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Break-mode template</h2>
+          <p className="mb-3 text-xs text-ink-500">
+            Applied by &ldquo;Start day&rdquo; instead of your default template on days with no active semester term (or an explicit break term).
+          </p>
+          <select
+            className="input"
+            value={settings.breakTemplateId ?? ""}
+            onChange={(e) => updateSettings({ breakTemplateId: e.target.value || undefined })}
+          >
+            <option value="">Use the default template</option>
+            {templates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.name}
+              </option>
+            ))}
+          </select>
+        </section>
+        <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Plan</h2>
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-ink-500">Tier</span>
+              <span className="font-medium">{tier?.name ?? "Default (no tiers configured)"}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-ink-500">AI models available</span>
+              <span className="font-medium">{allowedModels.length > 0 ? allowedModels.join(", ") : "none"}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-ink-500">AI monthly budget</span>
+              <span className="font-medium">${tierLimits.aiMonthlyBudgetUsd}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-ink-500">Attached-PDF storage</span>
+              <span className="font-medium">{tierLimits.blobQuotaMb} MB</span>
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-ink-500">Plan limits are set by an admin. There&apos;s no self-service upgrade screen yet.</p>
+        </section>
+        <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Revision</h2>
+          <div className="space-y-3">
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>Max items per day</span>
+              <input
+                className="input w-24"
+                type="number"
+                min={1}
+                max={tierLimits.maxRevisionsPerDay}
+                value={settings.maxRevisionsPerDay ?? DEFAULT_MAX_REVISIONS_PER_DAY}
+                onChange={(e) => updateRevisionCap("maxRevisionsPerDay", Number(e.target.value))}
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>Max minutes per day</span>
+              <input
+                className="input w-24"
+                type="number"
+                min={5}
+                max={tierLimits.maxRevisionMinutesPerDay}
+                value={settings.maxRevisionMinutesPerDay ?? DEFAULT_MAX_REVISION_MINUTES_PER_DAY}
+                onChange={(e) => updateRevisionCap("maxRevisionMinutesPerDay", Number(e.target.value))}
+              />
+            </label>
+            <p className="text-xs text-ink-500">
+              Ladder: {DEFAULT_LADDER.join(", ")} days. Overflow past today&apos;s cap rolls forward, it never disappears. Your plan&apos;s ceiling is{" "}
+              {tierLimits.maxRevisionsPerDay} items / {tierLimits.maxRevisionMinutesPerDay} min.
+            </p>
+          </div>
+        </section>
+        <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Export data</h2>
+          <div className="space-y-3">
+            <p className="text-sm text-ink-600 dark:text-ink-300">Download your data to analyze with an external AI tool or back it up.</p>
+            <div className="flex flex-wrap gap-2">
+              <button className="btn-secondary" onClick={exportJson} disabled={exporting !== null}>
+                {exporting === "json" ? "Exporting..." : "Download full export (JSON)"}
+              </button>
+              <button className="btn-secondary" onClick={exportCsv} disabled={exporting !== null}>
+                {exporting === "csv" ? "Exporting..." : "Download pomodoro log (CSV)"}
+              </button>
+            </div>
           </div>
         </section>
         <section className="card p-5 lg:col-span-2">
