@@ -5,3 +5,9 @@ allowBuilds:
   protobufjs: true
   sharp: true
   unrs-resolver: true
+
+overrides:
+  # jwks-rsa (pulled in transitively by firebase-admin) does a CJS require('jose'),
+  # but jose@6 dropped its CJS build (ESM-only), causing ERR_REQUIRE_ESM at runtime.
+  # Pin to a jose version that still ships a dual CJS/ESM build.
+  jose: '5.10.0'
