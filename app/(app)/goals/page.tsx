@@ -6,9 +6,10 @@ import { useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
-import { todayKey } from "@/lib/dates";
+import { addDaysToKey, todayKey } from "@/lib/dates";
 import { createGoal, deleteGoal, updateGoal } from "@/lib/firestore";
 import { isGoalActiveForDate } from "@/lib/goals";
+import { BUILTIN_GOAL_TEMPLATES } from "@/lib/templates/builtin/goal-templates";
 import type { Course, Goal, GoalHorizon, GoalMilestone, NewGoal, ReviewCadence, Term } from "@/types";
 
 const HORIZONS: GoalHorizon[] = ["week", "term", "break", "year", "phd"];
@@ -29,6 +30,7 @@ export default function GoalsPage() {
       <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
         <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">New goal</h2>
+          <GoalTemplatePicker onCreate={(goal) => createGoal(user.uid, goal)} />
           <GoalForm terms={terms} onCreate={(goal) => createGoal(user.uid, goal)} />
         </section>
         <section className="space-y-4">
@@ -51,6 +53,67 @@ export default function GoalsPage() {
         </section>
       </div>
     </>
+  );
+}
+
+/** "Start from a template" (plan §6.3) — prefills definitionOfDone/horizon/milestones from a built-in goal template, milestone due dates offset from a chosen anchor date. */
+function GoalTemplatePicker({ onCreate }: { onCreate: (goal: NewGoal) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [templateId, setTemplateId] = useState(BUILTIN_GOAL_TEMPLATES[0].id);
+  const [anchorDate, setAnchorDate] = useState(todayKey());
+  const [saving, setSaving] = useState(false);
+  const template = BUILTIN_GOAL_TEMPLATES.find((item) => item.id === templateId)!;
+
+  async function apply() {
+    setSaving(true);
+    try {
+      await onCreate({
+        title: template.title,
+        horizon: template.horizon,
+        why: template.why,
+        definitionOfDone: template.definitionOfDone,
+        milestones: template.milestones.map((milestone) => ({
+          id: crypto.randomUUID(),
+          title: milestone.title,
+          dueAt: typeof milestone.dueOffsetDays === "number" ? addDaysToKey(anchorDate, milestone.dueOffsetDays) : undefined,
+          done: false
+        })),
+        linked: { courseIds: [], paperIds: [], taskIds: [], goalIds: [] },
+        targetHoursPerWeek: template.targetHoursPerWeek,
+        status: "active",
+        reviewCadence: "weekly"
+      });
+      setOpen(false);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button className="btn-secondary mb-4 w-full py-1.5 text-xs" onClick={() => setOpen(true)}>
+        Start from a template
+      </button>
+    );
+  }
+
+  return (
+    <div className="mb-4 space-y-2 rounded-md border border-ink-200 p-3 dark:border-ink-800">
+      <select className="input" value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
+        {BUILTIN_GOAL_TEMPLATES.map((item) => (
+          <option key={item.id} value={item.id}>{item.name}</option>
+        ))}
+      </select>
+      <p className="text-xs text-ink-500">{template.definitionOfDone}</p>
+      <label className="block text-xs text-ink-500">
+        Anchor date (milestones are offset from this)
+        <input className="input mt-1" type="date" value={anchorDate} onChange={(event) => setAnchorDate(event.target.value)} />
+      </label>
+      <div className="flex gap-2">
+        <button className="btn-primary flex-1 py-1.5 text-xs" onClick={apply} disabled={saving}>{saving ? "Adding..." : "Add goal"}</button>
+        <button className="btn-secondary py-1.5 text-xs" onClick={() => setOpen(false)}>Cancel</button>
+      </div>
+    </div>
   );
 }
 

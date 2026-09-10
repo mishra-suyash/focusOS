@@ -1,0 +1,612 @@
+# FocusOS v2 — Essentials Mode, Default Templates & Onboarding Plan
+
+> **Status:** Draft v2 for review · **Scope:** UX layer on top of Phases 0–6 · **Companion docs:** `plan/FocusOS-v2-Plan.md`, `plan/FocusOS-v2-Focus-Design.md`, `plan/FocusOS-v2-Admin-Panel.md`
+>
+> Assumptions that still need confirmation are marked **[ASSUMPTION]**. Remaining open questions are in [§13](#13-open-questions).
+
+## Decisions log
+
+| # | Decision | Date | Effect on this plan |
+|---|---|---|---|
+| D1 | **Entry user = other PhD students / researchers** who haven't learned FocusOS | 2026-09-10 | Packs are organized by PhD stage; templates, task packs, and goals are research-flavored; a simple reading list is part of the core experience |
+| D2 | **Built-in templates + admin-published templates** | 2026-09-10 | Admin templates move from optional to a committed phase (U2), placed before onboarding so pack defaults can be overridden by an admin |
+| D3 | **One plain-language vocabulary everywhere** (not mode-dependent) | 2026-09-10 | UI labels are renamed app-wide, including Full mode; code identifiers, Firestore fields, and export columns stay unchanged |
+
+---
+
+## 1. Why this plan exists
+
+FocusOS today is built for one power user who already knows every mechanism: Load Index bands, the revision ladder, checkpoint prep windows, the 3-pass reading gate, break terms, Start/End day side effects. The README is 600+ lines of "nuances" — honest documentation, but each nuance is also a place where a new user gets confused.
+
+At the same time, the app is no longer single-user in practice: Google/email/magic-link/guest sign-in, invites, tiers, and an admin panel all exist. A new member lands on a three-column dashboard with ~10 widgets, an empty schedule, no templates, and a "Start day" button that silently does nothing if no template exists.
+
+**The goal:** a PhD student who has never seen FocusOS can plan a research day, manage tasks, run focus sessions, and keep a reading list in their first five minutes **without learning anything else**. Every existing capability stays one toggle away, and the owner's current workflow does not regress.
+
+## 2. Design principles
+
+1. **Works on day one.** Every screen has a sensible default. No feature requires configuration before it produces value (e.g. Start day must always produce a schedule).
+2. **Progressive disclosure, not a second app.** Simple and full experiences are the *same components* with a visibility layer — never forked pages. Otherwise the two UIs drift and every future feature costs double.
+3. **One obvious next step per screen.** Each page has a single primary action; everything else is secondary or behind "More options".
+4. **One plain vocabulary (D3).** The same words everywhere, for every user. Academic terms PhD students already use (paper, course, advisor, thesis) stay; FocusOS-invented terms (Load Index, checkpoint, ladder, Pass 1) get plain names.
+5. **Templates are suggestions, never silent automation.** Consistent with the Focus Design doc's "no auto-applied plan" rule: a template only lands on a date when the user explicitly picks it, and an admin updating a template never changes anyone's existing copy.
+6. **Hiding UI never deletes or corrupts data.** Turning a module off hides it; data stays, exports still include it, turning it back on restores it exactly.
+7. **Respect the free-tier budget.** Built-in content lives in code; admin-published content is denormalized into one catalog document, so browsing all templates costs at most one read.
+
+## 3. Target users (D1)
+
+The entry user is a PhD student at any stage. What differs by stage is which parts of FocusOS matter first.
+
+| Persona | Stage | What they need on day one | Introduced later |
+|---|---|---|---|
+| **Priya, first-year** | Coursework | Class days, assessments, revising lecture topics, a reading list | Staged paper reading, goals, workload meter |
+| **Arjun, mid-PhD** | Research | Research-day schedule, reading list with staged reading, focus sessions, a couple of long-term goals | Paper sets & surveys, PDF highlights, analytics |
+| **Meera, final-year** | Writing up | Writing-day schedule, thesis-chapter goals with milestones, weekly check-in | Revision, courses (likely never) |
+| **Existing owner** | — | Exactly today's feature set (with the new vocabulary, per D3) | — |
+
+---
+
+## 4. Solution overview
+
+Five building blocks, delivered in this order:
+
+1. **Built-in template library** — PhD-oriented day templates, timer presets, task checklist packs, goal templates, and reading-goal presets, browsable in a gallery.
+2. **Admin-published templates** — owners/admins publish shared templates (e.g. a lab's standard research day) and override which template each starter pack uses.
+3. **Starter packs + onboarding** — a ≤60-second, skippable first-run flow asking "Where are you in your PhD?", which sets modules, templates, and presets.
+4. **Feature modules + one vocabulary** — a single feature registry controlling nav, dashboard widgets, form fields, and route access; an app-wide rename to plain language.
+5. **Discovery and friction fixes** — gentle, rule-based nudges toward hidden features, and fixes for the README nuances that specifically hurt new users.
+
+---
+
+## 5. Vocabulary (D3) — defined in U0, applied everywhere
+
+All user-facing strings for these concepts come from one dictionary, `lib/copy.ts`, so every new screen built in U1–U3 uses the new words from the start and U4 only has to migrate existing screens.
+
+**Scope of the rename:** UI labels, headings, buttons, toasts, notifications, PDF export headings, empty states, the in-app help page, and the README's feature reference (with the old term shown once in parentheses for continuity). **Not renamed:** TypeScript identifiers, Firestore collection/field names (`loadIndex`, `revisionItems`, `checkpoints`…), routes that already exist (kept as-is, new aliases optional), JSON/CSV export keys, and the admin panel's purely technical concepts (tiers, AI runs, circuit breaker, audit log).
+
+| Current term | New label | One-line ⓘ explanation |
+|---|---|---|
+| Load Index (LI) | **Workload** | How much you've done today compared with what today asked for |
+| Behind / Light day / On track / Ahead / Overrun | *(unchanged)* | Already plain |
+| Required minutes / Actual minutes | Planned / Done | — |
+| Debt | **Catch-up hours** | Planned work you didn't get to over the last two weeks |
+| Streak (LI ≥ 0.9) | **On-track streak** | Days in a row you hit your planned workload |
+| Coverage | **Topics revised** | Share of a course's topics you've revised at least once |
+| Next Action | **Up next** | The single most useful thing to do right now |
+| Checkpoint | **Assessment** | A quiz, lab, assignment, presentation, or exam with a due date |
+| Class log | **Log a class** | Record attendance, topics covered, and how well you understood them |
+| Topic confidence | **Understanding** | 1–5, how well you know this topic |
+| Revision item / ladder / queue | **Revision card / revision schedule / today's revision** | Topics and papers come back at growing intervals: 1, 3, 7, 16, 35, 70 days |
+| `/review` page | **Revise** | (avoids clashing with daily/weekly reviews below) |
+| Grades Again / Hard / Good / Easy | *(unchanged)* | Already plain |
+| Pass 1 / Pass 2 / Pass 3 | **Skim / Read / Deep dive** | Read a paper in stages (Keshav's three-pass method); stop whenever you have enough |
+| Verdict continue / park / drop | Keep reading / **Save for later** / Not relevant | "Save for later" brings it back in ~6 months |
+| Reading goal + goalKind | **Why am I reading this?** | — |
+| Paper group (cluster) / survey mode | **Paper set** / **Literature survey** | Compare related papers together; a survey also finds shared citations |
+| Group synthesis | **What connects these papers?** | — |
+| Layered notes | **Layered summary** | One-line gist down to reproduction details, generated from the PDF |
+| Highlight candidates | **Suggested highlights** | — |
+| Slot | **Block** | A chunk of time on your plan |
+| Day template / default template | Day template / **Workday template** | The template Start day uses |
+| Break-mode template | **Break-day template** | Used on days in a semester break |
+| Term kind semester / break / none | Semester / **Semester break** / No term | — |
+| Break mode | **Break mode** *(unchanged)* | Academic users already say "semester break" |
+| Workday session | **Your day** | Starting it builds today's plan and turns on reminders |
+| Pomodoro | **Focus session** (timer: "Focus timer") | — |
+| End-of-session survey | **How did that go?** | — |
+| Daily review | **Daily wrap-up** | — |
+| Weekly review | **Weekly check-in** | — |
+| Morning brief | **Morning overview** | — |
+| Evening rollup / proposed tasks & slots | **Suggestions for tomorrow** | Nothing is added until you accept it |
+| Alerts (Critical / Important) | **Heads-up** (Urgent / Important) | — |
+| External task | **Hard deadline** (non-research task) | Forms, visas, fees — not counted in your workload plan |
+
+**Enforcement:** a CI check (Playwright text scan across every non-admin route, plus a lint rule flagging these literals in `components/` and `app/(app)/`) fails the build if a retired label appears in the UI.
+
+---
+
+## 6. Built-in templates (Phase U1 — first priority)
+
+### 6.1 Architecture: code-defined catalog, materialize on commit
+
+Built-in templates live in code (`lib/templates/builtin/*.ts`) as read-only definitions with an `id` and `version`, validated by shared zod schemas in `lib/templates/schema.ts` (pure, used by both client and the admin routes in U2). They are **never referenced directly by Start day**:
+
+- **Browsing / previewing** reads from code only — zero Firestore reads.
+- **"Use for today"** applies the blocks to that date's `dailySchedules/{date}`, exactly like applying a user template today.
+- **"Make workday template"** or **"Customize"** copies it into the user's `dayTemplates` (one write) with `sourceTemplateId` + `sourceVersion`, and sets the existing `isDefault` flag.
+
+Keeping `isDefault` on the user's own `dayTemplates` as the single source of truth means `workday-session-provider.tsx`'s generation logic barely changes, and a later change to a built-in or admin template can never silently alter anyone's schedule.
+
+**Start day fallback (new):** if the user has zero templates, Start day uses their starter pack's default template *in memory* for that day and shows a one-time toast: *"Used the Research Day template. Change it in Plan → Templates."* This removes the "Start day did nothing" state entirely.
+
+### 6.2 Built-in day templates
+
+Block types map onto the existing slot `type` union in `types/index.ts`. The README confirms `class`, `break`, `meal`, `sleep`, and `free`; `deep_work`, `reading`, `admin`, and `meeting` below are placeholders to map onto the real enum values. **[ASSUMPTION]** Whether a reading block counts toward planned deep-work minutes also depends on that mapping.
+
+> **Workload interaction:** planned minutes include scheduled deep-work minutes, so a template with 6 h of deep work makes every user permanently "Behind". Built-in templates keep deep work between 2.5 and 4 h.
+
+**Research Day** — default for the Research pack (~3.5 h deep work + 1 h reading)
+
+| Time | Block | Type |
+|---|---|---|
+| 08:30–08:45 | Plan the day | admin |
+| 08:45–10:45 | Deep work: experiments / code / analysis | deep_work |
+| 10:45–11:00 | Break | break |
+| 11:00–12:00 | Reading (skim or read a paper) | reading |
+| 12:00–13:00 | Lunch | meal |
+| 13:00–14:00 | Advisor, lab meetings, email | meeting |
+| 14:00–15:30 | Deep work: writing | deep_work |
+| 15:30–15:45 | Break | break |
+| 15:45–16:45 | Lab tasks & admin | admin |
+| 16:45–17:00 | Wrap up & plan tomorrow | admin |
+
+**Writing Day** — default for the Writing-up pack (~4 h writing)
+
+| Time | Block | Type |
+|---|---|---|
+| 08:00–08:15 | Re-read yesterday's last page | admin |
+| 08:15–10:15 | Writing | deep_work |
+| 10:15–10:30 | Break | break |
+| 10:30–12:00 | Writing | deep_work |
+| 12:00–13:00 | Lunch | meal |
+| 13:00–14:00 | Figures, tables, references | admin |
+| 14:00–15:00 | Email & advisor feedback | meeting |
+| 15:00–15:30 | Walk / break | break |
+| 15:30–16:30 | Edit and revise | deep_work |
+| 16:30–16:45 | Log progress, note tomorrow's starting point | admin |
+
+**Coursework Day** — default for the Coursework pack. *Sparse on purpose:* Start day merges class blocks from courses, so this template leaves the 09:00–16:30 window mostly open.
+
+| Time | Block | Type |
+|---|---|---|
+| 08:00–08:45 | Revise today's cards | reading |
+| 12:30–13:30 | Lunch | meal |
+| 17:00–18:30 | Assignments & assessment prep | deep_work |
+| 18:30–19:15 | Reading for research | reading |
+| 20:00–20:20 | Log today's classes | admin |
+
+The rest of the catalog:
+
+| Template | Suggested for | Shape | Focus time |
+|---|---|---|---|
+| **Literature Review Day** | Research | Two 90-min reading blocks, notes consolidation, one "paper set" comparison block | ~3 h reading |
+| **Lab / Experiment Day** | Research | One long lab block (flagged as focus), data logging, afternoon analysis | ~4 h |
+| **Meeting-Heavy Day** | All | Short 45-min focus blocks between fixed meeting windows | ~2 h |
+| **Light Day** | All (break-day default for Research) | Starts 10:00, two 1 h focus blocks, longer breaks, done by 16:00 | 2 h |
+| **Semester Break Day** | Coursework, Writing up (break-day default) | Late start, one reading block, one project block, free afternoon | ~2.5 h |
+| **Conference / Travel Day** | All | One reading block, one "notes from talks" block, everything else free | ~1 h |
+| **Half-Day Sprint** | All | 4 × 25-min focus sessions with breaks, done by 12:00 | ~1.7 h |
+
+**Personalization:** the gallery and onboarding offer **"My day starts at"**, which shifts every block by a fixed offset (pure `shiftTemplateSlots(slots, newStart)` in `lib/schedule.ts`, unit-tested; rejects shifts that cross midnight). Scaling block lengths is out of scope.
+
+### 6.3 Other built-in template types
+
+| Type | Where it appears | Built-ins (PhD-oriented) | What applying it does |
+|---|---|---|---|
+| **Focus timer presets** | Timer settings, onboarding | Classic 25/5/15, Extended 50/10/30 (writing), Short 15/3/10 (low-energy days), Custom | Writes lengths + `timerPresetId` to `meta/settings` (lengths already sync there) |
+| **Task checklist packs** | Tasks → "Add from checklist", Tasks empty state | Paper submission, Conference deadline countdown, Rebuttal / reviewer response, Qualifying exam prep, Thesis chapter kickoff, Advisor meeting prep, Literature review kickoff, TA week, Fellowship / grant application, Visa & admin paperwork (hard deadlines) | Creates N real tasks in one batch, due dates offset from a chosen anchor date (e.g. "submission deadline") |
+| **Goal templates** | Goals → "Start from a template" | Pass the qualifying exam, Submit a paper to a venue, Complete a literature survey, Finish a thesis chapter, Defend the proposal, Build a daily writing habit | Prefills `definitionOfDone`, `horizon`, milestones (relative due dates), `targetHoursPerWeek` |
+| **Reading-goal presets** | Paper page, above "Why am I reading this?" | One sentence per existing `goalKind` (survey / method / baseline / related work / reproduce / critique) | Fills the field in one click; the user still confirms, so the gate's purpose survives while the typing goes away |
+| **Course template** *(stretch)* | Courses → "Add course" | Typical lecture course: 2 quizzes, midsem, endsem, 1 assignment, prep defaults per type | Creates course + assessments |
+
+FocusOS has no recurring tasks, so packs like "TA week" create one-off tasks. Recurring tasks are a follow-up (§12).
+
+### 6.4 Template gallery UI
+
+Replaces the Day Planner's "Add sample" button with **Browse templates**, reachable from Plan, the Today view's empty-plan state, onboarding, and Settings. Sections, in order:
+
+1. **Your templates** — the user's own `dayTemplates`, existing duplicate/delete/update actions unchanged.
+2. **From your group** — admin-published templates (U2).
+3. **Built-in** — minus any built-ins an admin has hidden (U2).
+
+Each card: name, one-line description, a mini timeline bar colored by block type, total focus time, and three actions:
+
+- **Preview on today** — ghost/dashed rendering on today's timeline; writes nothing.
+- **Use for today** — applies it; **confirms first if today already has a plan** (today the apply action overwrites silently).
+- **Make workday template** — materializes a copy and stars it: "Start day will use this on workdays."
+
+### 6.5 U1 acceptance criteria
+
+- [ ] A brand-new account with no data clicks **Start day** and gets a plan (in-memory fallback) plus the one-time toast.
+- [ ] Browsing built-in templates triggers zero Firestore reads (dev usage overlay).
+- [ ] "Make workday template" = exactly one `dayTemplates` write; Start day uses it the next day.
+- [ ] Applying a template to a date that already has a plan requires confirmation.
+- [ ] `shiftTemplateSlots` passes unit tests: normal shift, midnight crossing (rejected), order preserved.
+- [ ] A test iterates the whole built-in catalog through `lib/schedule.ts` overlap validation and the zod schemas.
+- [ ] Existing user templates, the default star, and the break-day template setting behave exactly as before.
+
+---
+
+## 7. Admin-published templates (Phase U2)
+
+### 7.1 What admins can do
+
+At **`/admin/templates`** (owner and admin roles, same gating as every other admin screen):
+
+- **Create / edit** any template type from §6.3. Day templates reuse the Plan page's block editor and its overlap validation.
+- **Import from my templates** — pick one of the admin's own `dayTemplates` and publish it as a shared template. This is the fastest way to share a real, battle-tested research day with invited colleagues.
+- **Draft → Publish → Archive** lifecycle. Publishing bumps `version`.
+- **Assign to starter packs** — choose which packs show it as "Recommended", and optionally make it a pack's **default** workday or break-day template (overrides the built-in default for new onboardings).
+- **Hide built-ins** — hide specific built-in templates from the gallery (e.g. hide "Coursework Day" if the group has no coursework).
+- **Audience** — optionally limit visibility to specific tiers. **This is visibility, not security:** the catalog document is readable by any signed-in user, so templates must never contain sensitive information. The editor states this.
+- Every mutation writes an audit entry via `writeAuditEntry`, so it appears in `/admin/audit`.
+
+### 7.2 Data model
+
+Two locations, following the existing `tiers` access pattern (client-readable, Admin-SDK-only writes).
+
+```text
+templates/{templateId}        # source of truth, Admin SDK only (not client-readable)
+publicCatalog/current         # denormalized, client-readable, rebuilt on every publish/archive/edit
+```
+
+```ts
+// lib/templates/schema.ts (shared zod + types, pure)
+type TemplateKind = 'day' | 'taskPack' | 'goal' | 'readingGoal' | 'timer';
+
+interface OrgTemplate {
+  id: string;
+  kind: TemplateKind;
+  name: string;
+  description?: string;
+  payload: DayTemplatePayload | TaskPackPayload | GoalPayload | ReadingGoalPayload | TimerPayload;
+  status: 'draft' | 'published' | 'archived';
+  version: number;                 // bumped on each publish
+  packIds: PackId[];               // packs that list it as recommended
+  audienceTierIds?: string[];      // empty/absent = everyone (visibility only)
+  createdBy: string; updatedBy: string;
+  createdAt: Timestamp; updatedAt: Timestamp; publishedAt?: Timestamp;
+}
+
+interface PublicCatalog {
+  rebuiltAt: Timestamp;
+  templates: Array<Omit<OrgTemplate, 'createdBy' | 'updatedBy' | 'status'>>; // published only
+  packDefaults: Partial<Record<PackId, { workdayTemplateId?: string; breakDayTemplateId?: string }>>;
+  hiddenBuiltInIds: string[];
+}
+```
+
+**Why a denormalized catalog doc:** the gallery and onboarding need every published template. Querying `templates` would cost one read per template per gallery open; one document costs one read, matching the app's "one read renders a day" philosophy. A cap of **150 published templates** keeps the document well below Firestore's 1 MB limit; the publish route rejects anything beyond that.
+
+**Rules addition:**
+
+```js
+match /publicCatalog/{docId} {
+  allow read: if request.auth != null && request.auth.token.get('role', 'member') != 'disabled';
+  allow write: if false;
+}
+match /templates/{document=**} {
+  allow read, write: if false;
+}
+```
+
+### 7.3 Server side
+
+- `lib/admin-templates.ts` — create / update / publish / archive / import / setPackDefault / hideBuiltIn, each re-validating with the shared zod schema, running day templates through overlap validation, writing the audit entry, and calling `rebuildPublicCatalog()` in the same batch.
+- Routes under `app/api/admin/templates/**`, all starting with `verifyAdminRequest`.
+- `scripts/manage-templates.mjs` (list / publish / archive / import), sharing `lib/admin-templates.ts` exactly as `manage-tiers.mjs` shares `lib/admin-tier-crud.ts`.
+- **Import** reads the admin's own `users/{uid}/dayTemplates/{id}` via the Admin SDK; it can only import the calling admin's templates, never another user's.
+
+### 7.4 Client side
+
+- `useTemplateCatalog()` — a one-time `getDoc` on `publicCatalog/current`, cached in memory for the session, fetched only by the gallery, onboarding, and "Add from checklist"/"Start from a template" dialogs. **The Today view never reads it.**
+- Resolution for a pack's default template: **admin `packDefaults` → built-in default**.
+- User copies of an admin template store `sourceTemplateId: 'org:<id>'` and `sourceVersion`. When the catalog has a newer version, the user's copy shows **"Update available"** with a before/after preview and an "Update my copy" button. Nothing updates automatically.
+- Archiving or deleting an admin template never touches user copies.
+
+### 7.5 U2 acceptance criteria
+
+- [ ] Admin publishes a day template → it appears under "From your group" for a member after reload; the member's gallery open costs one read.
+- [ ] Setting it as the Research pack default → the next new onboarding choosing Research gets it; existing users are unaffected.
+- [ ] Publishing a new version shows "Update available" on member copies and changes nothing until accepted.
+- [ ] An overlapping day template or a 151st published template is rejected server-side with a clear message.
+- [ ] Every admin template action appears in `/admin/audit`.
+- [ ] A member cannot read `templates/*` or write `publicCatalog/*` (rules unit test).
+
+---
+
+## 8. Starter packs & onboarding (Phase U3)
+
+### 8.1 Starter packs by PhD stage
+
+A pack is a code-defined bundle; picking one writes settings and materializes the default template(s). The **core modules** (Today, Tasks, Plan, Focus timer, Daily wrap-up, Reading list) are in every pack, because every PhD student plans days and reads papers.
+
+| Pack | Adds to core | Workday template | Break-day template | Timer |
+|---|---|---|---|---|
+| **Coursework** — "I'm taking courses" | Courses, Revise | Coursework Day | Semester Break Day | Classic |
+| **Research** — "I'm reading and doing research" | Staged reading (Skim/Read/Deep dive), Revise, Goals | Research Day | Light Day | Classic |
+| **Writing up** — "I'm writing my thesis" | Goals, Weekly check-in | Writing Day | Semester Break Day | Extended |
+| **Everything** — "Show me all features" | All modules | (keeps existing / Research Day) | (unchanged / Light Day) | (unchanged) |
+
+Admin `packDefaults` (U2) override the template columns. Skipping onboarding applies **core only** with the Research Day template.
+
+### 8.2 First-run flow
+
+Once, for new accounts only, as a full-screen stepper. Every step has **Skip**.
+
+1. **Welcome** — one sentence ("Plan your research days, focus, and keep track of what you read"), display name prefilled from auth.
+2. **"Where are you in your PhD?"** — the four pack cards.
+3. **"When does your day usually start?"** — time picker (default 09:00) with a live mini-preview of the pack's template shifted to that time, and a "See other templates" link into the gallery.
+4. **"Pick your focus rhythm"** — timer preset cards, preselected from the pack.
+5. **Done** — "Your day is ready." Primary: **Start my day** (runs Start day, so the notification permission prompt appears in context). Secondary: "Look around first."
+
+Target: under 60 seconds, no typing required. **Guest accounts** skip steps 1 and 4 and see a dismissible note that guest data is tied to this browser.
+
+### 8.3 Getting-started checklist
+
+A collapsible, dismissible card on Today. Items auto-check from real data; only the dismissed state is stored.
+
+| # | Every pack | Coursework adds | Research adds | Writing up adds |
+|---|---|---|---|---|
+| 1 | Add a task | | | |
+| 2 | Start your day | | | |
+| 3 | Finish one focus session | | | |
+| 4 | Add a paper to your reading list | Add your first course | Skim a paper | Create a thesis goal |
+| 5 | Wrap up your day | | | |
+
+Finishing all five shows a single "Discover more features" link to `/settings/features`. Nothing is enabled automatically.
+
+### 8.4 U3 acceptance criteria
+
+- [ ] New account → onboarding appears once; refreshing mid-flow resumes at the same step.
+- [ ] Skipping at any step yields a working core setup with a workday template.
+- [ ] Existing accounts never see onboarding (§10.2).
+- [ ] Checklist items check themselves from existing data (e.g. a completed work-mode focus session today checks item 3).
+- [ ] Onboarding costs at most one catalog read plus the settings/template writes.
+
+---
+
+## 9. Feature modules & simplified design (Phase U4)
+
+### 9.1 Feature registry
+
+One file, one entry per module — the same pattern as the AI task registry.
+
+```ts
+// lib/features.ts (new, pure, client-safe)
+export type ModuleId =
+  | 'today' | 'tasks' | 'plan' | 'focus' | 'wrapup' | 'readingList'   // core
+  | 'stagedReading' | 'paperTools'   // Skim/Read/Deep dive; paper sets, highlights, layered summary
+  | 'courses' | 'revise' | 'goals' | 'weeklyCheckin'
+  | 'workload' | 'analytics' | 'insights';
+
+export interface FeatureModule {
+  id: ModuleId;
+  label: string;          // from lib/copy.ts
+  description: string;    // one line, shown on the Features page
+  routes: string[];
+  navItem?: { href: string; icon: string; group: 'primary' | 'more' };
+  dashboardWidgets?: string[];
+  requires?: ModuleId[];  // e.g. paperTools requires stagedReading
+  core?: boolean;         // cannot be disabled
+}
+```
+
+`useFeatures()` wraps `useUserSettings` (no extra reads); components call `isEnabled('workload')` rather than checking a pack name, so custom setups come for free.
+
+**Reading list vs staged reading:** papers' status is derived from pass completion, so a "reading list only" user still needs a way to finish a paper. With `stagedReading` off, a paper shows **Start reading**, which opens a condensed Skim form (the three verdict buttons plus an optional one-line takeaway; everything else behind "More options") and a "Mark as read" action that completes Skim with a "Keep reading → done" outcome. **[ASSUMPTION]** confirm this mapping onto `pass1`/`pass2` output doesn't distort drop-rate statistics; if it does, add an explicit `quickRead: true` flag excluded from drop rate.
+
+### 9.2 What modules gate — and what they don't
+
+| Gated (UI) | Not gated (logic/data) |
+|---|---|
+| Nav items, dashboard widgets, route access, form sections, AI buttons, empty-state CTAs, checklist items | Firestore data, JSON/CSV export, crons, heads-up rules, workload snapshot writes |
+
+Two deliberate exceptions where logic reads module state, so the UI never recommends something hidden:
+
+- **Up next** (`lib/next-action.ts`) skips cascade steps whose module is off.
+- **Heads-up banner** only shows alerts whose source module is enabled.
+
+Visiting a disabled module's URL shows "Revise is turned off. Turn it on?" with one-click enable, not a 404. Admin routes keep their 404 behavior.
+
+### 9.3 Navigation
+
+| Destination | Coursework | Research | Writing up | Everything |
+|---|---|---|---|---|
+| Today | Primary | Primary | Primary | Primary |
+| Tasks | Primary | Primary | Primary | Primary |
+| Plan (Day planner + Calendar tabs) | Primary | Primary | Primary | Primary |
+| Papers (reading list) | Primary | Primary | Primary | Primary |
+| Courses | Primary | Hidden | Hidden | Primary |
+| Revise | Primary | Primary | Hidden | Primary |
+| Goals | Hidden | Primary | Primary | Primary |
+| Wrap-up / Weekly check-in | More | More | More | More |
+| Analytics | Hidden | Hidden | Hidden | More |
+| Insights | Hidden | Hidden | Hidden | More |
+| Settings | Footer | Footer | Footer | Footer |
+
+Merging Planner and Calendar into one **Plan** destination removes a top-level concept; the existing routes keep working as deep links. **[ASSUMPTION — §13 Q3]**
+
+### 9.4 Today view
+
+Two columns on desktop, single column on mobile. The current three-column layout remains available as the "Everything" default and via Customize.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ Good morning, Arjun                           [ Start day ▶ ] │
+│ Up next: Deep work · experiments · 08:45–10:45                 │
+├─────────────────────────────────┬────────────────────────────┤
+│ TODAY'S PLAN                    │ FOCUS TIMER                 │
+│ 08:30 Plan the day          ✓   │        24:13                │
+│ 08:45 Deep work        ◀ now    │   [Pause]   [Finish]        │
+│ 10:45 Break                     │   Working on: ▾ (optional)  │
+│ 11:00 Reading                   ├────────────────────────────┤
+│ …                               │ TODAY'S TASKS     [+ Add]   │
+│ [Change template]               │ ☐ Send draft to advisor  ★  │
+│                                 │ ☐ Fix figure 3 axis labels  │
+│                                 │ Show all (7)                │
+│                                 ├────────────────────────────┤
+│                                 │ READING NOW                 │
+│                                 │ Attention Is All… · Skim ▶  │
+├─────────────────────────────────┴────────────────────────────┤
+│ Getting started 3/5 ▸                            [Customize]  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Compared with today: Workload, the metrics strip, catch-up hours, morning overview, and scratchpad are off by default (all available via **Customize**, backed by `dashboardWidgets` in settings). Top priorities merge into Today's tasks as a ★ pin. The 5-item cap gets "Show all (N)". A **Reading now** card replaces the break-only "Break focus" card and shows year-round.
+
+### 9.5 Simplified forms ("More options")
+
+| Form | Always visible | Behind "More options" |
+|---|---|---|
+| Add task | Title, due (Today / Tomorrow / Pick) | Description, category, priority, estimated focus sessions, hard-deadline & reminder settings |
+| Focus timer | Start, optional "Working on" task | Label, category (defaults: linked task's category → last used → `research`) |
+| Plan block | Title, start, end | Type (defaults to deep work), note, status, assigned tasks |
+| Add paper | Title, link | Authors, venue, year, tags, PDF |
+| Why am I reading this? | Preset chips per goal kind | Free-text edit |
+| Skim form | Verdict buttons, one-line takeaway | Checkboxes, category/context/correctness, clarity, references read |
+| Read form | Summary | Key points, figure checklist, unread references, outcome details |
+| Course | Name, weekly class times | Code, instructor, term, dates, weekly target |
+| Goal | Title, definition of done | Horizon, why, milestones, target hours, check-in cadence |
+
+"How did that go?" after a focus session becomes a single row of 1–5 buttons with the comment collapsed; Skip stays.
+
+### 9.6 End day → Daily wrap-up sheet
+
+For packs without Weekly check-in in primary nav, End day opens a short sheet instead of navigating away: *How focused did you feel?* (1–5), *Anything to carry to tomorrow?*, and **Suggestions for tomorrow** as Accept/Dismiss chips. It writes the same `days/{date}.review` and `rollup` fields, so the full wrap-up page shows identical data. "Open full wrap-up" is always available.
+
+### 9.7 Empty states that teach
+
+Every list page: one sentence on what it's for, one primary action, one template action.
+
+| Page | Sentence | Primary | Template action |
+|---|---|---|---|
+| Tasks | "Everything you need to get done, research or not." | Add a task | Add from checklist (e.g. Paper submission) |
+| Plan | "Your day, block by block." | Use a template | Add a block |
+| Papers | "Papers you want to read, are reading, or have read." | Add a paper | — |
+| Goals | "Long-term aims like a chapter, an exam, or a submission." | New goal | Start from a template |
+| Revise | "Cards appear after you log a class or save a paper for later." | Log a class / Add a paper | — |
+| Courses | "Your classes, assessments, and what each lecture covered." | Add a course | Typical lecture course *(stretch)* |
+
+### 9.8 U4 acceptance criteria
+
+- [ ] Research-pack user sees exactly 5 primary nav items + Settings.
+- [ ] The retired-term CI scan passes across all non-admin routes.
+- [ ] Switching packs or toggling modules loses no data and preserves widget customization.
+- [ ] "Up next" never recommends an action in a disabled module.
+- [ ] Owner account in "Everything": layout visual-regression snapshots match today except for text labels.
+- [ ] "Mark as read" on a reading-list paper leaves Papers statistics correct (per the §9.1 assumption).
+
+---
+
+## 10. Data model & migration
+
+### 10.1 User-level changes
+
+All additions go into the existing `users/{uid}/meta/settings` doc (already synced), so Today gains **no extra reads**.
+
+```ts
+// types/index.ts — additions to UserSettings
+packId?: 'coursework' | 'research' | 'writing' | 'everything' | 'core';
+enabledModules?: ModuleId[];      // present = custom; absent = derived from packId
+onboarding?: {
+  status: 'pending' | 'in_progress' | 'done' | 'skipped';
+  step?: number;
+  completedAt?: string;
+  checklistDismissed?: boolean;
+};
+dayStartTime?: string;            // 'HH:mm', used for template shifting
+timerPresetId?: 'classic' | 'extended' | 'short' | 'custom';
+dashboardWidgets?: string[];
+dismissedHints?: string[];
+
+// DayTemplate additions
+sourceTemplateId?: string;        // 'builtin:<id>' | 'org:<id>'
+sourceVersion?: number;
+
+// Task addition (friction fix F5)
+previousStatus?: TaskStatus;
+```
+
+Shared additions (`templates/*`, `publicCatalog/current`) are specified in §7.2. No new composite indexes.
+
+### 10.2 Migration for existing users
+
+Principle: **existing users keep every feature they have.** Only the vocabulary changes for them (D3).
+
+If `meta/settings` has no `packId`: an account with existing usage (any task, template, course, paper, or focus session, or `users/{uid}.createdAt` before the release cutoff) gets `packId: 'everything'` and `onboarding.status: 'done'`; otherwise it's treated as new. **[ASSUMPTION]** verify what `upsertUser` stores for creation time. `scripts/migrate-ux.mjs` (dry run by default, same pattern as earlier migration scripts) pre-writes this for all users; the client check is only a safety net.
+
+Because the rename touches familiar screens, the first load after release shows existing users a one-time **"We renamed a few things"** dialog with the §5 table, and the README gains a matching glossary.
+
+---
+
+## 11. Implementation phases
+
+| Phase | Deliverables | Depends on | Rough size |
+|---|---|---|---|
+| **U0 — Foundations** | `lib/features.ts` + `useFeatures()`, `lib/copy.ts` with the full §5 vocabulary, `lib/templates/schema.ts`, settings type additions, migration script + client safety net, a flag to ship dark | — | S |
+| **U1 — Built-in templates** | Built-in catalog (day, timer, task packs, goals, reading presets), gallery, preview / use / make-workday, `shiftTemplateSlots`, Start day fallback, F1–F3 | U0 | M–L |
+| **U2 — Admin templates** | `templates` + `publicCatalog`, rules, `lib/admin-templates.ts`, `/api/admin/templates/**`, `/admin/templates` (editor, import, publish/archive, pack defaults, hide built-ins, audience), `useTemplateCatalog()`, "Update available", `manage-templates.mjs` | U1 | M |
+| **U3 — Onboarding** | Pack catalog, stage-based first-run stepper, getting-started checklist, guest variant | U2 | M |
+| **U4 — Design + vocabulary rollout** | Module gating, Plan merge, new Today layout + Customize, "More options" forms, reading-list mode, wrap-up sheet, empty states, app-wide rename + retired-term CI check + "We renamed a few things" dialog, README glossary, F4, F9, F10 | U0, U1 | L |
+| **U5 — Discovery** | `/settings/features`, contextual nudges, ⓘ popovers | U4 | S–M |
+| **U6 — Friction fixes & polish** | F5–F8, F11, mobile pass, short in-app `/help` page | U4 | M |
+
+If time is tight, **U0 → U1 → U2 → U3** already gives a new PhD student a working first day with your group's real templates, before the larger visual change in U4.
+
+Every phase keeps existing conventions: pure logic in `lib/` with unit tests, thin client components, server secrets only under `app/api/**`, audit entries for every admin mutation.
+
+### 11.1 Contextual nudges (U5)
+
+Deterministic and rule-based (same philosophy as `lib/ai/triage.ts`), shown once each, max one visible at a time and one new per day:
+
+| Trigger | Nudge |
+|---|---|
+| 3+ papers finished via "Mark as read" and staged reading off | "Want to skim faster and remember more? Try reading in stages" |
+| Task titles mention quiz / exam / midsem / assignment and Courses off | "Taking a course? Courses can plan prep time before assessments" |
+| 5 wrap-ups done and Workload off | "See whether your days match your plan — turn on Workload" |
+| 2+ papers share a tag and paper tools off | "Compare related papers side by side with a paper set" |
+| A goal with milestones exists and Weekly check-in off | "A weekly check-in keeps long goals moving" |
+| 15+ focus sessions and Analytics off | "See your focus trends in Analytics" |
+
+### 11.2 Friction fixes
+
+Behaviors the README documents as nuances; fine for the owner, but each is a likely "is this broken?" moment for a newcomer.
+
+| # | Current behavior (README) | Why it hurts newcomers | Fix | Phase |
+|---|---|---|---|---|
+| F1 | Start day creates nothing without a template | First click appears broken | In-memory pack template fallback (§6.1) | U1 |
+| F2 | Applying a template overwrites the date's plan | Silent data loss | Confirm when a plan exists | U1 |
+| F3 | Class blocks merge without overlap checking | Coursework templates collide with classes | Skip template blocks overlapping a class; toast lists what was skipped | U1 |
+| F4 | Today tasks capped at 5 silently | Tasks seem to vanish | "Show all (N)" | U4 |
+| F5 | Unchecking a task always reverts to `todo` | Loses "in progress" | Store `previousStatus`; restore on uncheck | U6 |
+| F6 | "This week" includes all future dates | Filter looks wrong | Bound to Mon–Sun; add "Upcoming" view | U6 |
+| F7 | Workload history only written on End day | Empty chart for people who forget | Evening cron writes the snapshot if End day wasn't clicked | U6 |
+| F8 | No midnight rollover without refresh | Yesterday's day keeps running | Visibility-change + minute tick re-derives date, prompts "New day — start it?" | U6 |
+| F9 | Reminder × vs Done difference invisible | Counter looks buggy | Buttons "Did it" / "Skip" | U4 |
+| F10 | Timer task picker disappears with no open tasks | Layout jumps | Keep field: "No open tasks · Add one" | U4 |
+| F11 | Accidental End day has no undo | Confusing restart | 10-second "Undo" toast | U6 |
+| F12 | Reading goal must be typed before Skim | Highest-friction point for a newcomer | Preset chips (§6.3) | U1 |
+
+---
+
+## 12. How we'll know it worked
+
+**Quantitative** (from existing data + onboarding state; surfaced as a "New users" panel on `/admin/usage` in U5):
+
+- Median time from sign-up to first task (target < 2 min).
+- % of new accounts finishing ≥ 1 focus session on day 1.
+- % of new accounts that Start day on day 1 and day 3.
+- Onboarding step-by-step completion vs skip.
+- Pack distribution, and % of users on an admin-published workday template.
+- Week-1 return rate (a `days/{date}` doc on 3+ distinct days).
+
+**Qualitative — 5 PhD students, before and after U4.** Fresh guest account, no instructions:
+
+1. "Plan today using a schedule that fits a research day."
+2. "Add the paper you're currently reading and note why you're reading it."
+3. "Add a task due tomorrow and work on it for one focus session."
+4. "Finish your day and carry something over to tomorrow."
+
+Success = all four done without asking a question, under 6 minutes total. Also note every FocusOS term they ask about; each is a vocabulary bug.
+
+**Out of scope / follow-ups:** recurring tasks, natural-language quick add ("Submit rebuttal Friday"), ⌘K command palette, template block-length scaling, i18n of `lib/copy.ts`, per-lab groups beyond tier-based audiences.
+
+## 13. Open questions
+
+1. **Sample data:** should onboarding offer "Show me with example data" for guests, or stay empty with templates only? The plan assumes no sample data.
+2. **Mobile:** is it a primary target for new users? It decides whether U4 is designed mobile-first.
+3. **Planner + Calendar merge** into one "Plan" destination — acceptable?
+4. **Who can publish templates:** owner and admins (as planned), or owner only?
+5. **Seed content:** do you have real templates (your research weekday, a writing day) you want as built-ins, or will you publish them through the admin "Import" flow after U2?
+6. **Owner default:** keep your account on "Everything", or dogfood the Research pack?
+7. **Vocabulary review:** any §5 renames you disagree with? "Assessment", "Revise", and "Skim / Read / Deep dive" are the ones most worth a second look.

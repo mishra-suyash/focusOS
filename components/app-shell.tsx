@@ -25,6 +25,7 @@ import { useAuth } from "@/components/auth-provider";
 import { useTheme } from "@/components/theme-provider";
 import { DaySessionBar } from "@/components/day-session-bar";
 import { ReminderBanner } from "@/components/reminder-banner";
+import { StartDayNoticeBanner } from "@/components/start-day-notice-banner";
 import { UsageOverlay } from "@/components/usage-overlay";
 import { clsx } from "clsx";
 
@@ -131,6 +132,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         ) : null}
         <ReminderBanner />
+        <StartDayNoticeBanner />
         <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</main>
       </div>
       <UsageOverlay />

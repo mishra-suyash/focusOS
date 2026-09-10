@@ -1,9 +1,10 @@
 import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotStatus, ScheduleSlotType, Task } from "@/types";
 
-export const slotTypes: ScheduleSlotType[] = ["deep_work", "meal", "free", "admin", "break", "commute", "sleep", "gym", "class", "custom"];
+export const slotTypes: ScheduleSlotType[] = ["deep_work", "reading", "meal", "free", "admin", "break", "commute", "sleep", "gym", "class", "custom"];
 
 export const slotTypeLabels: Record<ScheduleSlotType, string> = {
   deep_work: "Deep work",
+  reading: "Reading",
   meal: "Meal",
   free: "Free",
   admin: "Admin",
@@ -17,6 +18,7 @@ export const slotTypeLabels: Record<ScheduleSlotType, string> = {
 
 export const slotTypeStyles: Record<ScheduleSlotType, string> = {
   deep_work: "border-moss-600 bg-moss-600/10 text-moss-700 dark:text-moss-400",
+  reading: "border-cyan-500 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300",
   meal: "border-amberline bg-amberline/10 text-amber-700 dark:text-amber-300",
   free: "border-ink-300 bg-ink-100 text-ink-600 dark:border-ink-700 dark:bg-ink-800 dark:text-ink-300",
   admin: "border-sky-500 bg-sky-500/10 text-sky-700 dark:text-sky-300",
@@ -31,6 +33,14 @@ export const slotTypeStyles: Record<ScheduleSlotType, string> = {
 export function minutesFromTime(time: string) {
   const [hours = "0", minutes = "0"] = time.split(":");
   return Number(hours) * 60 + Number(minutes);
+}
+
+export function minutesToTime(total: number) {
+  const hours = Math.floor(total / 60)
+    .toString()
+    .padStart(2, "0");
+  const minutes = (total % 60).toString().padStart(2, "0");
+  return `${hours}:${minutes}`;
 }
 
 export function formatMinutes(total: number) {
@@ -125,28 +135,27 @@ export function createSlot(partial: Partial<ScheduleSlot> = {}): ScheduleSlot {
   };
 }
 
-export function generateResearchWeekdayTemplate(): Omit<DayTemplate, "id" | "createdAt" | "updatedAt"> {
-  return {
-    name: "Research weekday",
-    description: "A balanced doctoral workday with deep work, meals, admin, gym, and evening review.",
-    slots: [
-      createSlot({ title: "Sleep", type: "sleep", startTime: "00:00", endTime: "06:30" }),
-      createSlot({ title: "Morning routine", type: "free", startTime: "06:30", endTime: "07:30" }),
-      createSlot({ title: "Gym", type: "gym", startTime: "07:30", endTime: "08:30" }),
-      createSlot({ title: "Breakfast", type: "meal", startTime: "08:30", endTime: "09:00" }),
-      createSlot({ title: "Deep work: primary research", type: "deep_work", startTime: "09:00", endTime: "11:30" }),
-      createSlot({ title: "Break", type: "break", startTime: "11:30", endTime: "12:00" }),
-      createSlot({ title: "Reading and notes", type: "deep_work", startTime: "12:00", endTime: "13:30" }),
-      createSlot({ title: "Lunch", type: "meal", startTime: "13:30", endTime: "14:15" }),
-      createSlot({ title: "Admin and email", type: "admin", startTime: "14:15", endTime: "15:00" }),
-      createSlot({ title: "Writing block", type: "deep_work", startTime: "15:00", endTime: "17:00" }),
-      createSlot({ title: "Open buffer", type: "free", startTime: "17:00", endTime: "18:30" }),
-      createSlot({ title: "Dinner", type: "meal", startTime: "18:30", endTime: "19:30" }),
-      createSlot({ title: "Review and tomorrow setup", type: "admin", startTime: "19:30", endTime: "20:00" }),
-      createSlot({ title: "Personal time", type: "free", startTime: "20:00", endTime: "22:30" }),
-      createSlot({ title: "Sleep", type: "sleep", startTime: "22:30", endTime: "23:59" })
-    ]
-  };
+/**
+ * Shifts every slot by a fixed offset so the earliest slot starts at `newStart`
+ * (plan §6.2's "My day starts at" personalization). Pure — returns a new array,
+ * or `null` if the shift would push any slot before 00:00 or past 24:00 ("crosses
+ * midnight"), since block lengths are never scaled, only translated.
+ */
+export function shiftTemplateSlots(slots: ScheduleSlot[], newStart: string): ScheduleSlot[] | null {
+  if (slots.length === 0) return slots;
+  const ordered = sortedSlots(slots);
+  const offset = minutesFromTime(newStart) - minutesFromTime(ordered[0].startTime);
+  if (offset === 0) return slots;
+  for (const slot of ordered) {
+    const start = minutesFromTime(slot.startTime) + offset;
+    const end = minutesFromTime(slot.endTime) + offset;
+    if (start < 0 || end >= 24 * 60) return null;
+  }
+  return slots.map((slot) => ({
+    ...slot,
+    startTime: minutesToTime(minutesFromTime(slot.startTime) + offset),
+    endTime: minutesToTime(minutesFromTime(slot.endTime) + offset)
+  }));
 }
 
 export function scheduleFromTemplate(template: DayTemplate, dateKey: string): Omit<DailySchedule, "id" | "createdAt" | "updatedAt"> {

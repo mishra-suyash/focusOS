@@ -19,9 +19,14 @@ import {
   subscribeDoc
 } from "@/lib/firestore";
 import { buildLoadIndexSnapshot } from "@/lib/loadindex";
-import { getActiveSlot, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
+import { getActiveSlot, minutesFromTime, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
+import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePackWorkdayTemplate } from "@/lib/templates/builtin";
 import { isBreakMode } from "@/lib/terms";
-import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, Term } from "@/types";
+import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term } from "@/types";
+
+function slotsOverlap(a: ScheduleSlot, b: ScheduleSlot) {
+  return minutesFromTime(a.startTime) < minutesFromTime(b.endTime) && minutesFromTime(b.startTime) < minutesFromTime(a.endTime);
+}
 
 const NO_PROMPT_SLOT_TYPES = new Set(["break", "meal", "sleep", "free"]);
 
@@ -40,6 +45,9 @@ interface WorkdaySessionContextValue {
   reminder: ReminderEvent | null;
   acknowledgeReminder: () => void;
   dismissReminder: () => void;
+  /** One-time notice from the day-start flow (F1 built-in fallback used, F3 class-overlap blocks skipped). */
+  startDayNotice: string | null;
+  dismissStartDayNotice: () => void;
   hydrationMinutes: number;
   breakMinutes: number;
   setHydrationMinutes: (minutes: number) => void;
@@ -56,6 +64,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
   const [starting, setStarting] = useState(false);
   const [schedule, setSchedule] = useState<DailySchedule | null>(null);
   const [reminder, setReminder] = useState<ReminderEvent | null>(null);
+  const [startDayNotice, setStartDayNotice] = useState<string | null>(null);
   const lastHydrationRef = useRef<number>(0);
   const lastBreakRef = useRef<number>(0);
 
@@ -124,12 +133,35 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         const chosenTemplate = onBreak
           ? templates.find((template) => template.id === settings.breakTemplateId) ?? templates.find((template) => template.isDefault) ?? templates[0]
           : templates.find((template) => template.isDefault) ?? templates[0];
-        const baseSlots = chosenTemplate ? scheduleFromTemplate(chosenTemplate, today).slots : [];
+
+        // F1: with zero templates at all, fall back to the pack's built-in default in memory
+        // instead of leaving Start day producing nothing (plan §6.1).
+        let baseSlots: ScheduleSlot[];
+        let usedFallbackName: string | null = null;
+        if (chosenTemplate) {
+          baseSlots = scheduleFromTemplate(chosenTemplate, today).slots;
+        } else if (templates.length === 0) {
+          const builtin = (onBreak && resolvePackBreakDayTemplate(settings.packId)) || resolvePackWorkdayTemplate(settings.packId);
+          baseSlots = materializeBuiltinDayTemplate(builtin).slots.map((slot) => ({ ...slot, id: crypto.randomUUID() }));
+          usedFallbackName = builtin.name;
+        } else {
+          baseSlots = [];
+        }
+
         const classSlots = onBreak ? [] : courseSlotsForDate(courses, today);
-        const slots = sortedSlots([...baseSlots, ...classSlots]);
+        // F3: class blocks always win — skip any template block that overlaps one, rather than
+        // silently colliding (Plan/Save day would reject the overlap outright otherwise).
+        const nonOverlapping = baseSlots.filter((slot) => !classSlots.some((classSlot) => slotsOverlap(slot, classSlot)));
+        const skippedTitles = baseSlots.filter((slot) => !nonOverlapping.includes(slot)).map((slot) => slot.title);
+        const slots = sortedSlots([...nonOverlapping, ...classSlots]);
         if (slots.length > 0) {
           await saveDailySchedule(user.uid, { dateKey: today, templateId: chosenTemplate?.id, slots });
         }
+
+        const notices: string[] = [];
+        if (usedFallbackName) notices.push(`Used the ${usedFallbackName} template. Change it in Plan → Templates.`);
+        if (skippedTitles.length > 0) notices.push(`Skipped ${skippedTitles.length} template block${skippedTitles.length > 1 ? "s" : ""} that overlapped a class: ${skippedTitles.join(", ")}.`);
+        if (notices.length > 0) setStartDayNotice(notices.join(" "));
       }
       await startWorkdaySession(user.uid, today);
       lastHydrationRef.current = Date.now();
@@ -137,7 +169,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     } finally {
       setStarting(false);
     }
-  }, [user, starting, today, settings.breakTemplateId]);
+  }, [user, starting, today, settings.breakTemplateId, settings.packId]);
 
   const end = useCallback(async () => {
     if (!user) return;
@@ -201,6 +233,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
 
   const setHydrationMinutes = useCallback((minutes: number) => updateSettings({ hydrationMinutes: minutes }), [updateSettings]);
   const setBreakMinutes = useCallback((minutes: number) => updateSettings({ breakMinutes: minutes }), [updateSettings]);
+  const dismissStartDayNotice = useCallback(() => setStartDayNotice(null), []);
 
   const value = useMemo<WorkdaySessionContextValue>(
     () => ({
@@ -212,12 +245,29 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       reminder,
       acknowledgeReminder,
       dismissReminder,
+      startDayNotice,
+      dismissStartDayNotice,
       hydrationMinutes: settings.hydrationMinutes,
       breakMinutes: settings.breakMinutes,
       setHydrationMinutes,
       setBreakMinutes
     }),
-    [session, active, starting, start, end, reminder, acknowledgeReminder, dismissReminder, settings.hydrationMinutes, settings.breakMinutes, setHydrationMinutes, setBreakMinutes]
+    [
+      session,
+      active,
+      starting,
+      start,
+      end,
+      reminder,
+      acknowledgeReminder,
+      dismissReminder,
+      startDayNotice,
+      dismissStartDayNotice,
+      settings.hydrationMinutes,
+      settings.breakMinutes,
+      setHydrationMinutes,
+      setBreakMinutes
+    ]
   );
 
   return <WorkdaySessionContext.Provider value={value}>{children}</WorkdaySessionContext.Provider>;

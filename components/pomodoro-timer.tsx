@@ -1,11 +1,14 @@
 "use client";
 
+import { clsx } from "clsx";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { PomodoroSurveyModal } from "@/components/pomodoro-survey-modal";
+import { useUserSettings } from "@/hooks/use-user-settings";
 import { savePomodoro } from "@/lib/firestore";
 import { categories } from "@/lib/options";
+import { BUILTIN_TIMER_PRESETS } from "@/lib/templates/builtin/timer-presets";
 import type { Category, PomodoroSession, Task, TimerMode } from "@/types";
 
 const modeLabel: Record<TimerMode, string> = {
@@ -26,6 +29,7 @@ interface PendingSession {
 
 export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessions: PomodoroSession[]; tasks?: Task[]; compact?: boolean }) {
   const { user } = useAuth();
+  const { settings, loaded: settingsLoaded, update: updateSettings } = useUserSettings();
   const [work, setWork] = useState(25);
   const [shortBreak, setShortBreak] = useState(5);
   const [longBreak, setLongBreak] = useState(15);
@@ -45,6 +49,27 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
   useEffect(() => {
     setSecondsLeft(duration * 60);
   }, [duration, mode]);
+
+  // Pulls saved lengths (and built-in preset choices — lib/templates/builtin/timer-presets.ts) in once
+  // settings load, so a preset applied elsewhere (Settings) takes effect here without a refresh.
+  useEffect(() => {
+    if (!settingsLoaded) return;
+    if (typeof settings.workMinutes === "number") setWork(settings.workMinutes);
+    if (typeof settings.shortBreakMinutes === "number") setShortBreak(settings.shortBreakMinutes);
+    if (typeof settings.longBreakMinutes === "number") setLongBreak(settings.longBreakMinutes);
+  }, [settingsLoaded, settings.workMinutes, settings.shortBreakMinutes, settings.longBreakMinutes]);
+
+  function setLength(field: "work" | "shortBreak" | "longBreak", minutes: number) {
+    if (field === "work") setWork(minutes);
+    if (field === "shortBreak") setShortBreak(minutes);
+    if (field === "longBreak") setLongBreak(minutes);
+    updateSettings({
+      workMinutes: field === "work" ? minutes : work,
+      shortBreakMinutes: field === "shortBreak" ? minutes : shortBreak,
+      longBreakMinutes: field === "longBreak" ? minutes : longBreak,
+      timerPresetId: "custom"
+    });
+  }
 
   useEffect(() => {
     if (!running) return;
@@ -140,10 +165,33 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
       </div>
       <details className="mt-3">
         <summary className="cursor-pointer text-xs font-medium text-ink-500 outline-none focus:ring-2 focus:ring-moss-500">Timer settings</summary>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {Object.entries(BUILTIN_TIMER_PRESETS).map(([id, preset]) => (
+            <button
+              key={id}
+              type="button"
+              className={clsx("btn-secondary py-1 text-xs", settings.timerPresetId === id && "ring-2 ring-moss-500")}
+              title={preset.description}
+              onClick={() => {
+                setWork(preset.workMinutes);
+                setShortBreak(preset.shortBreakMinutes);
+                setLongBreak(preset.longBreakMinutes);
+                updateSettings({
+                  workMinutes: preset.workMinutes,
+                  shortBreakMinutes: preset.shortBreakMinutes,
+                  longBreakMinutes: preset.longBreakMinutes,
+                  timerPresetId: id as "classic" | "extended" | "short"
+                });
+              }}
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
         <div className="mt-3 grid gap-2 sm:grid-cols-3">
-          <label className="text-xs text-ink-500">Work<input className="input mt-1" type="number" min={5} value={work} onChange={(e) => setWork(Number(e.target.value))} /></label>
-          <label className="text-xs text-ink-500">Short<input className="input mt-1" type="number" min={1} value={shortBreak} onChange={(e) => setShortBreak(Number(e.target.value))} /></label>
-          <label className="text-xs text-ink-500">Long<input className="input mt-1" type="number" min={5} value={longBreak} onChange={(e) => setLongBreak(Number(e.target.value))} /></label>
+          <label className="text-xs text-ink-500">Work<input className="input mt-1" type="number" min={5} value={work} onChange={(e) => setLength("work", Number(e.target.value))} /></label>
+          <label className="text-xs text-ink-500">Short<input className="input mt-1" type="number" min={1} value={shortBreak} onChange={(e) => setLength("shortBreak", Number(e.target.value))} /></label>
+          <label className="text-xs text-ink-500">Long<input className="input mt-1" type="number" min={5} value={longBreak} onChange={(e) => setLength("longBreak", Number(e.target.value))} /></label>
         </div>
       </details>
       <div className={compact ? "mt-3" : "mt-5"}>

@@ -34,3 +34,8 @@ export function currentWeekDays(date = new Date()) {
 export function friendlyDate(dateKey: string) {
   return format(parseISO(dateKey), "EEEE, MMMM d");
 }
+
+/** `dateKey` offset by `days` (negative = earlier) — used to turn a task pack's/goal template's relative offsets into real due dates once an anchor date is picked. */
+export function addDaysToKey(dateKey: string, days: number) {
+  return todayKey(addDays(parseISO(dateKey), days));
+}

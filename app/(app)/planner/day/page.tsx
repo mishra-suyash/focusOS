@@ -5,6 +5,7 @@ import { Copy, Plus, Star, Trash2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
+import { TemplateGalleryDialog } from "@/components/template-gallery";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import {
@@ -17,7 +18,6 @@ import {
 } from "@/lib/firestore";
 import {
   createSlot,
-  generateResearchWeekdayTemplate,
   scheduleFromTemplate,
   slotTypeLabels,
   slotTypes,
@@ -46,6 +46,7 @@ function DayPlannerContent() {
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [templateName, setTemplateName] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
+  const [galleryOpen, setGalleryOpen] = useState(false);
   const errors = validateSlots(slots);
 
   useEffect(() => {
@@ -63,6 +64,7 @@ function DayPlannerContent() {
 
   async function applyTemplate(template: DayTemplate) {
     if (!user) return;
+    if (slots.length > 0 && !window.confirm(`${friendlyDate(dateKey)} already has a plan. Replace it with "${template.name}"?`)) return;
     const nextSchedule = scheduleFromTemplate(template, dateKey);
     setSlots(nextSchedule.slots);
     await saveDailySchedule(user.uid, nextSchedule);
@@ -80,11 +82,6 @@ function DayPlannerContent() {
     setTemplateDescription("");
   }
 
-  async function addSampleTemplate() {
-    if (!user) return;
-    await createDayTemplate(user.uid, { ...generateResearchWeekdayTemplate(), isDefault: true });
-  }
-
   return (
     <>
       <SectionHeader title="Day Planner" eyebrow={friendlyDate(dateKey)}>
@@ -95,9 +92,7 @@ function DayPlannerContent() {
           <section className="card p-5">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold">Templates</h2>
-              {templates.length === 0 ? (
-                <button className="btn-secondary py-1.5 text-xs" onClick={addSampleTemplate}>Add sample</button>
-              ) : null}
+              <button className="btn-secondary py-1.5 text-xs" onClick={() => setGalleryOpen(true)}>Browse templates</button>
             </div>
             <div className="space-y-3">
               {templates.map((template) => (
@@ -131,7 +126,7 @@ function DayPlannerContent() {
                   </div>
                 </article>
               ))}
-              {templates.length === 0 ? <p className="text-sm text-ink-500">Create a template from today or add the sample research weekday.</p> : null}
+              {templates.length === 0 ? <p className="text-sm text-ink-500">Create a template from today or browse the built-in catalog.</p> : null}
             </div>
           </section>
           <section className="card p-5">
@@ -186,7 +181,7 @@ function DayPlannerContent() {
             ))}
             {slots.length === 0 ? (
               <div className="rounded-md border border-dashed border-ink-300 p-8 text-center text-sm text-ink-500 dark:border-ink-700">
-                Start with a sample template or add your first slot.
+                Browse templates or add your first slot.
               </div>
             ) : null}
           </div>
@@ -213,6 +208,16 @@ function DayPlannerContent() {
           ) : null}
         </section>
       </div>
+      {galleryOpen ? (
+        <TemplateGalleryDialog
+          uid={user!.uid}
+          dateKey={dateKey}
+          userTemplates={templates}
+          hasExistingPlan={slots.length > 0}
+          onApplied={(nextSlots) => setSlots(nextSlots)}
+          onClose={() => setGalleryOpen(false)}
+        />
+      ) : null}
     </>
   );
 }

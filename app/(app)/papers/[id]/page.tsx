@@ -15,6 +15,7 @@ import { callAiTask } from "@/lib/ai/client";
 import type { ReadingPlanOutput } from "@/lib/ai/schemas";
 import { subscribeDoc, updatePaper } from "@/lib/firestore";
 import { paperStatusLabels } from "@/lib/papers";
+import { BUILTIN_READING_GOAL_PRESETS } from "@/lib/templates/builtin/reading-goal-presets";
 import type { FileRef, GoalKind, Paper } from "@/types";
 
 const GOAL_KINDS: GoalKind[] = ["survey", "method", "baseline", "related-work", "reproduce", "critique"];
@@ -124,6 +125,24 @@ export default function PaperDetailPage() {
           <section className="card p-4">
             <h2 className="mb-3 text-base font-semibold">Reading goal</h2>
             <p className="mb-2 text-xs text-ink-500">Required before starting Pass 1 — the highest-leverage field here, since it conditions everything else.</p>
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {GOAL_KINDS.map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  className="rounded-full border border-ink-200 px-2 py-1 text-[11px] text-ink-600 hover:border-moss-500 hover:text-moss-700 dark:border-ink-700 dark:text-ink-300 dark:hover:text-moss-400"
+                  title={BUILTIN_READING_GOAL_PRESETS[kind].text}
+                  onClick={() => {
+                    const text = BUILTIN_READING_GOAL_PRESETS[kind].text;
+                    setGoal(text);
+                    setGoalKind(kind);
+                    if (user) updatePaper(user.uid, paper.id, { goal: text, goalKind: kind });
+                  }}
+                >
+                  {kind}
+                </button>
+              ))}
+            </div>
             <textarea className="input mb-2 min-h-16" value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Why am I reading this?" onBlur={saveGoal} />
             <select
               className="input"

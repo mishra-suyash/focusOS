@@ -195,6 +195,18 @@ export async function createTask(uid: string, task: NewTask): Promise<string> {
   return ref.id;
 }
 
+/** Creates every task in one batch (plan §6.3 — "Add from checklist" applies a whole task pack in one write). */
+export async function createTasksBatch(uid: string, tasks: NewTask[]) {
+  if (!db || tasks.length === 0) return;
+  const batch = writeBatch(db);
+  const createdAt = now();
+  for (const task of tasks) {
+    batch.set(doc(userCollection(uid, "tasks")), withoutUndefined({ ...task, createdAt, updatedAt: createdAt }));
+  }
+  trackWrite(tasks.length);
+  await batch.commit();
+}
+
 export async function updateTask(uid: string, id: string, patch: Partial<Task>) {
   const payload: Record<string, unknown> = withoutUndefined({ ...patch, updatedAt: now() });
   if ("completedAt" in patch && patch.completedAt === undefined) payload.completedAt = deleteField();
@@ -231,10 +243,11 @@ export async function saveWeeklyReview(uid: string, review: Omit<WeeklyReview, "
   });
 }
 
-export async function createDayTemplate(uid: string, template: NewDayTemplate) {
+export async function createDayTemplate(uid: string, template: NewDayTemplate): Promise<string> {
   const createdAt = now();
   trackWrite();
-  await addDoc(userCollection(uid, "dayTemplates"), withoutUndefined({ ...template, createdAt, updatedAt: createdAt }));
+  const ref = await addDoc(userCollection(uid, "dayTemplates"), withoutUndefined({ ...template, createdAt, updatedAt: createdAt }));
+  return ref.id;
 }
 
 export async function updateDayTemplate(uid: string, id: string, patch: Partial<DayTemplate>) {

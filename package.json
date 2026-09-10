@@ -13,8 +13,10 @@
     "ensure:indexes": "node scripts/ensure-indexes.mjs",
     "enable:auth-providers": "node scripts/enable-auth-providers.mjs",
     "migrate:phase3": "node scripts/migrate-phase3.mjs",
+    "migrate:ux": "node scripts/migrate-ux.mjs",
     "manage:tiers": "node scripts/manage-tiers.mjs",
-    "manage:ai-settings": "node scripts/manage-ai-settings.mjs"
+    "manage:ai-settings": "node scripts/manage-ai-settings.mjs",
+    "verify:templates": "tsx scripts/verify-templates.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
@@ -46,6 +48,7 @@
     "google-auth-library": "^11.0.2",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.15",
+    "tsx": "^4.23.13",
     "typescript": "^5.6.3"
   }
 }

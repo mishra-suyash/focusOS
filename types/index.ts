@@ -2,7 +2,7 @@ export type TaskStatus = "todo" | "in_progress" | "done";
 export type Priority = "low" | "medium" | "high";
 export type Category = "research" | "coding" | "reading" | "writing" | "admin" | "personal";
 export type TimerMode = "work" | "short_break" | "long_break";
-export type ScheduleSlotType = "deep_work" | "meal" | "free" | "admin" | "break" | "commute" | "sleep" | "gym" | "class" | "custom";
+export type ScheduleSlotType = "deep_work" | "reading" | "meal" | "free" | "admin" | "break" | "commute" | "sleep" | "gym" | "class" | "custom";
 export type ScheduleSlotStatus = "upcoming" | "active" | "completed" | "skipped";
 export type CourseStatus = "active" | "completed" | "dropped";
 export type TermKind = "semester" | "break" | "none";
@@ -199,6 +199,10 @@ export interface DayTemplate {
   description?: string;
   isDefault?: boolean;
   slots: ScheduleSlot[];
+  /** 'builtin:<id>' | 'org:<id>' — set when this template was materialized from a catalog entry (U1: builtin only). Absent = a template the user built from scratch. */
+  sourceTemplateId?: string;
+  /** The catalog entry's version at copy time, so a later catalog change can offer "Update available" without touching this copy. */
+  sourceVersion?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -685,6 +689,10 @@ export interface AiInsight {
   degraded?: boolean;
 }
 
+export type PackId = "coursework" | "research" | "writing" | "everything" | "core";
+export type OnboardingStatus = "pending" | "in_progress" | "done" | "skipped";
+export type TimerPresetId = "classic" | "extended" | "short" | "custom";
+
 /** Per-user preferences synced across devices (theme, reminder intervals). Doc id = "settings". */
 export interface UserSettings {
   theme?: "light" | "dark";
@@ -694,6 +702,25 @@ export interface UserSettings {
   breakTemplateId?: string;
   maxRevisionsPerDay?: number;
   maxRevisionMinutesPerDay?: number;
+  /** Focus timer lengths, minutes. Unset = the classic 25/5/15 defaults. */
+  workMinutes?: number;
+  shortBreakMinutes?: number;
+  longBreakMinutes?: number;
+  timerPresetId?: TimerPresetId;
+  /** Which starter pack this account is on (plan §8.1). Absent = derived as "everything" for pre-onboarding accounts by the migration script. */
+  packId?: PackId;
+  /** Present = a custom module selection overriding the pack's defaults; absent = derived from packId. */
+  enabledModules?: string[];
+  onboarding?: {
+    status: OnboardingStatus;
+    step?: number;
+    completedAt?: string;
+    checklistDismissed?: boolean;
+  };
+  /** 'HH:mm' — used to shift built-in/day templates via shiftTemplateSlots. */
+  dayStartTime?: string;
+  dashboardWidgets?: string[];
+  dismissedHints?: string[];
   updatedAt: string;
 }
 

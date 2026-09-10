@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { TaskForm } from "@/components/task-form";
 import { TaskList } from "@/components/task-list";
+import { TaskPackDialog } from "@/components/task-pack-dialog";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { categories, priorities, statuses } from "@/lib/options";
@@ -19,6 +20,7 @@ export default function TasksPage() {
   const [category, setCategory] = useState<Category | "all">("all");
   const [priority, setPriority] = useState<Priority | "all">("all");
   const [status, setStatus] = useState<TaskStatus | "all">("all");
+  const [packDialogOpen, setPackDialogOpen] = useState(false);
   const today = todayKey();
   const week = weekStartKey();
 
@@ -36,7 +38,10 @@ export default function TasksPage() {
       <SectionHeader title="Tasks" eyebrow="Capture, clarify, complete" />
       <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
         <section className="card p-5">
-          <h2 className="mb-4 text-lg font-semibold">Quick add</h2>
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Quick add</h2>
+            <button className="btn-secondary py-1.5 text-xs" onClick={() => setPackDialogOpen(true)}>Add from checklist</button>
+          </div>
           <TaskForm onCreate={(task) => createTask(user!.uid, task)} />
         </section>
         <section>
@@ -69,6 +74,7 @@ export default function TasksPage() {
           />
         </section>
       </div>
+      {packDialogOpen ? <TaskPackDialog uid={user!.uid} onClose={() => setPackDialogOpen(false)} /> : null}
     </>
   );
 }
