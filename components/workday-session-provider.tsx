@@ -16,7 +16,8 @@ import {
   saveDailySchedule,
   saveDayFields,
   startWorkdaySession,
-  subscribeDoc
+  subscribeDoc,
+  undoEndWorkdaySession
 } from "@/lib/firestore";
 import { buildLoadIndexSnapshot } from "@/lib/loadindex";
 import { getActiveSlot, minutesFromTime, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
@@ -42,6 +43,8 @@ interface WorkdaySessionContextValue {
   starting: boolean;
   start: () => Promise<void>;
   end: () => Promise<void>;
+  /** F11 (plan §11.2) — reverses `end()`'s `session.endedAt` write; the caller owns the 10-second undo window/toast. */
+  undoEnd: () => Promise<void>;
   reminder: ReminderEvent | null;
   acknowledgeReminder: () => void;
   dismissReminder: () => void;
@@ -211,6 +214,11 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     setReminder(null);
   }, [user, today]);
 
+  const undoEnd = useCallback(async () => {
+    if (!user) return;
+    await undoEndWorkdaySession(user.uid, today);
+  }, [user, today]);
+
   const acknowledgeReminder = useCallback(() => {
     if (!user || !reminder) return;
     const now = Date.now();
@@ -242,6 +250,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       starting,
       start,
       end,
+      undoEnd,
       reminder,
       acknowledgeReminder,
       dismissReminder,
@@ -258,6 +267,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       starting,
       start,
       end,
+      undoEnd,
       reminder,
       acknowledgeReminder,
       dismissReminder,

@@ -1,8 +1,11 @@
 "use client";
 
-import { Droplets, X } from "lucide-react";
+import { Droplets } from "lucide-react";
 import { useWorkdaySession } from "@/components/workday-session-provider";
 
+/** F9 (plan §11.2) — "Did it" (counts toward the hydration/break counter) vs "Skip" (doesn't, just
+ * pushes the next reminder out) were previously "Done" vs an icon-only ×, so the counter looked
+ * buggy when it didn't move on dismiss. Explicit labels make the difference visible. */
 export function ReminderBanner() {
   const { reminder, acknowledgeReminder, dismissReminder } = useWorkdaySession();
 
@@ -16,11 +19,11 @@ export function ReminderBanner() {
           <span>{reminder.message}</span>
         </div>
         <div className="flex items-center gap-2">
-          <button className="btn-secondary py-1 text-xs" onClick={acknowledgeReminder}>
-            Done
+          <button className="btn-primary py-1 text-xs" onClick={acknowledgeReminder}>
+            Did it
           </button>
-          <button className="btn-secondary px-1.5 py-1" onClick={dismissReminder} aria-label="Dismiss reminder">
-            <X className="h-3.5 w-3.5" />
+          <button className="btn-secondary py-1 text-xs" onClick={dismissReminder}>
+            Skip
           </button>
         </div>
       </div>

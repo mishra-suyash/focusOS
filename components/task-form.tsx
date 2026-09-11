@@ -1,11 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { MoreOptions } from "@/components/more-options";
+import { addDaysToKey, todayKey } from "@/lib/dates";
 import { categories, priorities } from "@/lib/options";
 import type { Category, NewTask, Priority } from "@/types";
 
 const DEFAULT_EXTERNAL_LEAD_DAYS = [7, 2, 0];
 
+/** Plan §9.5 — Title and due date (Today / Tomorrow / Pick) always visible; everything else behind "More options". */
 export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTask) => Promise<unknown>; compact?: boolean }) {
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState<Category>("research");
@@ -15,6 +18,9 @@ export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTa
   const [estimatedPomodoros, setEstimatedPomodoros] = useState(1);
   const [external, setExternal] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  const today = todayKey();
+  const tomorrow = addDaysToKey(today, 1);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -43,40 +49,50 @@ export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTa
   return (
     <form onSubmit={submit} className="space-y-3">
       <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Add a research task..." />
-      {!compact ? (
-        <textarea
-          className="input min-h-20"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Description, context, or next physical action"
-        />
-      ) : null}
-      <div className="grid gap-3 sm:grid-cols-4">
-        <select className="input" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
-          {categories.map((item) => (
-            <option key={item}>{item}</option>
-          ))}
-        </select>
-        <select className="input" value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
-          {priorities.map((item) => (
-            <option key={item}>{item}</option>
-          ))}
-        </select>
-        <input className="input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-        <input
-          className="input"
-          type="number"
-          min={1}
-          max={12}
-          value={estimatedPomodoros}
-          onChange={(e) => setEstimatedPomodoros(Number(e.target.value))}
-          aria-label="Estimated pomodoros"
-        />
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={`btn-secondary py-1.5 text-xs ${dueDate === today ? "bg-moss-600/10" : ""}`} onClick={() => setDueDate(today)}>
+          Today
+        </button>
+        <button type="button" className={`btn-secondary py-1.5 text-xs ${dueDate === tomorrow ? "bg-moss-600/10" : ""}`} onClick={() => setDueDate(tomorrow)}>
+          Tomorrow
+        </button>
+        <input className="input flex-1" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
       </div>
-      <label className="flex items-center gap-2 text-xs text-ink-500 dark:text-ink-400">
-        <input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} />
-        External deadline (visa renewal, a form, a submission portal — a hard due date required, excluded from the Load Index&apos;s required-minutes target)
-      </label>
+      {!compact ? (
+        <MoreOptions>
+          <textarea
+            className="input min-h-20"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Description, context, or next physical action"
+          />
+          <div className="grid gap-3 sm:grid-cols-3">
+            <select className="input" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
+              {categories.map((item) => (
+                <option key={item}>{item}</option>
+              ))}
+            </select>
+            <select className="input" value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
+              {priorities.map((item) => (
+                <option key={item}>{item}</option>
+              ))}
+            </select>
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={12}
+              value={estimatedPomodoros}
+              onChange={(e) => setEstimatedPomodoros(Number(e.target.value))}
+              aria-label="Estimated focus sessions"
+            />
+          </div>
+          <label className="flex items-center gap-2 text-xs text-ink-500 dark:text-ink-400">
+            <input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} />
+            Hard deadline (visa renewal, a form, a submission portal — excluded from Workload&apos;s planned target)
+          </label>
+        </MoreOptions>
+      ) : null}
       <button className="btn-primary w-full sm:w-auto" disabled={saving || (external && !dueDate)}>
         Add task
       </button>

@@ -7,6 +7,9 @@ import { CheckpointForm, checkpointTypeLabels } from "@/components/checkpoint-fo
 import { ClassLogForm } from "@/components/class-log-form";
 import { CourseForm } from "@/components/course-form";
 import { CourseSessionsEditor } from "@/components/course-sessions-editor";
+import { EmptyState, focusSection } from "@/components/empty-state";
+import { InfoHint } from "@/components/info-hint";
+import { ModuleGate } from "@/components/module-gate";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -34,7 +37,7 @@ import type { ClassLog, Checkpoint, CheckpointStatus, Course, CourseSession, New
 
 const CHECKPOINT_STATUSES: CheckpointStatus[] = ["upcoming", "prepping", "submitted", "done", "missed"];
 
-export default function CoursesPage() {
+function CoursesPageContent() {
   const { user } = useAuth();
   const today = todayKey();
   const { items: terms } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
@@ -47,24 +50,28 @@ export default function CoursesPage() {
       <SectionHeader title="Courses" eyebrow="Terms, coursework, and class schedule" />
       <TermsPanel terms={terms} onCreate={(term) => createTerm(user!.uid, term)} onDelete={(id) => deleteTerm(user!.uid, id)} />
       <div className="mt-6 grid gap-6 xl:grid-cols-[380px_1fr]">
-        <section className="card p-5">
+        <section id="course-add" className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Add a course</h2>
           <CourseForm terms={terms} onCreate={(course) => createCourse(user!.uid, course)} />
         </section>
         <section className="space-y-4">
-          {courses.map((course) => (
-            <CourseCard
-              key={course.id}
-              course={course}
-              terms={terms}
-              today={today}
-              checkpoints={checkpointsByCourse[course.id] ?? []}
-              revisionItems={revisionItems}
-            />
-          ))}
           {courses.length === 0 ? (
-            <div className="card p-8 text-center text-sm text-ink-500 dark:text-ink-400">Add your first course to see it on the calendar and daily schedule.</div>
-          ) : null}
+            <EmptyState
+              sentence="Your classes, assessments, and what each lecture covered."
+              primary={{ label: "Add a course", onClick: () => focusSection("course-add") }}
+            />
+          ) : (
+            courses.map((course) => (
+              <CourseCard
+                key={course.id}
+                course={course}
+                terms={terms}
+                today={today}
+                checkpoints={checkpointsByCourse[course.id] ?? []}
+                revisionItems={revisionItems}
+              />
+            ))
+          )}
         </section>
       </div>
     </>
@@ -168,7 +175,10 @@ function CourseCard({
             {[course.code, course.instructor, term?.name].filter(Boolean).join(" · ") || "No details"}
           </p>
           {topics.length > 0 ? (
-            <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">Coverage: {Math.round(coverage * 100)}% of topics revised at least once</p>
+            <p className="mt-1 flex items-center gap-1 text-xs text-ink-500 dark:text-ink-400">
+              Topics revised: {Math.round(coverage * 100)}% at least once
+              <InfoHint term="topicsRevised" />
+            </p>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
@@ -202,12 +212,15 @@ function CourseCard({
       ) : null}
 
       <div className="mt-4">
-        <p className="label mb-2">Checkpoints</p>
+        <p className="label mb-2 flex items-center gap-1">
+          Assessments
+          <InfoHint term="assessment" />
+        </p>
         <div className="space-y-2">
           {checkpoints.map((checkpoint) => (
             <CheckpointRow key={checkpoint.id} courseId={course.id} checkpoint={checkpoint} topics={topics} />
           ))}
-          {checkpoints.length === 0 ? <p className="text-sm text-ink-500">No checkpoints yet.</p> : null}
+          {checkpoints.length === 0 ? <p className="text-sm text-ink-500">No assessments yet.</p> : null}
         </div>
         <div className="mt-2">
           <CheckpointForm courseId={course.id} onCreate={(checkpoint) => createCheckpoint(user!.uid, course.id, checkpoint)} />
@@ -216,7 +229,10 @@ function CourseCard({
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <div>
-          <p className="label mb-2">Log a class</p>
+          <p className="label mb-2 flex items-center gap-1">
+            Log a class
+            <InfoHint term="logAClass" />
+          </p>
           <ClassLogForm onSave={(input) => saveClassLogEntry(user!.uid, course, input)} />
           {logs.length > 0 ? (
             <div className="mt-2 space-y-1">
@@ -313,7 +329,7 @@ function CheckpointRow({ courseId, checkpoint, topics }: { courseId: string; che
               </option>
             ))}
           </select>
-          <button className="text-ink-400 hover:text-red-600" onClick={() => user && deleteCheckpoint(user.uid, courseId, checkpoint.id)} aria-label="Delete checkpoint">
+          <button className="text-ink-400 hover:text-red-600" onClick={() => user && deleteCheckpoint(user.uid, courseId, checkpoint.id)} aria-label="Delete assessment">
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -349,5 +365,13 @@ function CheckpointRow({ courseId, checkpoint, topics }: { courseId: string; che
         </div>
       ) : null}
     </div>
+  );
+}
+
+export default function CoursesPage() {
+  return (
+    <ModuleGate moduleId="courses">
+      <CoursesPageContent />
+    </ModuleGate>
   );
 }

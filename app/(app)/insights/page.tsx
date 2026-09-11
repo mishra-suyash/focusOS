@@ -3,6 +3,7 @@
 import { orderBy } from "firebase/firestore";
 import { Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { ModuleGate } from "@/components/module-gate";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -18,7 +19,7 @@ interface AiHealth {
   budget: { spentUsd: number; capUsd: number; pct: number };
 }
 
-export default function InsightsPage() {
+function InsightsPageContent() {
   const { user } = useAuth();
   const { items: insights } = useUserCollection<AiInsight>("aiInsights", useMemo(() => [orderBy("generatedAt", "desc")], []));
   const today = todayKey();
@@ -120,5 +121,13 @@ export default function InsightsPage() {
         </div>
       </section>
     </>
+  );
+}
+
+export default function InsightsPage() {
+  return (
+    <ModuleGate moduleId="insights">
+      <InsightsPageContent />
+    </ModuleGate>
   );
 }

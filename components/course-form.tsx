@@ -2,6 +2,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { MoreOptions } from "@/components/more-options";
 import { dayOfWeekLabels } from "@/lib/courses";
 import type { CourseSession, NewCourse, Term } from "@/types";
 
@@ -9,6 +10,7 @@ function newSession(): CourseSession {
   return { id: crypto.randomUUID(), dayOfWeek: 1, startTime: "09:00", endTime: "10:30" };
 }
 
+/** Plan §9.5 — Name and weekly class times always visible; code, instructor, term, dates, weekly target behind "More options". */
 export function CourseForm({ terms, onCreate }: { terms: Term[]; onCreate: (course: NewCourse) => Promise<void> }) {
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
@@ -49,32 +51,34 @@ export function CourseForm({ terms, onCreate }: { terms: Term[]; onCreate: (cour
   return (
     <form onSubmit={submit} className="space-y-3">
       <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Course name" />
-      <div className="grid gap-3 sm:grid-cols-2">
-        <input className="input" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Code (e.g. CS 701)" />
-        <input className="input" value={instructor} onChange={(e) => setInstructor(e.target.value)} placeholder="Instructor" />
-      </div>
-      <select className="input" value={termId} onChange={(e) => setTermId(e.target.value)}>
-        <option value="">No term (always active)</option>
-        {terms.map((term) => (
-          <option key={term.id} value={term.id}>
-            {term.name}
-          </option>
-        ))}
-      </select>
-      <div className="grid gap-3 sm:grid-cols-3">
-        <label className="text-xs text-ink-500">
-          Start date (optional)
-          <input className="input mt-1" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} placeholder="Defaults to term start" />
-        </label>
-        <label className="text-xs text-ink-500">
-          End date (optional)
-          <input className="input mt-1" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} placeholder="Defaults to term end" />
-        </label>
-        <label className="text-xs text-ink-500">
-          Target min/week
-          <input className="input mt-1" type="number" min={0} value={targetMinutesPerWeek} onChange={(e) => setTargetMinutesPerWeek(e.target.value)} />
-        </label>
-      </div>
+      <MoreOptions>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <input className="input" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Code (e.g. CS 701)" />
+          <input className="input" value={instructor} onChange={(e) => setInstructor(e.target.value)} placeholder="Instructor" />
+        </div>
+        <select className="input" value={termId} onChange={(e) => setTermId(e.target.value)}>
+          <option value="">No term (always active)</option>
+          {terms.map((term) => (
+            <option key={term.id} value={term.id}>
+              {term.name}
+            </option>
+          ))}
+        </select>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <label className="text-xs text-ink-500">
+            Start date (optional)
+            <input className="input mt-1" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} placeholder="Defaults to term start" />
+          </label>
+          <label className="text-xs text-ink-500">
+            End date (optional)
+            <input className="input mt-1" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} placeholder="Defaults to term end" />
+          </label>
+          <label className="text-xs text-ink-500">
+            Target min/week
+            <input className="input mt-1" type="number" min={0} value={targetMinutesPerWeek} onChange={(e) => setTargetMinutesPerWeek(e.target.value)} />
+          </label>
+        </div>
+      </MoreOptions>
       <div className="space-y-2">
         <p className="label">Weekly sessions</p>
         {sessions.map((session, index) => (

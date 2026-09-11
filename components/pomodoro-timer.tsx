@@ -2,8 +2,10 @@
 
 import { clsx } from "clsx";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { MoreOptions } from "@/components/more-options";
 import { PomodoroSurveyModal } from "@/components/pomodoro-survey-modal";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { savePomodoro } from "@/lib/firestore";
@@ -38,7 +40,7 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
   const [running, setRunning] = useState(false);
   const [cycle, setCycle] = useState(1);
   const [label, setLabel] = useState("writing");
-  const [category, setCategory] = useState<Category>("writing");
+  const [category, setCategory] = useState<Category>("research");
   const [taskId, setTaskId] = useState("");
   const [pendingSession, setPendingSession] = useState<PendingSession | null>(null);
   const openTasks = tasks.filter((task) => task.status !== "done");
@@ -121,7 +123,7 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
   return (
     <section className={`card ${compact ? "p-4" : "p-5"}`}>
       <div>
-        <p className="label">Pomodoro</p>
+        <p className="label">Focus timer</p>
         <h2 className={`${compact ? "mt-0.5 text-lg" : "mt-1 text-xl"} font-semibold`}>{modeLabel[mode]} session</h2>
       </div>
       <div className={compact ? "my-4" : "my-6"}>
@@ -131,16 +133,24 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
         <div className={`${compact ? "text-5xl" : "text-6xl"} text-center font-semibold tabular-nums tracking-tight`}>{minutes}:{seconds}</div>
         <p className="mt-2 text-center text-sm text-ink-500">Cycle {cycle} · {duration} minutes</p>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Session label" />
-        <select className="input" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
-          {categories.map((item) => (
-            <option key={item}>{item}</option>
-          ))}
-        </select>
-      </div>
       {openTasks.length > 0 ? (
-        <select className="input mt-3" value={taskId} onChange={(e) => setTaskId(e.target.value)} aria-label="Scheduled for task">
+        <select
+          className="input"
+          value={taskId}
+          onChange={(e) => {
+            const nextTaskId = e.target.value;
+            setTaskId(nextTaskId);
+            // Plan §9.5: label/category default to the linked task's when one is picked — label
+            // is now collapsed behind "More options", so this is the only way most sessions get
+            // a label at all (it drives what "Today history" and the end-of-session survey show).
+            const linkedTask = openTasks.find((task) => task.id === nextTaskId);
+            if (linkedTask) {
+              setCategory(linkedTask.category);
+              setLabel(linkedTask.title);
+            }
+          }}
+          aria-label="Working on"
+        >
           <option value="">Not tied to a task</option>
           {openTasks.map((task) => (
             <option key={task.id} value={task.id}>
@@ -148,7 +158,16 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
             </option>
           ))}
         </select>
-      ) : null}
+      ) : (
+        // F10 (plan §11.2) — keep the field's slot instead of letting it disappear (a layout
+        // jump), with an explicit way to fix the actual problem (no open tasks).
+        <div className="input flex items-center justify-between text-ink-500">
+          <span>No open tasks</span>
+          <Link href="/tasks" className="text-xs font-medium text-moss-700 dark:text-moss-400">
+            Add one
+          </Link>
+        </div>
+      )}
       <div className="mt-4 grid grid-cols-3 gap-2">
         <button className="btn-primary" onClick={() => setRunning((current) => !current)}>
           {running ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -162,6 +181,16 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
           <SkipForward className="h-4 w-4" />
           Finish
         </button>
+      </div>
+      <div className="mt-3">
+        <MoreOptions label="Label & category">
+          <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Session label" />
+          <select className="input" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
+            {categories.map((item) => (
+              <option key={item}>{item}</option>
+            ))}
+          </select>
+        </MoreOptions>
       </div>
       <details className="mt-3">
         <summary className="cursor-pointer text-xs font-medium text-ink-500 outline-none focus:ring-2 focus:ring-moss-500">Timer settings</summary>

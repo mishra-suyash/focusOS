@@ -4,9 +4,13 @@ import { orderBy } from "firebase/firestore";
 import { Copy, Plus, Star, Trash2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { EmptyState } from "@/components/empty-state";
+import { InfoHint } from "@/components/info-hint";
+import { MoreOptions } from "@/components/more-options";
 import { SectionHeader } from "@/components/section-header";
 import { TemplateGalleryDialog } from "@/components/template-gallery";
 import { useAuth } from "@/components/auth-provider";
+import { useTemplateCatalog } from "@/hooks/use-template-catalog";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import {
   createDayTemplate,
@@ -18,6 +22,7 @@ import {
 } from "@/lib/firestore";
 import {
   createSlot,
+  materializeSlots,
   scheduleFromTemplate,
   slotTypeLabels,
   slotTypes,
@@ -25,7 +30,10 @@ import {
   validateSlots
 } from "@/lib/schedule";
 import { friendlyDate, todayKey } from "@/lib/dates";
+import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
 import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
+
+type CatalogDayEntry = PublicCatalog["templates"][number] & { payload: DayTemplatePayload };
 
 export default function DayPlannerPage() {
   return (
@@ -42,6 +50,7 @@ function DayPlannerContent() {
   const { items: schedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
   const { items: templates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { catalog } = useTemplateCatalog();
   const schedule = schedules.find((item) => item.dateKey === dateKey);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [templateName, setTemplateName] = useState("");
@@ -70,6 +79,23 @@ function DayPlannerContent() {
     await saveDailySchedule(user.uid, nextSchedule);
   }
 
+  /** An org-sourced copy (`sourceTemplateId: "org:<id>"`) with a newer version published in the catalog — "Update available" (plan §7.4). Publishing/editing never touches the copy on its own; this is the explicit opt-in. */
+  function orgUpdateFor(template: DayTemplate): CatalogDayEntry | null {
+    if (!template.sourceTemplateId?.startsWith("org:") || typeof template.sourceVersion !== "number") return null;
+    const orgId = template.sourceTemplateId.slice(4);
+    const match = catalog?.templates.find((item) => item.id === orgId && item.kind === "day") as CatalogDayEntry | undefined;
+    if (!match || match.version <= template.sourceVersion) return null;
+    return match;
+  }
+
+  async function updateFromOrg(template: DayTemplate, match: CatalogDayEntry) {
+    if (!user) return;
+    await updateDayTemplate(user.uid, template.id, {
+      slots: materializeSlots(match.payload.slots).map((slot) => ({ ...slot, id: crypto.randomUUID(), status: "upcoming" })),
+      sourceVersion: match.version
+    });
+  }
+
   async function createTemplateFromCurrent() {
     if (!user || !templateName.trim() || errors.length > 0) return;
     await createDayTemplate(user.uid, {
@@ -84,7 +110,7 @@ function DayPlannerContent() {
 
   return (
     <>
-      <SectionHeader title="Day Planner" eyebrow={friendlyDate(dateKey)}>
+      <SectionHeader title="Day" eyebrow={friendlyDate(dateKey)}>
         <input className="input max-w-48" type="date" value={dateKey} onChange={(event) => setDateKey(event.target.value)} />
       </SectionHeader>
       <div className="grid gap-6 xl:grid-cols-[320px_1fr]">
@@ -104,15 +130,23 @@ function DayPlannerContent() {
                     ) : null}
                   </div>
                   {template.description ? <p className="mt-1 text-sm text-ink-500">{template.description}</p> : null}
-                  <p className="mt-2 text-xs text-ink-500">{template.slots.length} slots</p>
+                  <p className="mt-2 text-xs text-ink-500">{template.slots.length} blocks</p>
+                  {orgUpdateFor(template) ? (
+                    <div className="mt-2 flex items-center gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1.5 text-xs text-sky-800 dark:text-sky-200">
+                      <span>Update available from your group</span>
+                      <button className="btn-secondary py-1 text-[11px]" onClick={() => updateFromOrg(template, orgUpdateFor(template)!)}>
+                        Update my copy
+                      </button>
+                    </div>
+                  ) : null}
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button className="btn-primary py-1.5 text-xs" onClick={() => applyTemplate(template)}>Apply</button>
                     {!template.isDefault ? (
                       <button
                         className="btn-secondary px-2 py-1.5"
                         onClick={() => user && setDefaultTemplate(user.uid, templates, template.id)}
-                        aria-label="Set as default template"
-                        title="Set as default — used automatically by Start day"
+                        aria-label="Set as workday template"
+                        title="Set as workday template — used automatically by Start day"
                       >
                         <Star className="h-3.5 w-3.5" />
                       </button>
@@ -146,11 +180,14 @@ function DayPlannerContent() {
               <h2 className="text-lg font-semibold">24-hour timeline</h2>
               <p className="mt-1 text-sm text-ink-500">Gaps are allowed as implicit free time. Overlaps are blocked.</p>
             </div>
-            <div className="flex gap-2">
-              <button className="btn-secondary" onClick={() => setSlots((items) => sortedSlots([...items, createSlot()]))}>
-                <Plus className="h-4 w-4" />
-                Add slot
-              </button>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1">
+                <button className="btn-secondary" onClick={() => setSlots((items) => sortedSlots([...items, createSlot()]))}>
+                  <Plus className="h-4 w-4" />
+                  Add block
+                </button>
+                <InfoHint term="block" />
+              </span>
               <button className="btn-primary" onClick={saveDay} disabled={errors.length > 0}>Save day</button>
             </div>
           </div>
@@ -180,9 +217,11 @@ function DayPlannerContent() {
               />
             ))}
             {slots.length === 0 ? (
-              <div className="rounded-md border border-dashed border-ink-300 p-8 text-center text-sm text-ink-500 dark:border-ink-700">
-                Browse templates or add your first slot.
-              </div>
+              <EmptyState
+                sentence="Your day, block by block."
+                primary={{ label: "Use a template", onClick: () => setGalleryOpen(true) }}
+                template={{ label: "Add a block", onClick: () => setSlots((items) => sortedSlots([...items, createSlot()])) }}
+              />
             ) : null}
           </div>
           {templates.length > 0 ? (
@@ -201,7 +240,7 @@ function DayPlannerContent() {
                     if (user && template && errors.length === 0) updateDayTemplate(user.uid, template.id, { slots: sortedSlots(slots) });
                   }}
                 >
-                  Update template slots
+                  Update template blocks
                 </button>
               </div>
             </div>
@@ -240,50 +279,54 @@ function SlotEditor({
   const selectedTaskIds = new Set(slot.assignedTaskIds ?? []);
   return (
     <article className="rounded-md border border-ink-200 p-4 dark:border-ink-800">
-      <div className="grid gap-3 lg:grid-cols-[1fr_130px_120px_120px]">
+      <div className="grid gap-3 lg:grid-cols-[1fr_120px_120px]">
         <input className="input" value={slot.title} onChange={(event) => onChange({ ...slot, title: event.target.value })} />
-        <select className="input" value={slot.type} onChange={(event) => onChange({ ...slot, type: event.target.value as ScheduleSlotType })}>
-          {slotTypes.map((type) => <option key={type} value={type}>{slotTypeLabels[type]}</option>)}
-        </select>
         <input className="input" type="time" value={slot.startTime} onChange={(event) => onChange({ ...slot, startTime: event.target.value })} />
         <input className="input" type="time" value={slot.endTime} onChange={(event) => onChange({ ...slot, endTime: event.target.value })} />
       </div>
-      <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_180px]">
-        <textarea className="input min-h-20" value={slot.note ?? ""} onChange={(event) => onChange({ ...slot, note: event.target.value })} placeholder="Optional note" />
-        <select className="input" value={slot.status} onChange={(event) => onChange({ ...slot, status: event.target.value as ScheduleSlot["status"] })}>
-          <option value="upcoming">Upcoming</option>
-          <option value="completed">Completed</option>
-          <option value="skipped">Skipped</option>
-        </select>
-      </div>
       <div className="mt-3">
-        <p className="label mb-2">Assigned tasks</p>
-        <div className="grid max-h-44 gap-2 overflow-auto rounded-md bg-ink-50 p-3 dark:bg-ink-800 sm:grid-cols-2">
-          {tasks.filter((task) => task.status !== "done").map((task) => (
-            <label key={task.id} className="flex items-start gap-2 text-sm">
-              <input
-                className="mt-1"
-                type="checkbox"
-                checked={selectedTaskIds.has(task.id)}
-                onChange={(event) => {
-                  const next = new Set(selectedTaskIds);
-                  if (event.target.checked) next.add(task.id);
-                  else next.delete(task.id);
-                  onChange({ ...slot, assignedTaskIds: Array.from(next) });
-                }}
-              />
-              <span>{task.title}</span>
-            </label>
-          ))}
-          {tasks.filter((task) => task.status !== "done").length === 0 ? <p className="text-sm text-ink-500">No open tasks to assign.</p> : null}
-        </div>
+        <MoreOptions>
+          <select className="input" value={slot.type} onChange={(event) => onChange({ ...slot, type: event.target.value as ScheduleSlotType })}>
+            {slotTypes.map((type) => <option key={type} value={type}>{slotTypeLabels[type]}</option>)}
+          </select>
+          <div className="grid gap-3 lg:grid-cols-[1fr_180px]">
+            <textarea className="input min-h-20" value={slot.note ?? ""} onChange={(event) => onChange({ ...slot, note: event.target.value })} placeholder="Optional note" />
+            <select className="input" value={slot.status} onChange={(event) => onChange({ ...slot, status: event.target.value as ScheduleSlot["status"] })}>
+              <option value="upcoming">Upcoming</option>
+              <option value="completed">Completed</option>
+              <option value="skipped">Skipped</option>
+            </select>
+          </div>
+          <div>
+            <p className="label mb-2">Assigned tasks</p>
+            <div className="grid max-h-44 gap-2 overflow-auto rounded-md bg-ink-50 p-3 dark:bg-ink-800 sm:grid-cols-2">
+              {tasks.filter((task) => task.status !== "done").map((task) => (
+                <label key={task.id} className="flex items-start gap-2 text-sm">
+                  <input
+                    className="mt-1"
+                    type="checkbox"
+                    checked={selectedTaskIds.has(task.id)}
+                    onChange={(event) => {
+                      const next = new Set(selectedTaskIds);
+                      if (event.target.checked) next.add(task.id);
+                      else next.delete(task.id);
+                      onChange({ ...slot, assignedTaskIds: Array.from(next) });
+                    }}
+                  />
+                  <span>{task.title}</span>
+                </label>
+              ))}
+              {tasks.filter((task) => task.status !== "done").length === 0 ? <p className="text-sm text-ink-500">No open tasks to assign.</p> : null}
+            </div>
+          </div>
+        </MoreOptions>
       </div>
       <div className="mt-3 flex flex-wrap justify-between gap-2">
         <div className="flex gap-2">
           <button className="btn-secondary py-1.5 text-xs" onClick={() => onMove("up")} disabled={index === 0}>Move up</button>
           <button className="btn-secondary py-1.5 text-xs" onClick={() => onMove("down")}>Move down</button>
         </div>
-        <button className="btn-secondary py-1.5 text-xs text-red-600" onClick={onDelete}>Delete slot</button>
+        <button className="btn-secondary py-1.5 text-xs text-red-600" onClick={onDelete}>Delete block</button>
       </div>
     </article>
   );

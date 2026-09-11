@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { InfoHint } from "@/components/info-hint";
 import { todayKey } from "@/lib/dates";
 import type { ClassAttendance } from "@/types";
 import type { ClassLogInput } from "@/lib/classlog";
@@ -63,7 +64,10 @@ export function ClassLogForm({ onSave }: { onSave: (input: ClassLogInput) => Pro
       ) : null}
       {ratesUnderstanding ? (
         <label className="block text-xs text-ink-500">
-          Understanding: {understanding}
+          <span className="inline-flex items-center gap-1">
+            Understanding: {understanding}
+            <InfoHint term="understanding" />
+          </span>
           <input
             className="mt-1 w-full accent-moss-600"
             type="range"

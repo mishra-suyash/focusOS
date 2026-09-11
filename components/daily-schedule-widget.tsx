@@ -46,7 +46,7 @@ export function DailyScheduleWidget({ schedule, tasks, compact = false }: { sche
             <p className="mt-2 text-sm leading-6 text-ink-600 dark:text-ink-300">
               No full-day schedule exists for today. Apply a template or create a plan to turn the dashboard into a live operating view.
             </p>
-            <Link href="/planner/day" className="btn-primary mt-4">
+            <Link href="/plan/day" className="btn-primary mt-4">
               Plan today
             </Link>
           </div>
@@ -62,7 +62,7 @@ export function DailyScheduleWidget({ schedule, tasks, compact = false }: { sche
           <p className="label">Full-day schedule</p>
           <h2 className="mt-1 text-lg font-semibold">Today in progress</h2>
         </div>
-        <Link href={`/planner/day?date=${schedule.dateKey}`} className="btn-secondary py-1.5">
+        <Link href={`/plan/day?date=${schedule.dateKey}`} className="btn-secondary py-1.5">
           Edit day
         </Link>
       </div>
@@ -81,7 +81,7 @@ export function DailyScheduleWidget({ schedule, tasks, compact = false }: { sche
           <div className="h-full bg-moss-600" style={{ width: `${dayProgress}%` }} />
         </div>
       </div>
-      <div className="mt-3 flex h-4 overflow-hidden rounded-md border border-ink-200 bg-ink-100 dark:border-ink-800 dark:bg-ink-800" aria-label="Full day slot timeline">
+      <div className="mt-3 flex h-4 overflow-hidden rounded-md border border-ink-200 bg-ink-100 dark:border-ink-800 dark:bg-ink-800" aria-label="Full day block timeline">
         {slots.map((slot) => (
           <div
             key={slot.id}
@@ -93,7 +93,7 @@ export function DailyScheduleWidget({ schedule, tasks, compact = false }: { sche
       </div>
       <div className={`${compact ? "mt-4 grid gap-3" : "mt-5 grid gap-4 lg:grid-cols-[1fr_0.8fr]"}`}>
         <div className="rounded-md border border-ink-200 p-3 dark:border-ink-800">
-          <p className="label mb-2">Current slot</p>
+          <p className="label mb-2">Current block</p>
           {active ? (
             <>
               <div className="flex flex-wrap items-center gap-2">
@@ -115,7 +115,7 @@ export function DailyScheduleWidget({ schedule, tasks, compact = false }: { sche
               <TaskNames names={taskNamesForSlot(active, tasks)} />
             </>
           ) : (
-            <p className="text-sm text-ink-500">No slot is active right now.</p>
+            <p className="text-sm text-ink-500">No block is active right now.</p>
           )}
         </div>
         <div className="rounded-md border border-ink-200 p-3 dark:border-ink-800">
@@ -148,7 +148,7 @@ export function DailyScheduleWidget({ schedule, tasks, compact = false }: { sche
           );
         })}
         {compact && slots.filter((slot) => computeSlotStatus(slot, minute) !== "completed").length > 4 ? (
-          <Link href={`/planner/day?date=${schedule.dateKey}`} className="btn-secondary py-2 text-xs">
+          <Link href={`/plan/day?date=${schedule.dateKey}`} className="btn-secondary py-2 text-xs">
             View all slots
           </Link>
         ) : null}

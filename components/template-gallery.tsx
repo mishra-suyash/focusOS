@@ -3,10 +3,15 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Star, X } from "lucide-react";
 import { clsx } from "clsx";
+import { InfoHint } from "@/components/info-hint";
 import { createDayTemplate, saveDailySchedule, setDefaultTemplate } from "@/lib/firestore";
 import { friendlyDate } from "@/lib/dates";
-import { formatMinutes, minutesFromTime, scheduleFromTemplate, shiftTemplateSlots, slotDuration, slotTypeLabels, slotTypeStyles, sortedSlots } from "@/lib/schedule";
+import { formatMinutes, materializeSlots, minutesFromTime, scheduleFromTemplate, shiftTemplateSlots, slotDuration, slotTypeLabels, slotTypeStyles, sortedSlots } from "@/lib/schedule";
 import { BUILTIN_DAY_TEMPLATES, materializeBuiltinDayTemplate, type BuiltinDayTemplate } from "@/lib/templates/builtin";
+import { useTemplateCatalog } from "@/hooks/use-template-catalog";
+import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
+
+type CatalogDayTemplate = PublicCatalog["templates"][number] & { payload: DayTemplatePayload };
 import type { DailySchedule, DayTemplate, ScheduleSlot } from "@/types";
 
 /**
@@ -32,6 +37,9 @@ export function TemplateGalleryDialog({
   const [dayStart, setDayStart] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const { catalog } = useTemplateCatalog();
+  const orgDayTemplates = (catalog?.templates.filter((t) => t.kind === "day") ?? []) as CatalogDayTemplate[];
+  const visibleBuiltins = BUILTIN_DAY_TEMPLATES.filter((builtin) => !catalog?.hiddenBuiltInIds.includes(builtin.id));
 
   async function applySlots(slots: ScheduleSlot[], templateId?: string) {
     if (hasExistingPlan && !window.confirm(`${friendlyDate(dateKey)} already has a plan. Replace it with this template?`)) return;
@@ -81,6 +89,27 @@ export function TemplateGalleryDialog({
     setSavedNotice(`"${builtin.name}" saved — Start day will use this on workdays.`);
   }
 
+  function materializeOrgSlots(template: CatalogDayTemplate): ScheduleSlot[] {
+    return materializeSlots(template.payload.slots);
+  }
+
+  async function applyOrgTemplate(template: CatalogDayTemplate) {
+    await applySlots(materializeOrgSlots(template).map((slot) => ({ ...slot, id: crypto.randomUUID() })));
+  }
+
+  async function makeWorkdayTemplateFromOrg(template: CatalogDayTemplate) {
+    const id = await createDayTemplate(uid, {
+      name: template.name,
+      description: template.description,
+      isDefault: true,
+      slots: materializeOrgSlots(template).map((slot) => ({ ...slot, id: crypto.randomUUID(), status: "upcoming" })),
+      sourceTemplateId: `org:${template.id}`,
+      sourceVersion: template.version
+    });
+    await setDefaultTemplate(uid, userTemplates, id);
+    setSavedNotice(`"${template.name}" saved — Start day will use this on workdays.`);
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-10 sm:pt-16" onClick={onClose}>
       <div className="card w-full max-w-3xl p-5" onClick={(event) => event.stopPropagation()}>
@@ -124,10 +153,31 @@ export function TemplateGalleryDialog({
           </section>
         ) : null}
 
+        {orgDayTemplates.length > 0 ? (
+          <section className="mb-6">
+            <h3 className="mb-2 text-sm font-semibold text-ink-500">From your group</h3>
+            <div className="space-y-2">
+              {orgDayTemplates.map((template) => (
+                <TemplateCard
+                  key={template.id}
+                  id={`org-${template.id}`}
+                  name={template.name}
+                  description={template.description}
+                  slots={materializeOrgSlots(template)}
+                  expanded={expandedId === `org-${template.id}`}
+                  onToggle={() => setExpandedId((current) => (current === `org-${template.id}` ? null : `org-${template.id}`))}
+                  onUse={() => applyOrgTemplate(template)}
+                  onMakeDefault={() => makeWorkdayTemplateFromOrg(template)}
+                />
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         <section>
           <h3 className="mb-2 text-sm font-semibold text-ink-500">Built-in</h3>
           <div className="space-y-2">
-            {BUILTIN_DAY_TEMPLATES.map((builtin) => (
+            {visibleBuiltins.map((builtin) => (
               <TemplateCard
                 key={builtin.id}
                 id={`builtin-${builtin.id}`}
@@ -193,10 +243,13 @@ function TemplateCard({
         </button>
         <button className="btn-primary py-1.5 text-xs" onClick={onUse}>Use for today</button>
         {onMakeDefault ? (
-          <button className="btn-secondary py-1.5 text-xs" onClick={onMakeDefault}>
-            <Star className="h-3.5 w-3.5" />
-            Make workday template
-          </button>
+          <span className="inline-flex items-center gap-1">
+            <button className="btn-secondary py-1.5 text-xs" onClick={onMakeDefault}>
+              <Star className="h-3.5 w-3.5" />
+              Make workday template
+            </button>
+            <InfoHint term="workdayTemplate" />
+          </span>
         ) : null}
       </div>
       {expanded ? (

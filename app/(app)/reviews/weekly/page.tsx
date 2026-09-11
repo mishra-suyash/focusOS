@@ -2,6 +2,8 @@
 
 import { orderBy, where } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
+import { InfoHint } from "@/components/info-hint";
+import { ModuleGate } from "@/components/module-gate";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -14,7 +16,7 @@ import { pass1DropRate } from "@/lib/papers";
 import { todayKey } from "@/lib/dates";
 import type { Day, Goal, Paper, PomodoroSession, Task, Term, WeeklyReview } from "@/types";
 
-export default function WeeklyReviewPage() {
+function WeeklyReviewPageContent() {
   const { user } = useAuth();
   const weekStart = weekStartKey();
   const dates = useMemo(() => weekDates(weekStart), [weekStart]);
@@ -59,7 +61,7 @@ export default function WeeklyReviewPage() {
     setSaving(true);
     try {
       await saveWeeklyReview(user.uid, { weekStart, wins, missedGoals, blockers, nextWeekPriorities, averageFocusRating: avg });
-      setMessage("Weekly review saved.");
+      setMessage("Weekly check-in saved.");
     } finally {
       setSaving(false);
     }
@@ -67,19 +69,19 @@ export default function WeeklyReviewPage() {
 
   return (
     <>
-      <SectionHeader title="Weekly Review" eyebrow={`Week of ${weekStart}`} />
+      <SectionHeader title="Weekly check-in" eyebrow={`Week of ${weekStart}`} />
       <div className="mb-6 grid gap-3 sm:grid-cols-5">
         <div className="card p-4"><p className="label">Focus average (this week)</p><p className="mt-2 text-3xl font-semibold">{avg || "-"}</p></div>
         <div className="card p-4"><p className="label">Today focus minutes</p><p className="mt-2 text-3xl font-semibold">{metrics.focusedMinutes}</p></div>
-        <div className="card p-4"><p className="label">Load Index streak</p><p className="mt-2 text-3xl font-semibold">{streak}d</p></div>
-        <div className="card p-4"><p className="label">Debt (14-day)</p><p className="mt-2 text-3xl font-semibold">{debtHours}h</p></div>
-        <div className="card p-4"><p className="label">Pass 1 drop/park rate</p><p className="mt-2 text-3xl font-semibold">{pass1DropRate(papers)}%</p></div>
+        <div className="card p-4"><p className="label flex items-center gap-1">On-track streak<InfoHint term="onTrackStreak" /></p><p className="mt-2 text-3xl font-semibold">{streak}d</p></div>
+        <div className="card p-4"><p className="label flex items-center gap-1">Catch-up hours (14-day)<InfoHint term="catchUpHours" /></p><p className="mt-2 text-3xl font-semibold">{debtHours}h</p></div>
+        <div className="card p-4"><p className="label">Skim drop/park rate</p><p className="mt-2 text-3xl font-semibold">{pass1DropRate(papers)}%</p></div>
       </div>
 
       <section className="card mb-6 max-w-4xl p-5">
-        <h2 className="mb-3 text-base font-semibold">Load Index this week</h2>
+        <h2 className="mb-3 text-base font-semibold">Workload this week</h2>
         {weekLI.length === 0 ? (
-          <p className="text-sm text-ink-500">No Load Index snapshots yet this week — they&apos;re written when you click &quot;End day&quot;.</p>
+          <p className="text-sm text-ink-500">No Workload snapshots yet this week — they&apos;re written when you click &quot;End day&quot;.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {weekLI.map((d) => (
@@ -131,7 +133,7 @@ export default function WeeklyReviewPage() {
         <Textarea label="Blockers" value={blockers} onChange={setBlockers} />
         <Textarea label="Next week priorities" value={nextWeekPriorities} onChange={setNextWeekPriorities} />
         <div className="flex items-center gap-3">
-          <button className="btn-primary" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save weekly review"}</button>
+          <button className="btn-primary" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save weekly check-in"}</button>
           {message ? <p className="text-sm text-moss-700 dark:text-moss-400">{message}</p> : null}
         </div>
       </section>
@@ -145,5 +147,13 @@ function Textarea({ label, value, onChange }: { label: string; value: string; on
       <span className="label mb-2 block">{label}</span>
       <textarea className="input min-h-28" value={value} onChange={(e) => onChange(e.target.value)} />
     </label>
+  );
+}
+
+export default function WeeklyReviewPage() {
+  return (
+    <ModuleGate moduleId="weeklyCheckin">
+      <WeeklyReviewPageContent />
+    </ModuleGate>
   );
 }

@@ -1,3 +1,4 @@
+import type { ModuleId } from "@/lib/features";
 import type { Checkpoint, Task } from "@/types";
 
 export type NextActionKind = "checkpoint-prep" | "revision" | "task" | "rest";
@@ -25,7 +26,8 @@ export function pickNextAction({
   tasks,
   loadIndexValue,
   todayKey,
-  weekEndKey
+  weekEndKey,
+  enabledModules
 }: {
   checkpoints: Checkpoint[];
   dueRevisionCount: number;
@@ -33,12 +35,18 @@ export function pickNextAction({
   loadIndexValue: number;
   todayKey: string;
   weekEndKey: string;
+  /** Plan §9.2: "Up next" must never recommend an action in a disabled module. Omitted = every module counts as enabled (existing callers, tests). */
+  enabledModules?: Set<ModuleId>;
 }): NextAction | null {
-  const urgent = checkpoints
-    .filter((checkpoint) => checkpoint.requiresPrep && checkpoint.status !== "done" && checkpoint.status !== "missed")
-    .map((checkpoint) => ({ checkpoint, daysUntil: daysBetween(checkpoint.dueAt, todayKey) }))
-    .filter(({ checkpoint, daysUntil }) => daysUntil >= 0 && daysUntil <= checkpoint.prepLeadDays)
-    .sort((a, b) => a.daysUntil - b.daysUntil)[0];
+  const enabled = (id: ModuleId) => !enabledModules || enabledModules.has(id);
+
+  const urgent =
+    enabled("courses") &&
+    checkpoints
+      .filter((checkpoint) => checkpoint.requiresPrep && checkpoint.status !== "done" && checkpoint.status !== "missed")
+      .map((checkpoint) => ({ checkpoint, daysUntil: daysBetween(checkpoint.dueAt, todayKey) }))
+      .filter(({ checkpoint, daysUntil }) => daysUntil >= 0 && daysUntil <= checkpoint.prepLeadDays)
+      .sort((a, b) => a.daysUntil - b.daysUntil)[0];
 
   if (urgent) {
     return {
@@ -49,7 +57,7 @@ export function pickNextAction({
     };
   }
 
-  if (dueRevisionCount > 0) {
+  if (enabled("revise") && dueRevisionCount > 0) {
     return {
       kind: "revision",
       title: `Review ${dueRevisionCount} due item${dueRevisionCount === 1 ? "" : "s"}`,
@@ -68,7 +76,7 @@ export function pickNextAction({
     return { kind: "task", title: topTask.title, why: "Highest-priority open task due this week", href: "/tasks" };
   }
 
-  if (loadIndexValue > 1.3) {
+  if (enabled("analytics") && loadIndexValue > 1.3) {
     return { kind: "rest", title: "Take it easy", why: "You're already well ahead of today's target", href: "/analytics" };
   }
 

@@ -2,7 +2,7 @@ import { adminDb } from "@/lib/firebase-admin";
 import { fetchInsightData } from "@/lib/admin-firestore";
 import { buildMorningBrief, buildProposedSlots, buildProposedTasks } from "@/lib/dailyloop";
 import { todayKey } from "@/lib/dates";
-import { computeRequiredMinutes } from "@/lib/loadindex";
+import { buildLoadIndexSnapshot, computeRequiredMinutes } from "@/lib/loadindex";
 import { runAiTask } from "@/lib/ai/run";
 import type { ReviewEodOutput } from "@/lib/ai/schemas";
 import { scheduleSummary } from "@/lib/schedule";
@@ -22,6 +22,16 @@ async function fetchDueRevisionCount(uid: string, dateKey: string): Promise<numb
 async function fetchDailySchedule(uid: string, dateKey: string): Promise<DailySchedule | null> {
   const snapshot = await adminDb().collection("users").doc(uid).collection("dailySchedules").doc(dateKey).get();
   return snapshot.exists ? ({ id: snapshot.id, ...snapshot.data() } as DailySchedule) : null;
+}
+
+async function fetchRevisionsCompletedCount(uid: string, dateKey: string): Promise<number> {
+  const snapshot = await adminDb()
+    .collection("users")
+    .doc(uid)
+    .collection("revisionItems")
+    .where("lastReviewedAt", ">=", `${dateKey}T00:00:00.000Z`)
+    .get();
+  return snapshot.size;
 }
 
 async function fetchUnresolvedCriticalAlertCount(uid: string): Promise<number> {
@@ -93,10 +103,11 @@ export async function generateEveningRollup(uid: string): Promise<EveningRollup>
   const today = todayKey();
   const yesterday = todayKey(new Date(Date.now() - 86_400_000));
 
-  const [{ checkpoints, tasks, sessions }, dueRevisionCount, dayDoc] = await Promise.all([
+  const [{ checkpoints, tasks, sessions, courses, goals, terms }, dueRevisionCount, dayDoc, schedule] = await Promise.all([
     fetchInsightData(uid),
     fetchDueRevisionCount(uid, today),
-    adminDb().collection("users").doc(uid).collection("days").doc(today).get()
+    adminDb().collection("users").doc(uid).collection("days").doc(today).get(),
+    fetchDailySchedule(uid, today)
   ]);
 
   const checkpointsNeedingPrep = checkpoints.filter((c) => {
@@ -111,7 +122,37 @@ export async function generateEveningRollup(uid: string): Promise<EveningRollup>
 
   const todayStats = dayMetrics(tasks, sessions, today);
   const yesterdayStats = dayMetrics(tasks, sessions, yesterday);
-  const loadIndexValue = dayDoc.data()?.loadIndex?.value as number | undefined;
+
+  // F7 (plan §11.2) — End day was the only place a Load Index snapshot got written; someone who
+  // forgets it leaves Workload/analytics history with a gap for the day. Back it in here from the
+  // same inputs generateMorningBrief/the client's End day use.
+  //
+  // Gated on `session.endedAt`, not on whether `loadIndex` already exists: F11's Undo (plan
+  // §11.2) clears `session.endedAt` but deliberately leaves the snapshot End day already wrote,
+  // so a day that was ended, undone, and never re-ended would otherwise look "already snapshotted"
+  // to a presence check and keep that stale, too-early number as its permanent record — recomputing
+  // is idempotent, so there's no cost to redoing it whenever the day wasn't properly closed. This
+  // deliberately overwrites any snapshot already sitting there for a not-properly-ended day — a
+  // 22:00 recompute over the full day is strictly more accurate than whatever partial number an
+  // earlier End day (since undone) left behind.
+  const dayData = dayDoc.data();
+  let loadIndexValue = dayData?.loadIndex?.value as number | undefined;
+  if (!dayData?.session?.endedAt || loadIndexValue === undefined) {
+    const revisionsCompletedCount = await fetchRevisionsCompletedCount(uid, today);
+    const snapshot = buildLoadIndexSnapshot({
+      scheduledDeepWorkMinutes: scheduleSummary(schedule?.slots ?? []).plannedDeepWork,
+      revisionDueCount: dueRevisionCount,
+      revisionsCompletedCount,
+      checkpoints,
+      courses,
+      goals,
+      terms,
+      focusedMinutes: todayStats.focusedMinutes,
+      todayKey: today
+    });
+    await adminDb().collection("users").doc(uid).collection("days").doc(today).set({ loadIndex: snapshot, date: today, updatedAt: new Date().toISOString() }, { merge: true });
+    loadIndexValue = snapshot.value;
+  }
 
   const { output, meta } = await runAiTask(uid, "review.eod", {
     today: { ...todayStats, loadIndex: loadIndexValue },

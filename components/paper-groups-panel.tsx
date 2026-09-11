@@ -4,6 +4,7 @@ import { orderBy } from "firebase/firestore";
 import { Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { InfoHint } from "@/components/info-hint";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { createPaperGroup, createRevisionItem, deletePaperGroup, updatePaperGroup } from "@/lib/firestore";
 import { computeRepeatedAuthors, computeSharedCitations } from "@/lib/papergroups";
@@ -51,14 +52,20 @@ export function PaperGroupsPanel({ papers }: { papers: Paper[] }) {
 
   return (
     <section className="card p-5">
-      <h2 className="mb-3 text-lg font-semibold">Paper groups</h2>
+      <h2 className="mb-3 flex items-center gap-1 text-lg font-semibold">
+        Paper sets
+        <InfoHint term="paperSet" />
+      </h2>
       <form onSubmit={submit} className="mb-4 space-y-2">
         <div className="grid gap-2 sm:grid-cols-[1fr_140px_auto]">
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Group name" />
-          <select className="input" value={kind} onChange={(e) => setKind(e.target.value as PaperGroupKind)}>
-            <option value="cluster">Cluster</option>
-            <option value="survey">Survey</option>
-          </select>
+          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Set name" />
+          <div className="flex items-center gap-1">
+            <select className="input" value={kind} onChange={(e) => setKind(e.target.value as PaperGroupKind)}>
+              <option value="cluster">Paper set</option>
+              <option value="survey">Literature survey</option>
+            </select>
+            <InfoHint term="literatureSurvey" />
+          </div>
           <button className="btn-secondary">Create</button>
         </div>
         <div className="grid max-h-32 gap-1 overflow-auto rounded-md bg-ink-50 p-2 dark:bg-ink-800 sm:grid-cols-2">
@@ -82,7 +89,7 @@ export function PaperGroupsPanel({ papers }: { papers: Paper[] }) {
             onDelete={() => user && deletePaperGroup(user.uid, group.id)}
           />
         ))}
-        {groups.length === 0 ? <p className="text-sm text-ink-500">No groups yet — select papers above to cluster them for combined revision.</p> : null}
+        {groups.length === 0 ? <p className="text-sm text-ink-500">No paper sets yet — select papers above to combine them for revision.</p> : null}
       </div>
     </section>
   );
@@ -119,9 +126,9 @@ function GroupRow({
               Start revision
             </button>
           ) : (
-            <span className="text-xs text-moss-700 dark:text-moss-400">In /review queue</span>
+            <span className="text-xs text-moss-700 dark:text-moss-400">In your Revise queue</span>
           )}
-          <button className="text-ink-400 hover:text-red-600" onClick={onDelete} aria-label="Delete group">
+          <button className="text-ink-400 hover:text-red-600" onClick={onDelete} aria-label="Delete paper set">
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -130,7 +137,7 @@ function GroupRow({
         <div className="mt-3 space-y-2 text-sm">
           {group.lastSynthesis ? (
             <p className="rounded-md bg-moss-600/5 p-2 text-xs">
-              Last synthesis ({group.lastSynthesis.at.slice(0, 10)}): {group.lastSynthesis.text}
+              What connects these papers ({group.lastSynthesis.at.slice(0, 10)}): {group.lastSynthesis.text}
             </p>
           ) : null}
           {sharedCitations.length > 0 ? (
@@ -151,7 +158,7 @@ function GroupRow({
             </div>
           ) : null}
           {sharedCitations.length === 0 && repeatedAuthors.length === 0 ? (
-            <p className="text-xs text-ink-500">No shared citations or repeated authors yet — fill in Pass 1&apos;s references-read and Pass 2&apos;s unread-references fields for these papers.</p>
+            <p className="text-xs text-ink-500">No shared citations or repeated authors yet — fill in Skim&apos;s references-read and Read&apos;s unread-references fields for these papers.</p>
           ) : null}
         </div>
       ) : null}

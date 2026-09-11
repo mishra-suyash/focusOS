@@ -1,6 +1,7 @@
 "use client";
 
 import { Check, Circle, Clock, Trash2 } from "lucide-react";
+import { InfoHint } from "@/components/info-hint";
 import { categoryLabels } from "@/lib/options";
 import type { Task, TaskStatus } from "@/types";
 import { clsx } from "clsx";
@@ -49,11 +50,9 @@ export function TaskList({
                   {categoryLabels[task.category]}
                 </span>
                 {task.kind === "external" ? (
-                  <span
-                    className="rounded bg-sky-100 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-sky-700 dark:bg-sky-950 dark:text-sky-300"
-                    title="External deadline — excluded from the Load Index's required-minutes target"
-                  >
-                    External
+                  <span className="inline-flex items-center gap-1 rounded bg-sky-100 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+                    Hard deadline
+                    <InfoHint term="hardDeadline" />
                   </span>
                 ) : null}
               </div>
@@ -63,7 +62,7 @@ export function TaskList({
                 {task.estimatedPomodoros ? (
                   <span className="inline-flex items-center gap-1">
                     <Clock className="h-3 w-3" />
-                    {task.estimatedPomodoros} pom
+                    {task.estimatedPomodoros} focus session{task.estimatedPomodoros === 1 ? "" : "s"}
                   </span>
                 ) : null}
                 <button className="hover:text-moss-700" onClick={() => onStatus(task, "in_progress")}>

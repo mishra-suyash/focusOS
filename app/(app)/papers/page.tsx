@@ -4,10 +4,12 @@ import { orderBy } from "firebase/firestore";
 import { ExternalLink, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { EmptyState, focusSection } from "@/components/empty-state";
 import { PaperForm } from "@/components/paper-form";
 import { PaperGroupsPanel } from "@/components/paper-groups-panel";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
+import { useFeatures } from "@/hooks/use-features";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { createPaper, deletePaper, subscribeBlobUsage } from "@/lib/firestore";
 import { formatBytes, isNearSoftCap, isOverSoftCap } from "@/lib/files";
@@ -19,6 +21,7 @@ const statusOrder: PaperStatus[] = ["to_read", "reading", "read", "archived"];
 
 export default function PapersPage() {
   const { user } = useAuth();
+  const { isEnabled } = useFeatures();
   const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
   const [statusFilter, setStatusFilter] = useState<PaperStatus | "all">("all");
   const [tagFilter, setTagFilter] = useState("all");
@@ -51,17 +54,23 @@ export default function PapersPage() {
           <p className="mt-1 text-2xl font-semibold">{papers.length}</p>
         </div>
         <div className="card p-4">
-          <p className="label">Pass 1 drop/park rate</p>
+          <p className="label">Skim drop/park rate</p>
           <p className="mt-1 text-2xl font-semibold">{dropRate}%</p>
           <p className="mt-1 text-xs text-ink-500">Below 50% means you&apos;re probably over-reading.</p>
         </div>
       </div>
       <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
-        <section className="card p-5">
+        <section id="paper-add" className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Add a paper</h2>
           <PaperForm onCreate={(paper) => createPaper(user!.uid, paper)} />
         </section>
         <section className="space-y-6">
+          {papers.length === 0 ? (
+            <EmptyState
+              sentence="Papers you want to read, are reading, or have read."
+              primary={{ label: "Add a paper", onClick: () => focusSection("paper-add") }}
+            />
+          ) : (
           <div>
             <div className="card mb-4 p-4">
               <div className="grid gap-3 sm:grid-cols-2">
@@ -126,7 +135,8 @@ export default function PapersPage() {
               {filtered.length === 0 ? <div className="card p-8 text-center text-sm text-ink-500 dark:text-ink-400">No papers match these filters.</div> : null}
             </div>
           </div>
-          <PaperGroupsPanel papers={papers} />
+          )}
+          {isEnabled("paperTools") ? <PaperGroupsPanel papers={papers} /> : null}
         </section>
       </div>
     </>

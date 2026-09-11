@@ -20,10 +20,10 @@ export function MorningBriefCard({ brief }: { brief?: MorningBrief }) {
       const token = await user.getIdToken();
       const response = await fetch("/api/daily-loop/brief", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || "Failed to generate the morning brief.");
+      if (!response.ok) throw new Error(body.error || "Failed to generate the morning overview.");
       setGenerated(body.brief);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate the morning brief.");
+      setError(err instanceof Error ? err.message : "Failed to generate the morning overview.");
     } finally {
       setLoading(false);
     }
@@ -34,7 +34,7 @@ export function MorningBriefCard({ brief }: { brief?: MorningBrief }) {
   return (
     <section className="card p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-base font-semibold">Morning brief</h2>
+        <h2 className="text-base font-semibold">Morning overview</h2>
         <button className="btn-secondary py-1 text-xs" onClick={generate} disabled={loading}>
           <Sparkles className="h-3.5 w-3.5" />
           {loading ? "Generating..." : current ? "Regenerate" : "Generate"}
@@ -43,17 +43,17 @@ export function MorningBriefCard({ brief }: { brief?: MorningBrief }) {
       {error ? <p className="mb-2 text-xs text-red-600 dark:text-red-400">{error}</p> : null}
       {!current ? (
         <p className="text-sm text-ink-500">
-          No brief yet for today — the ~06:00 IST cron will generate one automatically, or click Generate for it now.
+          No overview yet for today — the ~06:00 IST cron will generate one automatically, or click Generate for it now.
         </p>
       ) : (
         <div className="space-y-2 text-sm">
           <p className="text-ink-600 dark:text-ink-300">
             {current.requiredMinutesTarget} min target today · {current.revisionsDue} revision{current.revisionsDue === 1 ? "" : "s"} due
-            {current.unresolvedCriticalAlerts > 0 ? ` · ${current.unresolvedCriticalAlerts} critical alert${current.unresolvedCriticalAlerts === 1 ? "" : "s"}` : ""}
+            {current.unresolvedCriticalAlerts > 0 ? ` · ${current.unresolvedCriticalAlerts} urgent heads-up${current.unresolvedCriticalAlerts === 1 ? "" : "s"}` : ""}
           </p>
           {current.checkpointsInWindow.length > 0 ? (
             <p>
-              <span className="label">Checkpoints in prep window: </span>
+              <span className="label">Assessments in prep window: </span>
               {current.checkpointsInWindow.map((c) => c.title).join(", ")}
             </p>
           ) : null}
@@ -65,7 +65,7 @@ export function MorningBriefCard({ brief }: { brief?: MorningBrief }) {
           ) : null}
           {current.externalTasksInWindow.length > 0 ? (
             <p>
-              <span className="label">External deadlines: </span>
+              <span className="label">Hard deadlines: </span>
               {current.externalTasksInWindow.map((t) => `${t.title} (${t.dueDate})`).join(", ")}
             </p>
           ) : null}

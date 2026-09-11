@@ -41,7 +41,7 @@ export default function CalendarPage() {
 
   return (
     <>
-      <SectionHeader title="Calendar" eyebrow="Classes, checkpoints, and schedule status">
+      <SectionHeader title="Calendar" eyebrow="Classes, assessments, and schedule status">
         <div className="flex items-center gap-2">
           <button className="btn-secondary px-2" onClick={() => setMonth((current) => subMonths(current, 1))} aria-label="Previous month">
             <ChevronLeft className="h-4 w-4" />
@@ -70,7 +70,7 @@ export default function CalendarPage() {
             return (
               <Link
                 key={dateKey}
-                href={`/planner/day?date=${dateKey}`}
+                href={`/plan/day?date=${dateKey}`}
                 className={`min-h-28 border-b border-r border-ink-200 p-2 text-left text-xs transition hover:bg-ink-50 dark:border-ink-800 dark:hover:bg-ink-800 ${
                   isSameMonth(day, month) ? "" : "opacity-40"
                 }`}

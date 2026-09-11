@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft, Cpu, Gauge, LayoutDashboard, ScrollText, Settings, Users } from "lucide-react";
+import { ArrowLeft, Cpu, Gauge, LayoutDashboard, ScrollText, Settings, SquareStack, Users } from "lucide-react";
 import Link from "next/link";
 import { notFound, usePathname } from "next/navigation";
 import { useAuth } from "@/components/auth-provider";
@@ -10,6 +10,7 @@ const nav = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/tiers", label: "Tiers", icon: Gauge },
+  { href: "/admin/templates", label: "Templates", icon: SquareStack },
   { href: "/admin/usage", label: "Usage", icon: ScrollText },
   { href: "/admin/ollama", label: "Ollama", icon: Cpu },
   { href: "/admin/settings", label: "Settings", icon: Settings },

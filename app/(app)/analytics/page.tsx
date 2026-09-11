@@ -3,6 +3,7 @@
 import { orderBy, where } from "firebase/firestore";
 import { useMemo } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ModuleGate } from "@/components/module-gate";
 import { SectionHeader } from "@/components/section-header";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { completedTasksByDay, completionRate, focusedMinutesByCategory, weeklyPomodoros } from "@/lib/analytics";
@@ -11,7 +12,7 @@ import type { Day, PomodoroSession, Task } from "@/types";
 
 const HISTORY_DAYS = 30;
 
-export default function AnalyticsPage() {
+function AnalyticsPageContent() {
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const historyStart = useMemo(() => {
@@ -37,10 +38,10 @@ export default function AnalyticsPage() {
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
         <Metric label="Completion rate" value={`${rate}%`} />
         <Metric label="Total focus minutes" value={minutes.reduce((sum, item) => sum + item.minutes, 0)} />
-        <Metric label="Work pomodoros" value={pomodoros.reduce((sum, item) => sum + item.pomodoros, 0)} />
+        <Metric label="Focus sessions" value={pomodoros.reduce((sum, item) => sum + item.pomodoros, 0)} />
       </div>
       <div className="grid gap-6 xl:grid-cols-2">
-        <ChartCard title="Pomodoros per day">
+        <ChartCard title="Focus sessions per day">
           <BarChart data={pomodoros}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="day" /><YAxis allowDecimals={false} /><Tooltip /><Bar dataKey="pomodoros" fill="#4f8b67" radius={[4, 4, 0, 0]} /></BarChart>
         </ChartCard>
         <ChartCard title="Focused minutes by category">
@@ -50,7 +51,7 @@ export default function AnalyticsPage() {
           <BarChart data={completed}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="day" /><YAxis allowDecimals={false} /><Tooltip /><Bar dataKey="completed" fill="#315d45" radius={[4, 4, 0, 0]} /></BarChart>
         </ChartCard>
         <section className="card p-5">
-          <h2 className="mb-4 text-lg font-semibold">Load Index trend (last 30 days)</h2>
+          <h2 className="mb-4 text-lg font-semibold">Workload trend (last 30 days)</h2>
           <div className="h-72">
             {loadIndexHistory.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -64,7 +65,7 @@ export default function AnalyticsPage() {
               </ResponsiveContainer>
             ) : (
               <div className="flex h-full items-center justify-center text-center text-sm text-ink-500">
-                No Load Index history yet — it&apos;s recorded each time you click &ldquo;End day.&rdquo;
+                No Workload history yet — it&apos;s recorded each time you click &ldquo;End day.&rdquo;
               </div>
             )}
           </div>
@@ -86,5 +87,13 @@ function ChartCard({ title, children }: { title: string; children: React.ReactEl
         <ResponsiveContainer width="100%" height="100%">{children}</ResponsiveContainer>
       </div>
     </section>
+  );
+}
+
+export default function AnalyticsPage() {
+  return (
+    <ModuleGate moduleId="analytics">
+      <AnalyticsPageContent />
+    </ModuleGate>
   );
 }

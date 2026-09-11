@@ -4,13 +4,16 @@ import { ArrowLeft, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
+import { InfoHint } from "@/components/info-hint";
 import { LayeredNotesCard } from "@/components/layered-notes-card";
+import { MoreOptions } from "@/components/more-options";
 import { PaperAnnotationViewer } from "@/components/paper-annotation-viewer";
 import { PaperFileAttach } from "@/components/paper-file-attach";
 import { PaperNotesPanel } from "@/components/paper-notes-panel";
 import { PaperPassSection } from "@/components/paper-pass-section";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
+import { useFeatures } from "@/hooks/use-features";
 import { callAiTask } from "@/lib/ai/client";
 import type { ReadingPlanOutput } from "@/lib/ai/schemas";
 import { subscribeDoc, updatePaper } from "@/lib/firestore";
@@ -23,6 +26,7 @@ const GOAL_KINDS: GoalKind[] = ["survey", "method", "baseline", "related-work", 
 export default function PaperDetailPage() {
   const params = useParams<{ id: string }>();
   const { user } = useAuth();
+  const { isEnabled } = useFeatures();
   const [paper, setPaper] = useState<Paper | null>(null);
   const [file, setFile] = useState<FileRef | null>(null);
   const [goal, setGoal] = useState("");
@@ -90,19 +94,22 @@ export default function PaperDetailPage() {
       <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <section className="card p-5">
-            <h2 className="mb-3 text-lg font-semibold">Pass 1 — bird&apos;s-eye view</h2>
+            <h2 className="mb-3 flex items-center gap-1 text-lg font-semibold">
+              Skim — bird&apos;s-eye view
+              <InfoHint term="skim" />
+            </h2>
             <PaperPassSection paper={paper} passNo={1} file={file} />
           </section>
           {paper.pass1?.status === "done" && (paper.pass1.output as { verdict?: string })?.verdict === "continue" ? (
             <section className="card p-5">
-              <h2 className="mb-3 text-lg font-semibold">Pass 2 — grasp the content</h2>
+              <h2 className="mb-3 text-lg font-semibold">Read — grasp the content</h2>
               <PaperPassSection paper={paper} passNo={2} file={file} />
             </section>
           ) : null}
           {paper.pass2?.status === "done" ? (
             <section className="card p-5">
               <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-lg font-semibold">Pass 3 — re-implement (opt-in)</h2>
+                <h2 className="text-lg font-semibold">Deep dive — re-implement (opt-in)</h2>
                 {!paper.pass3 ? <span className="text-xs text-ink-500">Most papers never need this pass.</span> : null}
               </div>
               <PaperPassSection paper={paper} passNo={3} file={file} />
@@ -112,7 +119,7 @@ export default function PaperDetailPage() {
             <h2 className="mb-3 text-lg font-semibold">Notes</h2>
             <PaperNotesPanel paperId={paper.id} />
           </section>
-          {file ? (
+          {file && isEnabled("paperTools") ? (
             <section className="card p-5">
               <h2 className="mb-3 text-lg font-semibold">Highlights &amp; annotation</h2>
               <PaperAnnotationViewer paperId={paper.id} title={paper.title} pdfUrl={file.url} />
@@ -121,10 +128,10 @@ export default function PaperDetailPage() {
         </div>
         <div className="space-y-6">
           <ReadingPlanCard paper={paper} />
-          {file ? <LayeredNotesCard paperId={paper.id} layeredNotes={paper.layeredNotes} /> : null}
+          {file && isEnabled("paperTools") ? <LayeredNotesCard paperId={paper.id} layeredNotes={paper.layeredNotes} /> : null}
           <section className="card p-4">
-            <h2 className="mb-3 text-base font-semibold">Reading goal</h2>
-            <p className="mb-2 text-xs text-ink-500">Required before starting Pass 1 — the highest-leverage field here, since it conditions everything else.</p>
+            <h2 className="mb-3 text-base font-semibold">Why am I reading this?</h2>
+            <p className="mb-2 text-xs text-ink-500">Required before starting Skim — the highest-leverage field here, since it conditions everything else.</p>
             <div className="mb-2 flex flex-wrap gap-1.5">
               {GOAL_KINDS.map((kind) => (
                 <button
@@ -143,23 +150,25 @@ export default function PaperDetailPage() {
                 </button>
               ))}
             </div>
-            <textarea className="input mb-2 min-h-16" value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Why am I reading this?" onBlur={saveGoal} />
-            <select
-              className="input"
-              value={goalKind}
-              onChange={(e) => {
-                const next = e.target.value as GoalKind;
-                setGoalKind(next);
-                if (user) updatePaper(user.uid, paper.id, { goalKind: next || undefined });
-              }}
-            >
-              <option value="">Select goal type...</option>
-              {GOAL_KINDS.map((kind) => (
-                <option key={kind} value={kind}>
-                  {kind}
-                </option>
-              ))}
-            </select>
+            <MoreOptions label="Edit free-text">
+              <textarea className="input min-h-16" value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Why am I reading this?" onBlur={saveGoal} />
+              <select
+                className="input"
+                value={goalKind}
+                onChange={(e) => {
+                  const next = e.target.value as GoalKind;
+                  setGoalKind(next);
+                  if (user) updatePaper(user.uid, paper.id, { goalKind: next || undefined });
+                }}
+              >
+                <option value="">Select goal type...</option>
+                {GOAL_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {kind}
+                  </option>
+                ))}
+              </select>
+            </MoreOptions>
           </section>
           <section className="card p-4">
             <h2 className="mb-3 text-base font-semibold">PDF</h2>
@@ -223,7 +232,7 @@ function ReadingPlanCard({ paper }: { paper: Paper }) {
           ))}
         </ol>
       ) : (
-        <p className="text-sm text-ink-500">No plan yet — generate one tailored to your reading goal, or fall back to the generic pass-by-pass checklist.</p>
+        <p className="text-sm text-ink-500">No plan yet — generate one tailored to why you&apos;re reading this, or fall back to the generic checklist.</p>
       )}
     </section>
   );

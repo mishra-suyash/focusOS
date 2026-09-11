@@ -1,9 +1,11 @@
 "use client";
 
 import { orderBy } from "firebase/firestore";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
+import { InfoHint } from "@/components/info-hint";
 import { useTheme } from "@/components/theme-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
@@ -60,6 +62,11 @@ export default function SettingsPage() {
           </dl>
         </section>
         <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Features</h2>
+          <p className="mb-3 text-xs text-ink-500">Turn optional modules like Courses, Revise, Goals, or Analytics on or off.</p>
+          <Link href="/settings/features" className="btn-secondary py-1.5 text-xs">Manage features</Link>
+        </section>
+        <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Preferences</h2>
           <div className="flex items-center justify-between rounded-md bg-ink-50 p-3 dark:bg-ink-800">
             <div>
@@ -88,20 +95,23 @@ export default function SettingsPage() {
               <input className="input w-24" type="number" min={15} value={breakMinutes} onChange={(e) => setBreakMinutes(Number(e.target.value))} />
               <span className="text-xs text-ink-500">min</span>
             </label>
-            <p className="text-xs text-ink-500">Reminders only fire while a workday is started and this tab is open. Allow browser notifications when prompted to get alerts outside the tab.</p>
+            <p className="text-xs text-ink-500">Reminders only fire while your day is started and this tab is open. Allow browser notifications when prompted to get alerts outside the tab.</p>
           </div>
         </section>
         <section className="card p-5">
-          <h2 className="mb-4 text-lg font-semibold">Break-mode template</h2>
+          <h2 className="mb-4 flex items-center gap-1 text-lg font-semibold">
+            Break-day template
+            <InfoHint term="breakDayTemplate" />
+          </h2>
           <p className="mb-3 text-xs text-ink-500">
-            Applied by &ldquo;Start day&rdquo; instead of your default template on days with no active semester term (or an explicit break term).
+            Applied by &ldquo;Start day&rdquo; instead of your workday template on days with no active semester term (or an explicit break term).
           </p>
           <select
             className="input"
             value={settings.breakTemplateId ?? ""}
             onChange={(e) => updateSettings({ breakTemplateId: e.target.value || undefined })}
           >
-            <option value="">Use the default template</option>
+            <option value="">Use the workday template</option>
             {templates.map((template) => (
               <option key={template.id} value={template.id}>
                 {template.name}
@@ -157,7 +167,7 @@ export default function SettingsPage() {
               />
             </label>
             <p className="text-xs text-ink-500">
-              Ladder: {DEFAULT_LADDER.join(", ")} days. Overflow past today&apos;s cap rolls forward, it never disappears. Your plan&apos;s ceiling is{" "}
+              Revision schedule: {DEFAULT_LADDER.join(", ")} days. Overflow past today&apos;s cap rolls forward, it never disappears. Your plan&apos;s ceiling is{" "}
               {tierLimits.maxRevisionsPerDay} items / {tierLimits.maxRevisionMinutesPerDay} min.
             </p>
           </div>
@@ -171,7 +181,7 @@ export default function SettingsPage() {
                 {exporting === "json" ? "Exporting..." : "Download full export (JSON)"}
               </button>
               <button className="btn-secondary" onClick={exportCsv} disabled={exporting !== null}>
-                {exporting === "csv" ? "Exporting..." : "Download pomodoro log (CSV)"}
+                {exporting === "csv" ? "Exporting..." : "Download focus session log (CSV)"}
               </button>
             </div>
           </div>

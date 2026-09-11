@@ -3,7 +3,9 @@
 import { Plus, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { InfoHint } from "@/components/info-hint";
 import { PassTimer, elapsedMinutesSince } from "@/components/pass-timer";
+import { MoreOptions } from "@/components/more-options";
 import { callAiTask } from "@/lib/ai/client";
 import type { PassAssistOutput } from "@/lib/ai/schemas";
 import { extractPdfOutline } from "@/lib/pdf-outline";
@@ -38,6 +40,9 @@ function passKey(passNo: 1 | 2 | 3): "pass1" | "pass2" | "pass3" {
 function getPass(paper: Paper, passNo: 1 | 2 | 3): PassState | undefined {
   return passNo === 1 ? paper.pass1 : passNo === 2 ? paper.pass2 : paper.pass3;
 }
+
+/** Plan §5 vocabulary — Pass 1 / Pass 2 / Pass 3 renamed to Skim / Read / Deep dive. */
+const PASS_LABELS: Record<1 | 2 | 3, string> = { 1: "Skim", 2: "Read", 3: "Deep dive" };
 
 export function PaperPassSection({ paper, passNo, file }: { paper: Paper; passNo: 1 | 2 | 3; file: FileRef | null }) {
   const { user } = useAuth();
@@ -85,10 +90,10 @@ export function PaperPassSection({ paper, passNo, file }: { paper: Paper; passNo
     return (
       <div className="rounded-md border border-dashed border-ink-300 p-4 text-center dark:border-ink-700">
         {blocked ? (
-          <p className="text-sm text-ink-500">Set a reading goal and goal type above before starting Pass 1.</p>
+          <p className="text-sm text-ink-500">Answer &ldquo;Why am I reading this?&rdquo; above before starting Skim.</p>
         ) : (
           <button className="btn-primary" onClick={startPass}>
-            Start Pass {passNo}
+            Start {PASS_LABELS[passNo]}
           </button>
         )}
       </div>
@@ -114,7 +119,7 @@ function PassSummary({ passNo, pass }: { passNo: 1 | 2 | 3; pass: PassState }) {
   return (
     <div className="rounded-md bg-moss-600/5 p-4 text-sm">
       <p className="mb-2 font-medium">
-        Pass {passNo} done · {pass.minutes}m
+        {PASS_LABELS[passNo]} done · {pass.minutes}m
       </p>
       {passNo === 1 ? <Pass1Summary output={pass.output as Pass1Output} /> : null}
       {passNo === 2 ? <Pass2Summary output={pass.output as Pass2Output} /> : null}
@@ -127,7 +132,7 @@ function Pass1Summary({ output }: { output: Pass1Output }) {
   return (
     <div className="space-y-1 text-ink-600 dark:text-ink-300">
       <p>
-        Verdict: <span className="font-medium">{output.verdict}</span> ({output.verdictReason})
+        Verdict: <span className="font-medium">{VERDICT_LABELS[output.verdict]}</span> ({output.verdictReason.replace(/-/g, " ")})
       </p>
       {output.contributions.length > 0 ? <p>Contributions: {output.contributions.join("; ")}</p> : null}
       {output.clarityRating ? <p>Clarity: {output.clarityRating}/5</p> : null}
@@ -157,6 +162,13 @@ const VERDICT_REASONS: Record<Pass1Verdict, Pass1VerdictReason[]> = {
   continue: ["proceeding"],
   park: ["insufficient-background", "outside-area-but-relevant-later"],
   drop: ["not-interested", "invalid-assumptions"]
+};
+
+/** Plan §5 vocabulary — verdict continue / park / drop renamed to Keep reading / Save for later / Not relevant. */
+const VERDICT_LABELS: Record<Pass1Verdict, string> = {
+  continue: "Keep reading",
+  park: "Save for later",
+  drop: "Not relevant"
 };
 
 /**
@@ -195,12 +207,16 @@ function AiAssistBox({ onAssist }: { onAssist: (rawNotes: string) => Promise<voi
   );
 }
 
+const VERDICT_BUTTON_LABELS: Record<Pass1Verdict, string> = VERDICT_LABELS;
+
+/** Plan §9.5 — verdict buttons and a one-line takeaway always visible; the rest of Pass 1 behind "More options". */
 function Pass1Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass1Output) => void }) {
   const { user } = useAuth();
   const [steps, setSteps] = useState({ titleAbstractIntro: false, headings: false, conclusions: false, references: false });
   const [category, setCategory] = useState("");
   const [context, setContext] = useState("");
   const [correctness, setCorrectness] = useState("");
+  const [takeaway, setTakeaway] = useState("");
   const [contributions, setContributions] = useState("");
   const [clarityRating, setClarityRating] = useState(3);
   const [clarityNote, setClarityNote] = useState("");
@@ -227,7 +243,7 @@ function Pass1Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass1
       category: category || undefined,
       context: context || undefined,
       correctness: correctness || undefined,
-      contributions: lines(contributions),
+      contributions: [takeaway.trim(), ...lines(contributions)].filter(Boolean),
       clarityRating,
       clarityNote: clarityNote || undefined,
       referencesAlreadyRead: lines(referencesAlreadyRead),
@@ -238,53 +254,28 @@ function Pass1Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass1
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      <AiAssistBox onAssist={assist} />
-      <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-        {(
-          [
-            ["titleAbstractIntro", "Title, abstract, intro"],
-            ["headings", "Section headings"],
-            ["conclusions", "Conclusions"],
-            ["references", "Skim references"]
-          ] as const
-        ).map(([key, label]) => (
-          <label key={key} className="flex items-center gap-2">
-            <input type="checkbox" checked={steps[key]} onChange={(e) => setSteps((current) => ({ ...current, [key]: e.target.checked }))} />
-            {label}
-          </label>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        {(["continue", "park", "drop"] as const).map((option) => (
+          <div key={option} className="relative">
+            <button
+              type="button"
+              className={`btn-secondary w-full py-1.5 text-xs ${verdict === option ? "ring-2 ring-moss-500" : ""}`}
+              onClick={() => {
+                setVerdict(option);
+                setVerdictReason(VERDICT_REASONS[option][0]);
+              }}
+            >
+              {VERDICT_BUTTON_LABELS[option]}
+            </button>
+            {option === "park" ? (
+              <span className="absolute -right-1.5 -top-1.5 rounded-full bg-white dark:bg-ink-900">
+                <InfoHint term="saveForLater" />
+              </span>
+            ) : null}
+          </div>
         ))}
       </div>
-      <div className="grid gap-2 sm:grid-cols-3">
-        <input className="input" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Category (measurement, prototype...)" />
-        <input className="input" value={context} onChange={(e) => setContext(e.target.value)} placeholder="Context / related theory" />
-        <input className="input" value={correctness} onChange={(e) => setCorrectness(e.target.value)} placeholder="Do assumptions look valid?" />
-      </div>
-      <textarea className="input min-h-16" value={contributions} onChange={(e) => setContributions(e.target.value)} placeholder="Contributions, one per line" />
-      <textarea
-        className="input min-h-16"
-        value={referencesAlreadyRead}
-        onChange={(e) => setReferencesAlreadyRead(e.target.value)}
-        placeholder="References you've already read, one per line (feeds group survey mode)"
-      />
-      <label className="block text-xs text-ink-500">
-        Clarity: {clarityRating}/5
-        <input className="mt-1 w-full accent-moss-600" type="range" min={1} max={5} value={clarityRating} onChange={(e) => setClarityRating(Number(e.target.value))} />
-      </label>
-      <input className="input" value={clarityNote} onChange={(e) => setClarityNote(e.target.value)} placeholder="Clarity note (optional)" />
-      <div className="grid gap-2 sm:grid-cols-2">
-        <select
-          className="input"
-          value={verdict}
-          onChange={(e) => {
-            const next = e.target.value as Pass1Verdict;
-            setVerdict(next);
-            setVerdictReason(VERDICT_REASONS[next][0]);
-          }}
-        >
-          <option value="continue">Continue to Pass 2</option>
-          <option value="park">Park — may be relevant later</option>
-          <option value="drop">Drop</option>
-        </select>
+      {verdict !== "continue" ? (
         <select className="input" value={verdictReason} onChange={(e) => setVerdictReason(e.target.value as Pass1VerdictReason)}>
           {VERDICT_REASONS[verdict].map((reason) => (
             <option key={reason} value={reason}>
@@ -292,9 +283,45 @@ function Pass1Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass1
             </option>
           ))}
         </select>
-      </div>
-      {!allStepsChecked ? <p className="text-xs text-amber-700 dark:text-amber-400">Tip: an unticked step is the honest signal the pass wasn&apos;t actually done.</p> : null}
-      <button className="btn-primary">Save &amp; finish Pass 1</button>
+      ) : null}
+      <input className="input" value={takeaway} onChange={(e) => setTakeaway(e.target.value)} placeholder="One-line takeaway" />
+      <MoreOptions>
+        <AiAssistBox onAssist={assist} />
+        <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+          {(
+            [
+              ["titleAbstractIntro", "Title, abstract, intro"],
+              ["headings", "Section headings"],
+              ["conclusions", "Conclusions"],
+              ["references", "Skim references"]
+            ] as const
+          ).map(([key, label]) => (
+            <label key={key} className="flex items-center gap-2">
+              <input type="checkbox" checked={steps[key]} onChange={(e) => setSteps((current) => ({ ...current, [key]: e.target.checked }))} />
+              {label}
+            </label>
+          ))}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <input className="input" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Category (measurement, prototype...)" />
+          <input className="input" value={context} onChange={(e) => setContext(e.target.value)} placeholder="Context / related theory" />
+          <input className="input" value={correctness} onChange={(e) => setCorrectness(e.target.value)} placeholder="Do assumptions look valid?" />
+        </div>
+        <textarea className="input min-h-16" value={contributions} onChange={(e) => setContributions(e.target.value)} placeholder="Additional contributions, one per line" />
+        <textarea
+          className="input min-h-16"
+          value={referencesAlreadyRead}
+          onChange={(e) => setReferencesAlreadyRead(e.target.value)}
+          placeholder="References you've already read, one per line (feeds Literature survey)"
+        />
+        <label className="block text-xs text-ink-500">
+          Clarity: {clarityRating}/5
+          <input className="mt-1 w-full accent-moss-600" type="range" min={1} max={5} value={clarityRating} onChange={(e) => setClarityRating(Number(e.target.value))} />
+        </label>
+        <input className="input" value={clarityNote} onChange={(e) => setClarityNote(e.target.value)} placeholder="Clarity note (optional)" />
+        {!allStepsChecked ? <p className="text-xs text-amber-700 dark:text-amber-400">Tip: an unticked step is the honest signal the pass wasn&apos;t actually done.</p> : null}
+      </MoreOptions>
+      <button className="btn-primary">Save &amp; finish Skim</button>
     </form>
   );
 }
@@ -338,43 +365,6 @@ function Pass2Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass2
   return (
     <form onSubmit={submit} className="space-y-3">
       <AiAssistBox onAssist={assist} />
-      <textarea className="input min-h-16" value={keyPoints} onChange={(e) => setKeyPoints(e.target.value)} placeholder="Key points, one per line" />
-      <div className="space-y-2">
-        <p className="label">Figures</p>
-        {figures.map((figure, index) => (
-          <div key={index} className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-2 text-xs">
-            <input
-              className="input"
-              value={figure.ref}
-              onChange={(e) => setFigures((items) => items.map((item, i) => (i === index ? { ...item, ref: e.target.value } : item)))}
-              placeholder="Figure ref (e.g. Fig. 3)"
-            />
-            {(["axesLabelled", "errorBars", "significanceOk"] as const).map((key) => (
-              <label key={key} className="flex items-center gap-1">
-                <input
-                  type="checkbox"
-                  checked={Boolean(figure[key])}
-                  onChange={(e) => setFigures((items) => items.map((item, i) => (i === index ? { ...item, [key]: e.target.checked } : item)))}
-                />
-                {key === "axesLabelled" ? "Axes" : key === "errorBars" ? "Error bars" : "Sig."}
-              </label>
-            ))}
-            <button type="button" className="text-ink-400 hover:text-red-600" onClick={() => setFigures((items) => items.filter((_, i) => i !== index))}>
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        ))}
-        <button type="button" className="btn-secondary py-1 text-xs" onClick={() => setFigures((items) => [...items, newFigure()])}>
-          <Plus className="h-3 w-3" />
-          Add figure
-        </button>
-      </div>
-      <textarea
-        className="input min-h-14"
-        value={unreadReferencesMarked}
-        onChange={(e) => setUnreadReferencesMarked(e.target.value)}
-        placeholder="Relevant unread references, one per line (feeds group survey mode)"
-      />
       <div>
         <textarea
           className="input min-h-20"
@@ -385,20 +375,59 @@ function Pass2Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass2
         />
         <p className={`mt-1 text-xs ${summaryWords > 70 ? "text-amber-700 dark:text-amber-400" : "text-ink-400"}`}>{summaryWords} words</p>
       </div>
-      <textarea className="input min-h-14" value={unclear} onChange={(e) => setUnclear(e.target.value)} placeholder="What's unclear, one per line" />
-      <select className="input" value={outcome} onChange={(e) => setOutcome(e.target.value as Pass2Outcome)}>
-        <option value="grasped">Grasped it</option>
-        <option value="set-aside">Set aside</option>
-        <option value="return-later">Return later, after background reading</option>
-        <option value="persevere">Persevere to Pass 3</option>
-      </select>
-      {outcome === "return-later" ? (
-        <div className="grid gap-2 sm:grid-cols-2">
-          <textarea className="input min-h-14" value={backgroundToRead} onChange={(e) => setBackgroundToRead(e.target.value)} placeholder="Background to read first, one per line" />
-          <input className="input" type="date" value={revisitOn} onChange={(e) => setRevisitOn(e.target.value)} />
+      <MoreOptions>
+        <textarea className="input min-h-16" value={keyPoints} onChange={(e) => setKeyPoints(e.target.value)} placeholder="Key points, one per line" />
+        <div className="space-y-2">
+          <p className="label">Figures</p>
+          {figures.map((figure, index) => (
+            <div key={index} className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-2 text-xs">
+              <input
+                className="input"
+                value={figure.ref}
+                onChange={(e) => setFigures((items) => items.map((item, i) => (i === index ? { ...item, ref: e.target.value } : item)))}
+                placeholder="Figure ref (e.g. Fig. 3)"
+              />
+              {(["axesLabelled", "errorBars", "significanceOk"] as const).map((key) => (
+                <label key={key} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(figure[key])}
+                    onChange={(e) => setFigures((items) => items.map((item, i) => (i === index ? { ...item, [key]: e.target.checked } : item)))}
+                  />
+                  {key === "axesLabelled" ? "Axes" : key === "errorBars" ? "Error bars" : "Sig."}
+                </label>
+              ))}
+              <button type="button" className="text-ink-400 hover:text-red-600" onClick={() => setFigures((items) => items.filter((_, i) => i !== index))}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          <button type="button" className="btn-secondary py-1 text-xs" onClick={() => setFigures((items) => [...items, newFigure()])}>
+            <Plus className="h-3 w-3" />
+            Add figure
+          </button>
         </div>
-      ) : null}
-      <button className="btn-primary">Save &amp; finish Pass 2</button>
+        <textarea
+          className="input min-h-14"
+          value={unreadReferencesMarked}
+          onChange={(e) => setUnreadReferencesMarked(e.target.value)}
+          placeholder="Relevant unread references, one per line (feeds Literature survey)"
+        />
+        <textarea className="input min-h-14" value={unclear} onChange={(e) => setUnclear(e.target.value)} placeholder="What's unclear, one per line" />
+        <select className="input" value={outcome} onChange={(e) => setOutcome(e.target.value as Pass2Outcome)}>
+          <option value="grasped">Grasped it</option>
+          <option value="set-aside">Set aside</option>
+          <option value="return-later">Return later, after background reading</option>
+          <option value="persevere">Persevere to Deep dive</option>
+        </select>
+        {outcome === "return-later" ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            <textarea className="input min-h-14" value={backgroundToRead} onChange={(e) => setBackgroundToRead(e.target.value)} placeholder="Background to read first, one per line" />
+            <input className="input" type="date" value={revisitOn} onChange={(e) => setRevisitOn(e.target.value)} />
+          </div>
+        ) : null}
+      </MoreOptions>
+      <button className="btn-primary">Save &amp; finish Read</button>
     </form>
   );
 }
@@ -513,7 +542,7 @@ function Pass3Form({ paper, file, onFinish }: { paper: Paper; file: FileRef | nu
       </div>
       <input className="input" value={wouldPresentDifferently} onChange={(e) => setWouldPresentDifferently(e.target.value)} placeholder="What you'd present differently" />
       <button className="btn-primary" onClick={finish}>
-        Save &amp; finish Pass 3
+        Save &amp; finish Deep dive
       </button>
     </div>
   );

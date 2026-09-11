@@ -21,6 +21,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { trackRead, trackWrite } from "@/lib/usage";
+import type { PublicCatalog } from "@/lib/templates/schema";
 import type {
   AiInsight,
   AiJob,
@@ -159,6 +160,14 @@ export function subscribeUserProfile(uid: string, callback: (profile: UserProfil
  * design — creating, editing, or deleting a tier requires the Admin SDK (see
  * scripts/manage-tiers.mjs today; the admin panel's API routes in Phase 4.5).
  */
+/** One-off read of `publicCatalog/current` (plan §7.4) — every published admin template + pack defaults + hidden built-ins, in a single document read. Callers (hooks/use-template-catalog.ts) cache this in memory for the session rather than re-fetching. */
+export async function fetchPublicCatalog(): Promise<PublicCatalog | null> {
+  if (!db) return null;
+  const snapshot = await getDoc(doc(db, "publicCatalog", "current"));
+  trackRead(1);
+  return snapshot.exists() ? (snapshot.data() as PublicCatalog) : null;
+}
+
 export function subscribeTiers(callback: (tiers: Tier[]) => void) {
   if (!db) {
     callback([]);
@@ -651,6 +660,11 @@ export async function endWorkdaySession(uid: string, date: string) {
   await saveDayFields(uid, date, { "session.endedAt": now() });
 }
 
+/** F11 (plan §11.2) — the 10-second "Undo" toast's action: clears `session.endedAt` so the day reads active again, without touching whatever the evening rollup already generated. */
+export async function undoEndWorkdaySession(uid: string, date: string) {
+  await saveDayFields(uid, date, { "session.endedAt": deleteField() });
+}
+
 export async function recordHydration(uid: string, date: string, hydrationCount: number) {
   await saveDayFields(uid, date, { "session.hydrationCount": hydrationCount, "session.lastHydrationAt": now() });
 }
@@ -669,6 +683,10 @@ const SETTINGS_DOC_ID = "settings";
 export async function saveUserSettings(uid: string, patch: Partial<Omit<UserSettings, "updatedAt">>) {
   const payload: Record<string, unknown> = withoutUndefined({ ...patch, updatedAt: now() });
   if ("breakTemplateId" in patch && patch.breakTemplateId === undefined) payload.breakTemplateId = deleteField();
+  // "Reset to pack defaults" (plan §9.1's custom-selection model) clears the override by passing
+  // `enabledModules: undefined` — under merge:true that's normally a no-op (the key is just
+  // omitted), the same bug class `setPackDefaultTemplate` had to work around in U2.
+  if ("enabledModules" in patch && patch.enabledModules === undefined) payload.enabledModules = deleteField();
   trackWrite();
   await setDoc(doc(userCollection(uid, "meta"), SETTINGS_DOC_ID), payload, { merge: true });
 }

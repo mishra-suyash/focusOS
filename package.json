@@ -16,7 +16,9 @@
     "migrate:ux": "node scripts/migrate-ux.mjs",
     "manage:tiers": "node scripts/manage-tiers.mjs",
     "manage:ai-settings": "node scripts/manage-ai-settings.mjs",
-    "verify:templates": "tsx scripts/verify-templates.ts"
+    "manage:templates": "tsx scripts/manage-templates.ts",
+    "verify:templates": "tsx scripts/verify-templates.ts",
+    "verify:vocabulary": "tsx scripts/verify-vocabulary.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

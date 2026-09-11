@@ -2,6 +2,7 @@
 
 import { orderBy } from "firebase/firestore";
 import { useMemo, useState } from "react";
+import { EmptyState, focusSection } from "@/components/empty-state";
 import { SectionHeader } from "@/components/section-header";
 import { TaskForm } from "@/components/task-form";
 import { TaskList } from "@/components/task-list";
@@ -10,7 +11,8 @@ import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { categories, priorities, statuses } from "@/lib/options";
 import { createTask, deleteTask, updateTask } from "@/lib/firestore";
-import { todayKey, weekStartKey } from "@/lib/dates";
+import { computeStatusPatch } from "@/lib/tasks";
+import { todayKey, weekDates, weekStartKey } from "@/lib/dates";
 import type { Category, Priority, Task, TaskStatus } from "@/types";
 
 export default function TasksPage() {
@@ -23,12 +25,15 @@ export default function TasksPage() {
   const [packDialogOpen, setPackDialogOpen] = useState(false);
   const today = todayKey();
   const week = weekStartKey();
+  const weekEnd = weekDates(week)[6];
 
   const filtered = tasks.filter((task) => {
     const viewMatch =
       view === "inbox" ||
       (view === "today" && task.dueDate === today) ||
-      (view === "week" && task.dueDate && task.dueDate >= week) ||
+      // F6 (plan §11.2) — bounded to this Mon-Sun; anything past Sunday shows under "Upcoming" instead.
+      (view === "week" && task.dueDate && task.dueDate >= week && task.dueDate <= weekEnd) ||
+      (view === "upcoming" && task.dueDate && task.dueDate > weekEnd) ||
       (view === "completed" && task.status === "done");
     return viewMatch && (category === "all" || task.category === category) && (priority === "all" || task.priority === priority) && (status === "all" || task.status === status);
   });
@@ -37,7 +42,7 @@ export default function TasksPage() {
     <>
       <SectionHeader title="Tasks" eyebrow="Capture, clarify, complete" />
       <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
-        <section className="card p-5">
+        <section id="task-quick-add" className="card p-5">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="text-lg font-semibold">Quick add</h2>
             <button className="btn-secondary py-1.5 text-xs" onClick={() => setPackDialogOpen(true)}>Add from checklist</button>
@@ -51,6 +56,7 @@ export default function TasksPage() {
                 <option value="inbox">Inbox</option>
                 <option value="today">Today</option>
                 <option value="week">This week</option>
+                <option value="upcoming">Upcoming</option>
                 <option value="completed">Completed</option>
               </select>
               <select className="input" value={category} onChange={(e) => setCategory(e.target.value as Category | "all")}>
@@ -67,11 +73,19 @@ export default function TasksPage() {
               </select>
             </div>
           </div>
-          <TaskList
-            tasks={filtered}
-            onStatus={(task, next) => updateTask(user!.uid, task.id, { status: next, completedAt: next === "done" ? new Date().toISOString() : undefined })}
-            onDelete={(task) => deleteTask(user!.uid, task.id)}
-          />
+          {tasks.length === 0 ? (
+            <EmptyState
+              sentence="Everything you need to get done, research or not."
+              primary={{ label: "Add a task", onClick: () => focusSection("task-quick-add") }}
+              template={{ label: "Add from checklist", onClick: () => setPackDialogOpen(true) }}
+            />
+          ) : (
+            <TaskList
+              tasks={filtered}
+              onStatus={(task, next) => updateTask(user!.uid, task.id, computeStatusPatch(task, next))}
+              onDelete={(task) => deleteTask(user!.uid, task.id)}
+            />
+          )}
         </section>
       </div>
       {packDialogOpen ? <TaskPackDialog uid={user!.uid} onClose={() => setPackDialogOpen(false)} /> : null}

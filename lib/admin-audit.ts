@@ -5,7 +5,7 @@ export interface WriteAuditEntryInput {
   actorUid: string;
   actorEmail: string;
   action: AuditAction;
-  targetType: "user" | "settings" | "ollama" | "tier";
+  targetType: "user" | "settings" | "ollama" | "tier" | "template";
   targetId: string;
   before?: unknown;
   after?: unknown;

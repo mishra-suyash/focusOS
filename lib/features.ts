@@ -41,10 +41,20 @@ export const FEATURE_MODULES: Record<ModuleId, FeatureModule> = {
   focus: { id: "focus", label: "Focus timer", description: "Timed focus sessions.", core: true },
   wrapup: { id: "wrapup", label: "Daily wrap-up", description: "Close out the day and carry things to tomorrow.", core: true },
   readingList: { id: "readingList", label: "Papers", description: "Papers you want to read, are reading, or have read.", core: true },
+  /**
+   * Deliberately `core: true` rather than pack-gated, deviating from plan §8.1's table (which
+   * lists it as a Research-pack addition). §9.1 describes a condensed "Start reading" / "Mark as
+   * read" fallback for when this is off, but flags its own [ASSUMPTION] that collapsing pass1/
+   * pass2 output that way would distort drop-rate statistics. Rather than ship that unresolved
+   * mapping, staged reading stays on for every pack — the alternative is a Coursework/Writing-up
+   * reading list with no way to ever finish a paper, which is a worse first-week experience than
+   * one extra always-on module.
+   */
   stagedReading: {
     id: "stagedReading",
     label: "Staged reading",
     description: "Skim / Read / Deep dive — read a paper in stages.",
+    core: true,
     requires: ["readingList"]
   },
   paperTools: {
@@ -66,10 +76,10 @@ export const CORE_MODULES: ModuleId[] = Object.values(FEATURE_MODULES)
   .filter((module) => module.core)
   .map((module) => module.id);
 
-/** Additive modules each starter pack turns on beyond the core set (plan §8.1). */
+/** Additive modules each starter pack turns on beyond the core set (plan §8.1) — stagedReading is core (see above), so it's not listed here even for Research. */
 export const PACK_MODULES: Record<PackId, ModuleId[]> = {
   coursework: ["courses", "revise"],
-  research: ["stagedReading", "revise", "goals"],
+  research: ["revise", "goals"],
   writing: ["goals", "weeklyCheckin"],
   everything: Object.keys(FEATURE_MODULES) as ModuleId[],
   core: []
@@ -87,3 +97,39 @@ export function resolveEnabledModules(settings: { packId?: PackId; enabledModule
 export function isModuleEnabled(settings: { packId?: PackId; enabledModules?: string[] }, moduleId: ModuleId): boolean {
   return resolveEnabledModules(settings).has(moduleId);
 }
+
+/**
+ * Turns one module on/off — from a disabled-route prompt ("Revise is turned off. Turn it on?",
+ * §9.2) or from the `/settings/features` toggle list (U5). Returns the `enabledModules` array to
+ * write. Once a settings doc has an explicit list, every future resolution reads from it instead
+ * of the pack, so this seeds the list with the pack's current additive set (not just the one
+ * module) to avoid silently dropping every other module the pack had already turned on.
+ * Enabling a module also enables whatever it `requires`; disabling one also disables whatever
+ * currently-enabled module `requires` it, so the set never contains a dangling dependency.
+ */
+export function withModuleToggled(settings: { packId?: PackId; enabledModules?: string[] }, moduleId: ModuleId, enabled: boolean): ModuleId[] {
+  const current = resolveEnabledModules(settings);
+  if (enabled) {
+    current.add(moduleId);
+    for (const dep of FEATURE_MODULES[moduleId].requires ?? []) current.add(dep);
+  } else {
+    current.delete(moduleId);
+    for (const other of Object.values(FEATURE_MODULES)) {
+      if (other.requires?.includes(moduleId)) current.delete(other.id);
+    }
+  }
+  return Array.from(current).filter((id) => !CORE_MODULES.includes(id));
+}
+
+/** Which module each alert's source concept belongs to (plan §9.2: the heads-up banner only shows alerts whose source module is enabled). */
+export const ALERT_TYPE_MODULE: Record<string, ModuleId> = {
+  "checkpoint.prep_overdue": "courses",
+  "checkpoint.prep_not_started": "courses",
+  "class.unlogged": "courses",
+  "revision.backlog": "revise",
+  "load_index.low_streak": "workload",
+  "load_index.off_track": "workload",
+  "paper.stale": "readingList",
+  "goal.milestone_overdue": "goals",
+  "task.external_due": "tasks"
+};

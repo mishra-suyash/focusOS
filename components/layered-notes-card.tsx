@@ -3,6 +3,7 @@
 import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { InfoHint } from "@/components/info-hint";
 import { generateLayeredNotes } from "@/lib/ai/client";
 import { updatePaper } from "@/lib/firestore";
 import type { LayeredNotes } from "@/types";
@@ -45,7 +46,7 @@ export function LayeredNotesCard({ paperId, layeredNotes }: { paperId: string; l
       const notes = await generateLayeredNotes(user, paperId);
       await updatePaper(user.uid, paperId, { layeredNotes: notes });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate layered notes.");
+      setError(err instanceof Error ? err.message : "Failed to generate the layered summary.");
     } finally {
       setBusy(false);
     }
@@ -62,7 +63,10 @@ export function LayeredNotesCard({ paperId, layeredNotes }: { paperId: string; l
     <section className="card space-y-3 p-4">
       <div className="flex items-center justify-between gap-2">
         <div>
-          <p className="label">Layered Notes</p>
+          <p className="label flex items-center gap-1">
+            Layered summary
+            <InfoHint term="layeredSummary" />
+          </p>
           {layeredNotes ? <p className="text-xs text-ink-500">v{layeredNotes.version} · {layeredNotes.provider}{layeredNotes.model ? ` (${layeredNotes.model})` : ""}</p> : null}
         </div>
         <button className="btn-secondary py-1.5 text-xs" onClick={generate} disabled={busy}>

@@ -1,4 +1,4 @@
-import { createSlot } from "@/lib/schedule";
+import { materializeSlots } from "@/lib/schedule";
 import { BUILTIN_DAY_TEMPLATES, type BuiltinDayTemplate } from "@/lib/templates/builtin/day-templates";
 import { BUILTIN_GOAL_TEMPLATES } from "@/lib/templates/builtin/goal-templates";
 import { BUILTIN_READING_GOAL_PRESETS } from "@/lib/templates/builtin/reading-goal-presets";
@@ -19,7 +19,7 @@ export function materializeBuiltinDayTemplate(builtin: BuiltinDayTemplate): Omit
     name: builtin.name,
     description: builtin.description,
     isDefault: false,
-    slots: builtin.slots.map((slot) => createSlot(slot)),
+    slots: materializeSlots(builtin.slots),
     sourceTemplateId: `builtin:${builtin.id}`,
     sourceVersion: builtin.version
   };

@@ -3,6 +3,9 @@
 import { orderBy } from "firebase/firestore";
 import { Plus, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { EmptyState, focusSection } from "@/components/empty-state";
+import { ModuleGate } from "@/components/module-gate";
+import { MoreOptions } from "@/components/more-options";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -15,7 +18,7 @@ import type { Course, Goal, GoalHorizon, GoalMilestone, NewGoal, ReviewCadence, 
 const HORIZONS: GoalHorizon[] = ["week", "term", "break", "year", "phd"];
 const CADENCES: ReviewCadence[] = ["weekly", "monthly"];
 
-export default function GoalsPage() {
+function GoalsPageContent() {
   const { user } = useAuth();
   const today = todayKey();
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
@@ -28,28 +31,35 @@ export default function GoalsPage() {
     <>
       <SectionHeader title="Goals" eyebrow="The long-horizon layer that survives term boundaries" />
       <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
-        <section className="card p-5">
+        <section id="goal-new" className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">New goal</h2>
-          <GoalTemplatePicker onCreate={(goal) => createGoal(user.uid, goal)} />
-          <GoalForm terms={terms} onCreate={(goal) => createGoal(user.uid, goal)} />
+          <div id="goal-template-picker">
+            <GoalTemplatePicker onCreate={(goal) => createGoal(user.uid, goal)} />
+          </div>
+          <div id="goal-form">
+            <GoalForm terms={terms} onCreate={(goal) => createGoal(user.uid, goal)} />
+          </div>
         </section>
         <section className="space-y-4">
-          {goals.map((goal) => (
-            <GoalCard
-              key={goal.id}
-              goal={goal}
-              terms={terms}
-              courses={courses}
-              today={today}
-              onUpdate={(patch) => updateGoal(user.uid, goal.id, patch)}
-              onDelete={() => deleteGoal(user.uid, goal.id)}
-            />
-          ))}
           {goals.length === 0 ? (
-            <div className="card p-8 text-center text-sm text-ink-500 dark:text-ink-400">
-              No goals yet — add one to start feeding the Load Index&apos;s required-minutes target and the daily loop&apos;s morning brief.
-            </div>
-          ) : null}
+            <EmptyState
+              sentence="Long-term aims like a chapter, an exam, or a submission."
+              primary={{ label: "New goal", onClick: () => focusSection("goal-form") }}
+              template={{ label: "Start from a template", onClick: () => focusSection("goal-template-picker") }}
+            />
+          ) : (
+            goals.map((goal) => (
+              <GoalCard
+                key={goal.id}
+                goal={goal}
+                terms={terms}
+                courses={courses}
+                today={today}
+                onUpdate={(patch) => updateGoal(user.uid, goal.id, patch)}
+                onDelete={() => deleteGoal(user.uid, goal.id)}
+              />
+            ))
+          )}
         </section>
       </div>
     </>
@@ -156,45 +166,47 @@ function GoalForm({ terms, onCreate }: { terms: Term[]; onCreate: (goal: NewGoal
   return (
     <form onSubmit={submit} className="space-y-2">
       <input className="input" placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
-      <select className="input" value={horizon} onChange={(e) => setHorizon(e.target.value as GoalHorizon)}>
-        {HORIZONS.map((h) => (
-          <option key={h} value={h}>
-            {h}
-          </option>
-        ))}
-      </select>
-      {horizon === "break" ? (
-        <select className="input" value={termId} onChange={(e) => setTermId(e.target.value)}>
-          <option value="">Select a break term...</option>
-          {terms.filter((t) => t.kind === "break").map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))}
-        </select>
-      ) : null}
-      <textarea className="input min-h-14" placeholder="Why (optional)" value={why} onChange={(e) => setWhy(e.target.value)} />
       <textarea
         className="input min-h-16"
         placeholder="Definition of done"
         value={definitionOfDone}
         onChange={(e) => setDefinitionOfDone(e.target.value)}
       />
-      <input
-        className="input"
-        type="number"
-        min={0}
-        placeholder="Target hours/week (optional — feeds the Load Index)"
-        value={targetHoursPerWeek}
-        onChange={(e) => setTargetHoursPerWeek(e.target.value)}
-      />
-      <select className="input" value={reviewCadence} onChange={(e) => setReviewCadence(e.target.value as ReviewCadence)}>
-        {CADENCES.map((c) => (
-          <option key={c} value={c}>
-            {c} review
-          </option>
-        ))}
-      </select>
+      <MoreOptions>
+        <select className="input" value={horizon} onChange={(e) => setHorizon(e.target.value as GoalHorizon)}>
+          {HORIZONS.map((h) => (
+            <option key={h} value={h}>
+              {h}
+            </option>
+          ))}
+        </select>
+        {horizon === "break" ? (
+          <select className="input" value={termId} onChange={(e) => setTermId(e.target.value)}>
+            <option value="">Select a break term...</option>
+            {terms.filter((t) => t.kind === "break").map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        <textarea className="input min-h-14" placeholder="Why (optional)" value={why} onChange={(e) => setWhy(e.target.value)} />
+        <input
+          className="input"
+          type="number"
+          min={0}
+          placeholder="Target hours/week (optional — feeds Workload)"
+          value={targetHoursPerWeek}
+          onChange={(e) => setTargetHoursPerWeek(e.target.value)}
+        />
+        <select className="input" value={reviewCadence} onChange={(e) => setReviewCadence(e.target.value as ReviewCadence)}>
+          {CADENCES.map((c) => (
+            <option key={c} value={c}>
+              {c} review
+            </option>
+          ))}
+        </select>
+      </MoreOptions>
       <button className="btn-primary w-full" disabled={saving || !title.trim() || !definitionOfDone.trim()}>
         <Plus className="h-4 w-4" />
         Add goal
@@ -253,7 +265,7 @@ function GoalCard({
           <p className="text-xs text-ink-500">
             {goal.horizon}
             {term ? ` · ${term.name}` : ""} · {goal.reviewCadence} review
-            {!active ? " · not counting toward Load Index today" : ""}
+            {!active ? " · not counting toward Workload today" : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -310,5 +322,13 @@ function GoalCard({
         </div>
       ) : null}
     </div>
+  );
+}
+
+export default function GoalsPage() {
+  return (
+    <ModuleGate moduleId="goals">
+      <GoalsPageContent />
+    </ModuleGate>
   );
 }

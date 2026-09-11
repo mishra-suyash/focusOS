@@ -32,10 +32,10 @@ export function EveningRollupCard({ date, rollup }: { date: string; rollup?: Eve
       const token = await user.getIdToken();
       const response = await fetch("/api/daily-loop/rollup", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body.error || "Failed to generate the evening rollup.");
+      if (!response.ok) throw new Error(body.error || "Failed to generate suggestions for tomorrow.");
       setGenerated(body.rollup);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to generate the evening rollup.");
+      setError(err instanceof Error ? err.message : "Failed to generate suggestions for tomorrow.");
     } finally {
       setLoading(false);
     }
@@ -69,7 +69,7 @@ export function EveningRollupCard({ date, rollup }: { date: string; rollup?: Eve
   return (
     <section className="card mt-6 max-w-3xl p-5">
       <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Evening rollup</h2>
+        <h2 className="text-lg font-semibold">Suggestions for tomorrow</h2>
         <button className="btn-secondary py-1 text-xs" onClick={generate} disabled={loading}>
           <Sparkles className="h-3.5 w-3.5" />
           {loading ? "Generating..." : current ? "Regenerate" : "Generate"}
@@ -98,7 +98,7 @@ export function EveningRollupCard({ date, rollup }: { date: string; rollup?: Eve
 
           {current.proposedTasks.length > 0 ? (
             <div>
-              <p className="label mb-2">Proposed tasks for tomorrow ({tomorrow})</p>
+              <p className="label mb-2">Suggested tasks for tomorrow ({tomorrow})</p>
               <div className="space-y-2">
                 {current.proposedTasks.map((task, index) => (
                   <ProposedTaskRow
@@ -114,7 +114,7 @@ export function EveningRollupCard({ date, rollup }: { date: string; rollup?: Eve
 
           {current.proposedSlots.length > 0 ? (
             <div>
-              <p className="label mb-2">Proposed schedule slots for tomorrow</p>
+              <p className="label mb-2">Suggested blocks for tomorrow</p>
               <div className="space-y-2">
                 {current.proposedSlots.map((slot, index) => (
                   <ProposedSlotRow

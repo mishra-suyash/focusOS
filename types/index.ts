@@ -160,6 +160,8 @@ export interface Task {
   kind?: "internal" | "external";
   /** Only meaningful with kind "external" and a dueDate — days-before-due to surface a reminder (e.g. [7, 2, 0]). */
   reminderLeadDays?: number[];
+  /** Plan §11.2 F5 — the status a task had right before it was last marked "done", so unchecking can restore it instead of always landing on "todo". */
+  previousStatus?: TaskStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -720,7 +722,14 @@ export interface UserSettings {
   /** 'HH:mm' — used to shift built-in/day templates via shiftTemplateSlots. */
   dayStartTime?: string;
   dashboardWidgets?: string[];
+  /** Nudge keys (plan §11.1) that have been shown and dismissed — never shown again. */
   dismissedHints?: string[];
+  /** The contextual nudge currently "locked in" for `shownDate` (plan §11.1: "one new per day") —
+   * dismissing it adds its key to `dismissedHints` but leaves this in place so a different nudge
+   * can't appear until the next day, even if more than one currently qualifies. */
+  activeNudge?: { key: string; shownDate: string };
+  /** One-time "We renamed a few things" notice (plan §10.2) has been shown and dismissed. */
+  vocabularyRenameSeen?: boolean;
   updatedAt: string;
 }
 
@@ -787,7 +796,14 @@ export type AuditAction =
   | "tier.delete"
   | "tier.set-default"
   | "user.tier.change"
-  | "owner.bootstrap";
+  | "owner.bootstrap"
+  | "template.create"
+  | "template.update"
+  | "template.publish"
+  | "template.archive"
+  | "template.import"
+  | "template.pack-default.set"
+  | "template.builtin.hide";
 
 /** admin/auditLog/{entryId} — append-only, Admin SDK only. */
 export interface AuditEntry {
@@ -796,7 +812,7 @@ export interface AuditEntry {
   actorUid: string;
   actorEmail: string;
   action: AuditAction;
-  targetType: "user" | "settings" | "ollama" | "tier";
+  targetType: "user" | "settings" | "ollama" | "tier" | "template";
   targetId: string;
   before?: unknown;
   after?: unknown;

@@ -42,7 +42,7 @@ export default function DailyReviewPage() {
         "review.energyRating": energyRating,
         "review.submittedAt": new Date().toISOString()
       });
-      setMessage("Daily review saved.");
+      setMessage("Daily wrap-up saved.");
     } finally {
       setSaving(false);
     }
@@ -50,7 +50,7 @@ export default function DailyReviewPage() {
 
   return (
     <>
-      <SectionHeader title="Daily Review" eyebrow="Close the loop" />
+      <SectionHeader title="Daily wrap-up" eyebrow="Close the loop" />
       <section className="card max-w-3xl p-5">
         <input className="input mb-4 max-w-52" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         <ReviewTextarea label="What got done?" value={done} onChange={setDone} />

@@ -52,6 +52,46 @@ Once signed in, `AuthProvider` writes/merges a `users/{uid}` profile document on
 
 ## Feature reference
 
+### Vocabulary glossary
+
+The UI went through a plain-language rename (`lib/copy.ts`) — same features, clearer words. Nothing below (TypeScript identifiers, Firestore field names, existing routes) changed; only user-facing labels did. Section headings below note the old name once as "(formerly ...)"; this table is the full list.
+
+| Old term | Current label |
+|---|---|
+| Load Index (LI) | Workload |
+| Required minutes / Actual minutes | Planned / Done |
+| Debt | Catch-up hours |
+| Streak (LI ≥ 0.9) | On-track streak |
+| Coverage | Topics revised |
+| Next Action | Up next |
+| Checkpoint | Assessment |
+| Class log | Log a class |
+| Topic confidence | Understanding |
+| Revision item / ladder / queue | Revision card / revision schedule / today's revision |
+| `/review` page | Revise |
+| Pass 1 / Pass 2 / Pass 3 | Skim / Read / Deep dive |
+| Verdict continue / park / drop | Keep reading / Save for later / Not relevant |
+| Reading goal + goalKind | Why am I reading this? |
+| Paper group (cluster) / survey mode | Paper set / Literature survey |
+| Group synthesis | What connects these papers? |
+| Layered notes | Layered summary |
+| Highlight candidates | Suggested highlights |
+| Slot | Block |
+| Day template / default template | Day template / Workday template |
+| Break-mode template | Break-day template |
+| Term kind semester / break / none | Semester / Semester break / No term |
+| Workday session | Your day |
+| Pomodoro (timer) | Focus session (Focus timer) |
+| End-of-session survey | How did that go? |
+| Daily review | Daily wrap-up |
+| Weekly review | Weekly check-in |
+| Morning brief | Morning overview |
+| Evening rollup / proposed tasks & slots | Suggestions for tomorrow |
+| Alerts (Critical / Important) | Heads-up (Urgent / Important) |
+| External task | Hard deadline |
+| Planner (`/planner/day`) | Plan — Day (`/plan/day`) |
+| Calendar (`/calendar`) | Plan — Calendar (`/plan/calendar`), merged into one "Plan" destination with tabs |
+
 ### Dashboard (`/dashboard`)
 
 The home screen, laid out as three columns on wide screens (timer · full-day schedule · priorities/tasks/scratchpad):
@@ -65,7 +105,7 @@ The home screen, laid out as three columns on wide screens (timer · full-day sc
 - **Today tasks** — tasks whose `dueDate` is today OR whose status is `in_progress`, **capped at the first 5 matches**. Checking the box marks a task `done` (and stamps `completedAt`); unchecking reverts it to `todo` (not back to its previous status, e.g. `in_progress` is lost).
 - **Scratchpad** — a free-text note per day, stored as `scratchpad` on the same `days/{date}` document.
 - **Download PDF** — see [PDF export](#pdf-export-the-daily-frame) below. **Nuance:** it uses the same capped 5-item "Today tasks" list and your pinned-task titles as shown on the dashboard at click time — it is not a full task export.
-- **Open day planner** — links to `/planner/day` for the current date.
+- **Open day planner** — links to `/plan/day` for the current date.
 
 **Nuance:** the whole day's state — session, pinned tasks, scratchpad, review, and the Load Index snapshot — lives on **one Firestore document** (`days/{date}`), not four-plus separate ones. Opening the dashboard costs one read for all of it, not four.
 
@@ -100,7 +140,7 @@ While a workday session is active, a 30-second internal check compares elapsed t
 
 **Nuances:** this is a pure client-side timer — it only runs while the tab is open and only checks every 30 seconds, so reminders can fire a little late if the tab is backgrounded/throttled by the browser, or not at all if the tab/computer is asleep. There's no server-side or push-notification fallback.
 
-### Pomodoro timer
+### Focus timer (formerly Pomodoro timer)
 
 Available compact on the dashboard and wherever else it's embedded.
 
@@ -124,7 +164,7 @@ Standard task CRUD: title, optional description, category, priority, optional du
 - Marking a task done from the checkbox sets `status: "done"` and stamps `completedAt`; unchecking always reverts to `todo`.
 - An inline "In progress" link on each task sets its status without touching the checkbox.
 
-### Day Planner (`/planner/day`)
+### Plan — Day (formerly Day Planner) (`/plan/day`)
 
 A 24-hour timeline editor for one date (`?date=yyyy-MM-dd` in the URL; defaults to today; the Calendar page links here with a specific date).
 
@@ -134,9 +174,9 @@ A 24-hour timeline editor for one date (`?date=yyyy-MM-dd` in the URL; defaults 
   - The **default** template is the one "Start day" applies automatically when today has no schedule yet. Your first template (sample or custom) is marked default automatically; after that, use the star icon to change it.
   - **"Add sample"** only appears when you have zero templates — it seeds one research-weekday template and marks it default. It won't create duplicates on repeat clicks because it's simply not there to click once a template exists.
 
-### Calendar (`/calendar`)
+### Plan — Calendar (formerly Calendar) (`/plan/calendar`)
 
-A month grid aggregating, per day: class sessions from active courses, task due dates, and checkpoint due dates, plus a small dot indicating whether a `DailySchedule` document already exists for that date. Clicking any day opens `/planner/day` for that date (even if nothing is scheduled yet — you'll land on an empty timeline).
+A month grid aggregating, per day: class sessions from active courses, task due dates, and checkpoint due dates, plus a small dot indicating whether a `DailySchedule` document already exists for that date. Clicking any day opens `/plan/day` for that date (even if nothing is scheduled yet — you'll land on an empty timeline).
 
 **Nuances:**
 
@@ -186,7 +226,7 @@ The spaced-repetition engine Phase 2 adds on top of Phase 1's class logs and top
 - **A `paperGroup`-kind card looks different**: no reveal step. It shows every paper in the group side by side with its latest completed pass's summary, a text box asking "what's the through-line, and what changed since last time?", and the same four grade buttons — see [Paper groups](#paper-groups--combined-revision-and-survey-mode) above. Typing a synthesis and then grading saves both in one action; grading without typing anything just grades.
 - Space/Enter reveals a topic/paper card; **1/2/3/4** grade once revealed (or immediately, for a group card). Each grade is a single Firestore write to that item — reviewing a full 20-item queue costs about 20 writes, not a write per side-effect.
 
-### Next Action & Load Index
+### Up next & Workload (formerly Next Action & Load Index)
 
 - **Next Action** (the dashboard card) picks from, in order: an urgent `requiresPrep` checkpoint inside its lead window → your revision queue if non-empty → your highest-priority open task due this week → (if you're already past LI 1.3) an explicit rest suggestion → nothing, if none of those apply. It's a plain function, not a model call, so it's instant and never wrong about what data it saw.
 - **The Load Index (LI)** is one number: `actual minutes ÷ required minutes` for today (required is floored at 30 minutes so an empty morning doesn't spike it). Bands: **<0.60 Behind**, **0.60–0.89 Light day**, **0.90–1.15 On track**, **1.16–1.50 Ahead**, **>1.50 Overrun**.
@@ -195,7 +235,7 @@ The spaced-repetition engine Phase 2 adds on top of Phase 1's class logs and top
 - **Nuance:** the dashboard shows a **live** LI that recomputes on every render from current data — it is not the historical record. A **snapshot** is only written to `days/{date}.loadIndex` when you click **"End day"**, which is what the Analytics page's Load Index trend chart reads. If you never click End day, no history accumulates, even though the dashboard number was there all along.
 - **Debt, Coverage, Streak** (Phase 6, `lib/loadindex.ts`): Debt is a rolling 14-day sum of `max(0, required − actual)` in hours, capped at 40h so a long dry spell stays legible — shown on the dashboard's Load Index widget and the Weekly Review. Streak now counts consecutive days at LI ≥ 0.9, replacing the old pomodoro-day streak in that one slot (the pomodoro streak itself still shows separately on Analytics/Weekly Review). Coverage (`topics revised ≥1 time ÷ topics logged`, per course) shows on each course card on `/courses` — "revised" means the topic's linked revision item has at least one completed rep, not just that one exists.
 
-### Papers (`/papers`) — the 3-pass reading workflow
+### Papers (`/papers`) — the Skim / Read / Deep dive reading workflow (formerly the 3-pass workflow)
 
 Rebuilt in Phase 3 around Keshav's *How to Read a Paper* rather than a status pill. The list page shows title/authors/venue/year, a **derived** status badge, a progress bar, and links to a full detail page (`/papers/{id}`) where the actual reading happens.
 
@@ -237,7 +277,7 @@ Two AI tasks that need the actual PDF, not a text summary of it — both live on
 - **Verified live** against the real Anthropic API before shipping: a synthetic 2-page test PDF confirmed the Files API upload, caching (a second call reused the same `file_id`), and schema-valid responses from both tasks (~$0.07 total) — this run also caught a real bug, below. The quote-matching algorithm was separately verified against real `pdf.js`-extracted text from the same test PDF (via `pdfjs-dist`'s Node-targeted "legacy" build, since the shipped code's browser-oriented dynamic import can't run standalone in Node), confirming exact matches, correct dehyphenation/line-joining across wrapped text, and correct multi-line quad merging.
 - **Bug found during that live test**: both tasks originally capped `maxTokens` at 2000; a real Layered Notes call filled exactly that budget and returned truncated (invalid) JSON, which failed schema validation and surfaced as a 503 since the task has no fallback. Fixed by raising the caps (4000 for Layered Notes, 3000 for highlights) — the full L0-L3 shape plus a compressed `promptPack` routinely needs more than 2000 output tokens.
 
-### Paper groups — combined revision and survey mode
+### Paper sets — combined revision and literature survey (formerly Paper groups / survey mode)
 
 A group clusters 2+ papers for revision **as a comparison**, not five separate flashcards — you revise "what's the through-line and what changed since last time," which shows up as its own card type in `/review` (see [Review](#review-review) above): each paper's latest completed-pass summary side by side, a text box for the synthesis, and the same four grade buttons. The synthesis is saved to the group (`lastSynthesis`) and shown the next time you revise it.
 
@@ -249,7 +289,7 @@ The long-horizon layer that survives term boundaries (plan §11.1) — Phase 6. 
 
 An overdue milestone (>7 days past its due date, still not done) becomes a Critical alert (`lib/ai/triage.ts`) the next time triage runs.
 
-### The daily loop — morning brief & evening rollup
+### The daily loop — morning overview & suggestions for tomorrow (formerly morning brief / evening rollup)
 
 Phase 6's other half (plan §10.1): two daily crons plus on-demand generation for both.
 
@@ -258,7 +298,7 @@ Phase 6's other half (plan §10.1): two daily crons plus on-demand generation fo
 - **Nothing is ever auto-applied.** Each proposed task/slot on the Daily Review page is an editable card (title/category/pomodoros for tasks, start/end time for slots) with **Accept** (creates the real `Task`, or appends the slot into tomorrow's `DailySchedule` — creating it fresh if tomorrow has no schedule yet) and **Dismiss** buttons. Every decision is persisted (`EveningRollup.taskDecisions`/`slotDecisions`, keyed by array index) so reopening the page never re-offers something you already handled.
 - **Cut from this pass**: `unloggedClasses` is always `[]` for now — detecting "2+ unlogged classes" needs an extra per-course class-log read this pass didn't add, same deferral `lib/ai/triage.ts` already documented for its own version of that trigger. Per-goal hours-against-target isn't computed either (the data model has no session-to-goal attribution) — the Weekly Review shows each active goal's `targetHoursPerWeek` and milestone progress, not hours actually logged toward it.
 
-### Daily Review (`/reviews/daily`) and Weekly Review (`/reviews/weekly`)
+### Daily wrap-up (`/reviews/daily`) and Weekly check-in (`/reviews/weekly`) (formerly Daily Review / Weekly Review)
 
 - Daily review is keyed by date (a date picker lets you view/edit **any** past day, not just today): what got done, what was blocked, what should carry forward, plus 1–5 focus and energy ratings, and (today only) the Evening Rollup section above. All of it lives in that date's `days/{date}` document.
 - Weekly review is keyed by the current week's Monday: the free-text wins/missed-goals/blockers/priorities fields, plus (Phase 6) a **goal-centric section** — each active goal's milestone progress and target hours, with a "Mark reviewed" button for weekly-cadence goals — and a **Load Index trend** for the week (a chip per day) alongside the Debt/Streak stat tiles.

@@ -2,7 +2,9 @@
 
 import { orderBy } from "firebase/firestore";
 import { Sparkles } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { ModuleGate } from "@/components/module-gate";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
@@ -28,7 +30,7 @@ const GRADE_BUTTONS: { grade: RevisionGrade; label: string; hint: string; keys: 
   { grade: "easy", label: "Easy", hint: "4", keys: ["4"] }
 ];
 
-export default function ReviewPage() {
+function ReviewPageContent() {
   const { user } = useAuth();
   const today = todayKey();
   const { settings } = useUserSettings();
@@ -136,11 +138,11 @@ export default function ReviewPage() {
 
   return (
     <>
-      <SectionHeader title="Review" eyebrow={`${queue.length} due now · ${overdueCount} overdue · ${reviewedCount} reviewed today`} />
+      <SectionHeader title="Revise" eyebrow={`${queue.length} due now · ${overdueCount} overdue · ${reviewedCount} reviewed today`} />
       {current ? (
         group ? (
           <section className="card mx-auto max-w-3xl p-6">
-            <p className="label mb-3 text-center">Group revision · {group.name}</p>
+            <p className="label mb-3 text-center">Paper set revision · {group.name}</p>
             <div className="grid gap-3 sm:grid-cols-2">
               {groupPapers.map((paper) => {
                 const summary =
@@ -206,10 +208,22 @@ export default function ReviewPage() {
           </section>
         )
       ) : (
-        <div className="card mx-auto max-w-xl p-10 text-center text-sm text-ink-500 dark:text-ink-400">
-          Nothing due right now. Log a class on the Courses page to start building your review queue.
+        <div className="card mx-auto max-w-xl p-10 text-center">
+          <p className="text-sm text-ink-600 dark:text-ink-300">Cards appear after you log a class or save a paper for later.</p>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            <Link href="/courses" className="btn-primary px-3 py-1.5 text-xs">Log a class</Link>
+            <Link href="/papers" className="btn-secondary px-3 py-1.5 text-xs">Add a paper</Link>
+          </div>
         </div>
       )}
     </>
+  );
+}
+
+export default function ReviewPage() {
+  return (
+    <ModuleGate moduleId="revise">
+      <ReviewPageContent />
+    </ModuleGate>
   );
 }

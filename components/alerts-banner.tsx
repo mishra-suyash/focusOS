@@ -4,7 +4,9 @@ import { orderBy } from "firebase/firestore";
 import { AlertTriangle, X } from "lucide-react";
 import { useMemo } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { useFeatures } from "@/hooks/use-features";
 import { useUserCollection } from "@/hooks/use-user-collection";
+import { ALERT_TYPE_MODULE } from "@/lib/features";
 import { resolveAlert } from "@/lib/firestore";
 import type { Alert, AlertSeverity } from "@/types";
 
@@ -17,8 +19,16 @@ const SEVERITY_STYLES: Record<AlertSeverity, string> = {
 /** Deduped, severity-tagged signals from the daily triage run (lib/ai/triage.ts). Critical/Important surface here; General has no dedicated surface yet — it's the least common case today. */
 export function AlertsBanner() {
   const { user } = useAuth();
+  const { isEnabled } = useFeatures();
   const { items } = useUserCollection<Alert>("alerts", useMemo(() => [orderBy("createdAt", "desc")], []));
-  const active = items.filter((alert) => !alert.resolvedAt && (alert.severity === "critical" || alert.severity === "important")).slice(0, 5);
+  const active = items
+    .filter((alert) => !alert.resolvedAt && (alert.severity === "critical" || alert.severity === "important"))
+    // Plan §9.2: the heads-up banner only shows alerts whose source module is enabled.
+    .filter((alert) => {
+      const moduleId = ALERT_TYPE_MODULE[alert.type];
+      return !moduleId || isEnabled(moduleId);
+    })
+    .slice(0, 5);
 
   if (active.length === 0) return null;
 

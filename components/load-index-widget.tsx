@@ -1,5 +1,6 @@
 "use client";
 
+import { InfoHint } from "@/components/info-hint";
 import { loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import type { LoadIndexSnapshot } from "@/types";
 
@@ -17,7 +18,10 @@ export function LoadIndexWidget({
   return (
     <section className="card p-4">
       <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-base font-semibold">Load Index</h2>
+        <h2 className="flex items-center gap-1 text-base font-semibold">
+          Workload
+          <InfoHint term="workload" />
+        </h2>
         <span className={`rounded px-2 py-0.5 text-xs font-semibold ${loadIndexBandStyles[snapshot.band]}`}>
           {loadIndexBandLabels[snapshot.band]}
         </span>
@@ -28,8 +32,18 @@ export function LoadIndexWidget({
       </p>
       {debtHours !== undefined || streak !== undefined ? (
         <div className="mt-3 flex gap-4 border-t border-ink-100 pt-2 text-xs text-ink-500 dark:border-ink-800">
-          {streak !== undefined ? <span>{streak}-day streak</span> : null}
-          {debtHours !== undefined ? <span>{debtHours}h debt (14-day)</span> : null}
+          {streak !== undefined ? (
+            <span className="inline-flex items-center gap-1">
+              {streak}-day streak
+              <InfoHint term="onTrackStreak" />
+            </span>
+          ) : null}
+          {debtHours !== undefined ? (
+            <span className="inline-flex items-center gap-1">
+              {debtHours}h catch-up (14-day)
+              <InfoHint term="catchUpHours" />
+            </span>
+          ) : null}
         </div>
       ) : null}
     </section>

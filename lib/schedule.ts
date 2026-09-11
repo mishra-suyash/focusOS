@@ -135,6 +135,11 @@ export function createSlot(partial: Partial<ScheduleSlot> = {}): ScheduleSlot {
   };
 }
 
+/** Turns a bare slot shape (title/type/startTime/endTime/note — a template catalog entry's shape, no id/status) into real `ScheduleSlot`s with fresh ids. Shared by both the built-in and admin-published (org) template materialization paths. */
+export function materializeSlots(slots: Array<Pick<ScheduleSlot, "title" | "type" | "startTime" | "endTime"> & { note?: string }>): ScheduleSlot[] {
+  return slots.map((slot) => createSlot(slot));
+}
+
 /**
  * Shifts every slot by a fixed offset so the earliest slot starts at `newStart`
  * (plan §6.2's "My day starts at" personalization). Pure — returns a new array,
