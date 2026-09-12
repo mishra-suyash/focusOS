@@ -4,12 +4,14 @@ import { orderBy } from "firebase/firestore";
 import { Copy, Plus, Star, Trash2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { DayTimelineEditor } from "@/components/plan/day-timeline-editor";
 import { EmptyState } from "@/components/empty-state";
 import { InfoHint } from "@/components/info-hint";
 import { MoreOptions } from "@/components/more-options";
 import { SectionHeader } from "@/components/section-header";
 import { TemplateGalleryDialog } from "@/components/template-gallery";
 import { useAuth } from "@/components/auth-provider";
+import { useFeatures } from "@/hooks/use-features";
 import { useTemplateCatalog } from "@/hooks/use-template-catalog";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import {
@@ -45,9 +47,11 @@ export default function DayPlannerPage() {
 
 function DayPlannerContent() {
   const { user } = useAuth();
+  const { isEnabled } = useFeatures();
+  const timelineEditorEnabled = isEnabled("planDayTimeline");
   const searchParams = useSearchParams();
   const [dateKey, setDateKey] = useState(todayKey());
-  const { items: schedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
+  const { items: schedules, loading: schedulesLoading } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
   const { items: templates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { catalog } = useTemplateCatalog();
@@ -113,67 +117,69 @@ function DayPlannerContent() {
       <SectionHeader title="Day" eyebrow={friendlyDate(dateKey)}>
         <input className="input max-w-48" type="date" value={dateKey} onChange={(event) => setDateKey(event.target.value)} />
       </SectionHeader>
-      <div className="grid gap-6 xl:grid-cols-[320px_1fr]">
-        <aside className="space-y-6">
-          <section className="card p-5">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Templates</h2>
-              <button className="btn-secondary py-1.5 text-xs" onClick={() => setGalleryOpen(true)}>Browse templates</button>
-            </div>
-            <div className="space-y-3">
-              {templates.map((template) => (
-                <article key={template.id} className="rounded-md border border-ink-200 p-3 dark:border-ink-800">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-medium">{template.name}</h3>
-                    {template.isDefault ? (
-                      <span className="rounded-md bg-moss-600/10 px-1.5 py-0.5 text-[11px] font-medium text-moss-700 dark:text-moss-400">Default</span>
+      <div className={timelineEditorEnabled ? "grid gap-6" : "grid gap-6 xl:grid-cols-[320px_1fr]"}>
+        {!timelineEditorEnabled ? (
+          <aside className="space-y-6">
+            <section className="card p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-lg font-semibold">Templates</h2>
+                <button className="btn-secondary py-1.5 text-xs" onClick={() => setGalleryOpen(true)}>Browse templates</button>
+              </div>
+              <div className="space-y-3">
+                {templates.map((template) => (
+                  <article key={template.id} className="rounded-md border border-ink-200 p-3 dark:border-ink-800">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-medium">{template.name}</h3>
+                      {template.isDefault ? (
+                        <span className="rounded-md bg-moss-600/10 px-1.5 py-0.5 text-[11px] font-medium text-moss-700 dark:text-moss-400">Default</span>
+                      ) : null}
+                    </div>
+                    {template.description ? <p className="mt-1 text-sm text-ink-500">{template.description}</p> : null}
+                    <p className="mt-2 text-xs text-ink-500">{template.slots.length} blocks</p>
+                    {orgUpdateFor(template) ? (
+                      <div className="mt-2 flex items-center gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1.5 text-xs text-sky-800 dark:text-sky-200">
+                        <span>Update available from your group</span>
+                        <button className="btn-secondary py-1 text-[11px]" onClick={() => updateFromOrg(template, orgUpdateFor(template)!)}>
+                          Update my copy
+                        </button>
+                      </div>
                     ) : null}
-                  </div>
-                  {template.description ? <p className="mt-1 text-sm text-ink-500">{template.description}</p> : null}
-                  <p className="mt-2 text-xs text-ink-500">{template.slots.length} blocks</p>
-                  {orgUpdateFor(template) ? (
-                    <div className="mt-2 flex items-center gap-2 rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-1.5 text-xs text-sky-800 dark:text-sky-200">
-                      <span>Update available from your group</span>
-                      <button className="btn-secondary py-1 text-[11px]" onClick={() => updateFromOrg(template, orgUpdateFor(template)!)}>
-                        Update my copy
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button className="btn-primary py-1.5 text-xs" onClick={() => applyTemplate(template)}>Apply</button>
+                      {!template.isDefault ? (
+                        <button
+                          className="btn-secondary px-2 py-1.5"
+                          onClick={() => user && setDefaultTemplate(user.uid, templates, template.id)}
+                          aria-label="Set as workday template"
+                          title="Set as workday template — used automatically by Start day"
+                        >
+                          <Star className="h-3.5 w-3.5" />
+                        </button>
+                      ) : null}
+                      <button className="btn-secondary px-2 py-1.5" onClick={() => user && duplicateDayTemplate(user.uid, template)} aria-label="Duplicate template">
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                      <button className="btn-secondary px-2 py-1.5" onClick={() => user && deleteDayTemplate(user.uid, template.id)} aria-label="Delete template">
+                        <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     </div>
-                  ) : null}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button className="btn-primary py-1.5 text-xs" onClick={() => applyTemplate(template)}>Apply</button>
-                    {!template.isDefault ? (
-                      <button
-                        className="btn-secondary px-2 py-1.5"
-                        onClick={() => user && setDefaultTemplate(user.uid, templates, template.id)}
-                        aria-label="Set as workday template"
-                        title="Set as workday template — used automatically by Start day"
-                      >
-                        <Star className="h-3.5 w-3.5" />
-                      </button>
-                    ) : null}
-                    <button className="btn-secondary px-2 py-1.5" onClick={() => user && duplicateDayTemplate(user.uid, template)} aria-label="Duplicate template">
-                      <Copy className="h-3.5 w-3.5" />
-                    </button>
-                    <button className="btn-secondary px-2 py-1.5" onClick={() => user && deleteDayTemplate(user.uid, template.id)} aria-label="Delete template">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </article>
-              ))}
-              {templates.length === 0 ? <p className="text-sm text-ink-500">Create a template from today or browse the built-in catalog.</p> : null}
-            </div>
-          </section>
-          <section className="card p-5">
-            <h2 className="mb-4 text-lg font-semibold">Save as template</h2>
-            <div className="space-y-3">
-              <input className="input" value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Template name" />
-              <textarea className="input min-h-20" value={templateDescription} onChange={(event) => setTemplateDescription(event.target.value)} placeholder="Optional description" />
-              <button className="btn-primary w-full" onClick={createTemplateFromCurrent} disabled={slots.length === 0 || errors.length > 0}>
-                Save template
-              </button>
-            </div>
-          </section>
-        </aside>
+                  </article>
+                ))}
+                {templates.length === 0 ? <p className="text-sm text-ink-500">Create a template from today or browse the built-in catalog.</p> : null}
+              </div>
+            </section>
+            <section className="card p-5">
+              <h2 className="mb-4 text-lg font-semibold">Save as template</h2>
+              <div className="space-y-3">
+                <input className="input" value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Template name" />
+                <textarea className="input min-h-20" value={templateDescription} onChange={(event) => setTemplateDescription(event.target.value)} placeholder="Optional description" />
+                <button className="btn-primary w-full" onClick={createTemplateFromCurrent} disabled={slots.length === 0 || errors.length > 0}>
+                  Save template
+                </button>
+              </div>
+            </section>
+          </aside>
+        ) : null}
         <section className="card p-5">
           <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
@@ -181,49 +187,67 @@ function DayPlannerContent() {
               <p className="mt-1 text-sm text-ink-500">Gaps are allowed as implicit free time. Overlaps are blocked.</p>
             </div>
             <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1">
-                <button className="btn-secondary" onClick={() => setSlots((items) => sortedSlots([...items, createSlot()]))}>
-                  <Plus className="h-4 w-4" />
-                  Add block
-                </button>
-                <InfoHint term="block" />
-              </span>
-              <button className="btn-primary" onClick={saveDay} disabled={errors.length > 0}>Save day</button>
+              {!timelineEditorEnabled ? (
+                <span className="inline-flex items-center gap-1">
+                  <button className="btn-secondary" onClick={() => setSlots((items) => sortedSlots([...items, createSlot()]))}>
+                    <Plus className="h-4 w-4" />
+                    Add block
+                  </button>
+                  <InfoHint term="block" />
+                </span>
+              ) : null}
+              {!timelineEditorEnabled ? (
+                <button className="btn-primary" onClick={saveDay} disabled={errors.length > 0}>Save day</button>
+              ) : null}
             </div>
           </div>
-          {errors.length > 0 ? (
+          {!timelineEditorEnabled && errors.length > 0 ? (
             <div className="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
               {errors.map((error) => <p key={error}>{error}</p>)}
             </div>
           ) : null}
-          <div className="space-y-3">
-            {slots.map((slot, index) => (
-              <SlotEditor
-                key={slot.id}
-                slot={slot}
-                index={index}
-                tasks={tasks}
-                onChange={(next) => setSlots((items) => items.map((item) => (item.id === slot.id ? next : item)))}
-                onDelete={() => setSlots((items) => items.filter((item) => item.id !== slot.id))}
-                onMove={(direction) => {
-                  setSlots((items) => {
-                    const copy = [...items];
-                    const target = direction === "up" ? index - 1 : index + 1;
-                    if (target < 0 || target >= copy.length) return items;
-                    [copy[index], copy[target]] = [copy[target], copy[index]];
-                    return copy;
-                  });
-                }}
-              />
-            ))}
-            {slots.length === 0 ? (
-              <EmptyState
-                sentence="Your day, block by block."
-                primary={{ label: "Use a template", onClick: () => setGalleryOpen(true) }}
-                template={{ label: "Add a block", onClick: () => setSlots((items) => sortedSlots([...items, createSlot()])) }}
-              />
-            ) : null}
-          </div>
+          {timelineEditorEnabled ? (
+            // `DayTimelineEditor` seeds its undo stack and autosave baseline from `schedule` once,
+            // on mount — mounting it before the `dailySchedules` snapshot has ever arrived would
+            // seed both from "no schedule" (an empty day), which the real doc's later arrival can
+            // never correct: the undo stack would start from an empty day, and the autosave
+            // baseline would then read the real doc as a foreign, newer "another tab" change —
+            // "Keep mine" on that banner would overwrite the real saved day with an empty one.
+            schedulesLoading ? (
+              <p className="text-sm text-ink-500">Loading…</p>
+            ) : (
+              <DayTimelineEditor key={dateKey} uid={user!.uid} dateKey={dateKey} schedule={schedule ?? null} tasks={tasks} onSlotsChange={setSlots} />
+            )
+          ) : (
+            <div className="space-y-3">
+              {slots.map((slot, index) => (
+                <SlotEditor
+                  key={slot.id}
+                  slot={slot}
+                  index={index}
+                  tasks={tasks}
+                  onChange={(next) => setSlots((items) => items.map((item) => (item.id === slot.id ? next : item)))}
+                  onDelete={() => setSlots((items) => items.filter((item) => item.id !== slot.id))}
+                  onMove={(direction) => {
+                    setSlots((items) => {
+                      const copy = [...items];
+                      const target = direction === "up" ? index - 1 : index + 1;
+                      if (target < 0 || target >= copy.length) return items;
+                      [copy[index], copy[target]] = [copy[target], copy[index]];
+                      return copy;
+                    });
+                  }}
+                />
+              ))}
+              {slots.length === 0 ? (
+                <EmptyState
+                  sentence="Your day, block by block."
+                  primary={{ label: "Use a template", onClick: () => setGalleryOpen(true) }}
+                  template={{ label: "Add a block", onClick: () => setSlots((items) => sortedSlots([...items, createSlot()])) }}
+                />
+              ) : null}
+            </div>
+          )}
           {templates.length > 0 ? (
             <div className="mt-6">
               <h3 className="mb-3 text-sm font-semibold">Update existing template from this day</h3>

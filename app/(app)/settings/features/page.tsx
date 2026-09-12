@@ -8,7 +8,7 @@ import { useFeatures } from "@/hooks/use-features";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { CORE_MODULES, FEATURE_MODULES, withModuleToggled, type ModuleId } from "@/lib/features";
 
-const TOGGLEABLE_MODULES: ModuleId[] = (Object.keys(FEATURE_MODULES) as ModuleId[]).filter((id) => !CORE_MODULES.includes(id));
+const TOGGLEABLE_MODULES: ModuleId[] = (Object.keys(FEATURE_MODULES) as ModuleId[]).filter((id) => !CORE_MODULES.includes(id) && !FEATURE_MODULES[id].hidden);
 
 /**
  * U5's `/settings/features` (plan §8.3's "Discover more features" link, §11's U5 row) — the full

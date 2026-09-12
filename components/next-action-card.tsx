@@ -5,7 +5,7 @@ import Link from "next/link";
 import { InfoHint } from "@/components/info-hint";
 import type { NextAction } from "@/lib/next-action";
 
-export function NextActionCard({ action }: { action: NextAction | null }) {
+export function NextActionCard({ action, onScheduleIt }: { action: NextAction | null; onScheduleIt?: () => void }) {
   if (!action) {
     return (
       <section className="card p-4">
@@ -30,10 +30,17 @@ export function NextActionCard({ action }: { action: NextAction | null }) {
           <h2 className="text-lg font-semibold leading-snug">{action.title}</h2>
           <p className="mt-1 text-sm text-ink-500">{action.why}</p>
           {action.kind !== "rest" ? (
-            <Link href={action.href} className="btn-primary mt-3 py-1.5 text-xs">
-              Go
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link href={action.href} className="btn-primary py-1.5 text-xs">
+                Go
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+              {onScheduleIt ? (
+                <button className="btn-secondary py-1.5 text-xs" onClick={onScheduleIt}>
+                  Schedule it
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>

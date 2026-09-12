@@ -8,6 +8,8 @@ export interface NextAction {
   title: string;
   why: string;
   href: string;
+  /** DP5 S5 "Schedule it" — set only for `kind: "task"`, the one case with a concrete Task to size a block from (`lib/timeline.ts`'s `createTaskBlock`). The other kinds still get a plain default-duration block from just their `title`. */
+  taskId?: string;
 }
 
 function daysBetween(laterKey: string, earlierKey: string): number {
@@ -73,7 +75,7 @@ export function pickNextAction({
       .sort((a, b) => (a.dueDate! < b.dueDate! ? -1 : 1))[0] ?? openTasks.find((task) => task.dueDate === todayKey);
 
   if (topTask) {
-    return { kind: "task", title: topTask.title, why: "Highest-priority open task due this week", href: "/tasks" };
+    return { kind: "task", title: topTask.title, why: "Highest-priority open task due this week", href: "/tasks", taskId: topTask.id };
   }
 
   if (enabled("analytics") && loadIndexValue > 1.3) {

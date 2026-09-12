@@ -18,7 +18,9 @@
     "manage:ai-settings": "node scripts/manage-ai-settings.mjs",
     "manage:templates": "tsx scripts/manage-templates.ts",
     "verify:templates": "tsx scripts/verify-templates.ts",
-    "verify:vocabulary": "tsx scripts/verify-vocabulary.ts"
+    "verify:vocabulary": "tsx scripts/verify-vocabulary.ts",
+    "verify:timeline": "tsx scripts/verify-timeline.ts",
+    "verify:undo-stack": "tsx scripts/verify-undo-stack.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

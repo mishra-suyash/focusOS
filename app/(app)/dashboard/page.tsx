@@ -3,7 +3,8 @@
 import { limit, orderBy } from "firebase/firestore";
 import { Settings2, Star } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { clsx } from "clsx";
 import { AlertsBanner } from "@/components/alerts-banner";
 import { NudgeBanner } from "@/components/nudge-banner";
@@ -24,18 +25,29 @@ import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { friendlyDate, todayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { resolveDashboardWidgets } from "@/lib/dashboard-widgets";
-import { saveDayFields, updateTask } from "@/lib/firestore";
+import { saveDailySchedule, saveDayFields, updateTask } from "@/lib/firestore";
 import { computeStatusPatch } from "@/lib/tasks";
 import { todayMetrics } from "@/lib/analytics";
 import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak } from "@/lib/loadindex";
 import { pickNextAction } from "@/lib/next-action";
 import { downloadDailyFramePdf } from "@/lib/pdf";
-import { scheduleSummary } from "@/lib/schedule";
+import { createSlot, currentMinute, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
+import { createTaskBlock, nearestFreeGap, taskBlockMinutes } from "@/lib/timeline";
 import { isBreakMode } from "@/lib/terms";
-import type { Course, DailySchedule, Day, Goal, Paper, PomodoroSession, Task, Term } from "@/types";
+import type { Course, DailySchedule, Day, Goal, Paper, PomodoroSession, ScheduleSlotType, Task, Term } from "@/types";
 
 export default function DashboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardContent />
+    </Suspense>
+  );
+}
+
+function DashboardContent() {
   const { user } = useAuth();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const { enabledModules } = useFeatures();
   const { settings, update: updateSettings } = useUserSettings();
   const widgets = resolveDashboardWidgets(settings);
@@ -82,6 +94,46 @@ export default function DashboardPage() {
     weekEndKey: weekEnd,
     enabledModules
   });
+
+  // DP5 S4 "Start focus session from a block" — `BlockInspector` links here with
+  // `?startFocus=1&label=...&category=...&slotId=...`; `useSearchParams()` is stable per URL, so
+  // this only recomputes (and only re-triggers PomodoroTimer's consume effect) when the query
+  // string actually changes, not on every dashboard re-render.
+  const initialFocus = useMemo(() => {
+    if (searchParams.get("startFocus") !== "1") return null;
+    const label = searchParams.get("label");
+    const category = searchParams.get("category") as Task["category"] | null;
+    if (!label || !category) return null;
+    return { label, category, slotId: searchParams.get("slotId") ?? undefined };
+  }, [searchParams]);
+
+  function clearFocusParams() {
+    router.replace("/dashboard", { scroll: false });
+  }
+
+  /** S5 "Schedule it" on the Up next card — places it in the next free gap after now and opens Plan — Day. */
+  async function scheduleAction() {
+    if (!user || !nextAction || nextAction.kind === "rest") return;
+    const currentSlots = dailySchedule?.slots ?? [];
+    const workMinutes = settings.workMinutes ?? 25;
+    let block;
+    if (nextAction.kind === "task" && nextAction.taskId) {
+      const task = tasks.find((item) => item.id === nextAction.taskId);
+      if (!task) return;
+      const duration = taskBlockMinutes(task, workMinutes);
+      const gapStart = nearestFreeGap(currentSlots, currentMinute(), duration);
+      if (gapStart === null) return;
+      block = createTaskBlock(task, workMinutes, gapStart);
+    } else {
+      const duration = 45;
+      const type: ScheduleSlotType = nextAction.kind === "revision" ? "reading" : "admin";
+      const gapStart = nearestFreeGap(currentSlots, currentMinute(), duration);
+      if (gapStart === null) return;
+      block = createSlot({ title: nextAction.title, type, startTime: minutesToTime(gapStart), endTime: minutesToTime(gapStart + duration) });
+    }
+    await saveDailySchedule(user.uid, { dateKey: today, templateId: dailySchedule?.templateId, slots: sortedSlots([...currentSlots, block]) });
+    router.push(`/plan/day?date=${today}`);
+  }
 
   const pinnedIds = day?.pinnedTaskIds ?? [];
   const pinnedTasks = pinnedIds.map((id) => tasks.find((task) => task.id === id)).filter((task): task is Task => Boolean(task));
@@ -153,7 +205,7 @@ export default function DashboardPage() {
       <NudgeBanner data={{ tasks, sessions, papers, courses, goals, recentDays }} />
       <GettingStartedChecklist data={{ tasks, sessions, papers, courses, goals, recentDays }} />
       {widgets.has("morningOverview") ? <MorningBriefCard brief={day?.brief} /> : null}
-      <NextActionCard action={nextAction} />
+      <NextActionCard action={nextAction} onScheduleIt={scheduleAction} />
       {widgets.has("metricsStrip") ? (
         <section className="card p-3">
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
@@ -183,7 +235,7 @@ export default function DashboardPage() {
       */}
       <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)_340px]">
         <div className="space-y-4">
-          <PomodoroTimer sessions={todaysSessions} tasks={tasks} compact />
+          <PomodoroTimer sessions={todaysSessions} tasks={tasks} compact initialFocus={initialFocus} onInitialFocusConsumed={clearFocusParams} />
           <section className="card p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-base font-semibold">Today&apos;s tasks</h2>

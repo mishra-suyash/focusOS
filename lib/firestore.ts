@@ -302,15 +302,17 @@ export async function saveDailySchedule(
   const existing = await getDoc(ref);
   trackRead(1);
   trackWrite();
+  const updatedAt = now();
   await setDoc(
     ref,
     withoutUndefined({
       ...schedule,
       createdAt: existing.exists() ? existing.data().createdAt : schedule.createdAt ?? now(),
-      updatedAt: now()
+      updatedAt
     }),
     { merge: true }
   );
+  return { updatedAt };
 }
 
 export async function createTerm(uid: string, term: NewTerm) {

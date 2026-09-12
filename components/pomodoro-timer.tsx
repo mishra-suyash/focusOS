@@ -27,9 +27,23 @@ interface PendingSession {
   completedAt: string;
   cycle: number;
   taskId?: string;
+  slotId?: string;
 }
 
-export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessions: PomodoroSession[]; tasks?: Task[]; compact?: boolean }) {
+export function PomodoroTimer({
+  sessions,
+  tasks = [],
+  compact = false,
+  initialFocus,
+  onInitialFocusConsumed
+}: {
+  sessions: PomodoroSession[];
+  tasks?: Task[];
+  compact?: boolean;
+  /** DP5 S4 "Start focus session from a block" — pre-fills label/category/slotId and starts the timer running immediately, closing the plan-to-do loop in one click from `BlockInspector`. Consumed once (via `onInitialFocusConsumed`) so a re-render doesn't keep restarting the timer. */
+  initialFocus?: { label: string; category: Category; slotId?: string } | null;
+  onInitialFocusConsumed?: () => void;
+}) {
   const { user } = useAuth();
   const { settings, loaded: settingsLoaded, update: updateSettings } = useUserSettings();
   const [work, setWork] = useState(25);
@@ -42,8 +56,26 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
   const [label, setLabel] = useState("writing");
   const [category, setCategory] = useState<Category>("research");
   const [taskId, setTaskId] = useState("");
+  const [slotId, setSlotId] = useState<string | undefined>(undefined);
   const [pendingSession, setPendingSession] = useState<PendingSession | null>(null);
   const openTasks = tasks.filter((task) => task.status !== "done");
+
+  useEffect(() => {
+    if (!initialFocus) return;
+    setLabel(initialFocus.label);
+    setCategory(initialFocus.category);
+    setSlotId(initialFocus.slotId);
+    setTaskId("");
+    setMode("work");
+    // Explicit, not left to the `[duration, mode]` effect below: that effect only fires on a real
+    // *change* to `mode`/`duration`, and `mode` is already "work" in the common case (it's the
+    // default and where a session normally ends up) — leaving this implicit would start the timer
+    // running with whatever seconds happened to be left over from the previous session, which
+    // `completeSession` then reports as a full `duration`-minute session, inflating focus metrics.
+    setSecondsLeft(work * 60);
+    setRunning(true);
+    onInitialFocusConsumed?.();
+  }, [initialFocus]);
 
   const duration = useMemo(() => (mode === "work" ? work : mode === "short_break" ? shortBreak : longBreak), [longBreak, mode, shortBreak, work]);
   const progress = 100 - (secondsLeft / (duration * 60)) * 100;
@@ -95,7 +127,8 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
       minutes: duration,
       completedAt: new Date().toISOString(),
       cycle,
-      taskId: taskId || undefined
+      taskId: taskId || undefined,
+      slotId
     };
     if (mode === "work") {
       setPendingSession(data);
@@ -140,6 +173,7 @@ export function PomodoroTimer({ sessions, tasks = [], compact = false }: { sessi
           onChange={(e) => {
             const nextTaskId = e.target.value;
             setTaskId(nextTaskId);
+            setSlotId(undefined); // picking a task by hand means this session is no longer "from" whichever block started it
             // Plan §9.5: label/category default to the linked task's when one is picked — label
             // is now collapsed behind "More options", so this is the only way most sessions get
             // a label at all (it drives what "Today history" and the end-of-session survey show).

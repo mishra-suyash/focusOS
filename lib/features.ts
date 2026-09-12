@@ -22,7 +22,8 @@ export type ModuleId =
   | "weeklyCheckin"
   | "workload"
   | "analytics"
-  | "insights";
+  | "insights"
+  | "planDayTimeline";
 
 export interface FeatureModule {
   id: ModuleId;
@@ -32,6 +33,10 @@ export interface FeatureModule {
   core?: boolean;
   /** Another module this one depends on being enabled (e.g. paperTools needs stagedReading). */
   requires?: ModuleId[];
+  /** A rollout flag rather than a user-facing feature — excluded from `/settings/features`'s toggle list and from the "everything" pack's implicit membership, so it's only ever on for a settings doc that explicitly names it. */
+  hidden?: boolean;
+  /** Shown in `/settings/features` like any other module, but never auto-included by a pack (including "everything") — a deliberate, permanent choice the user makes for themselves rather than a default anyone gets by picking a pack. */
+  optIn?: boolean;
 }
 
 export const FEATURE_MODULES: Record<ModuleId, FeatureModule> = {
@@ -69,19 +74,28 @@ export const FEATURE_MODULES: Record<ModuleId, FeatureModule> = {
   weeklyCheckin: { id: "weeklyCheckin", label: "Weekly check-in", description: "A short weekly review of long-running goals." },
   workload: { id: "workload", label: "Workload", description: "How much you've done today compared with what today asked for." },
   analytics: { id: "analytics", label: "Analytics", description: "Trends across tasks, focus sessions, and load." },
-  insights: { id: "insights", label: "Insights", description: "AI-generated daily insight summaries." }
+  insights: { id: "insights", label: "Insights", description: "AI-generated daily insight summaries." },
+  /**
+   * plan/FocusOS-v2-Plan-Day-Timeline.md §7.3 registered this as a `hidden` rollout flag through
+   * DP0–DP5 while the new editor was being built. DP5 shipped it; the user has since chosen to
+   * keep both editors permanently rather than sunset the old one, so this is now `optIn` instead
+   * of `hidden` — a normal toggle in `/settings/features`, just never turned on for anyone by
+   * default (including the "everything" pack) since switching a user's editor out from under them
+   * without asking is worse than leaving it off until they opt in.
+   */
+  planDayTimeline: { id: "planDayTimeline", label: "Plan — Day timeline", description: "Drag-and-drop day editor with an editable time grid, instead of the simple block list.", optIn: true }
 };
 
 export const CORE_MODULES: ModuleId[] = Object.values(FEATURE_MODULES)
   .filter((module) => module.core)
   .map((module) => module.id);
 
-/** Additive modules each starter pack turns on beyond the core set (plan §8.1) — stagedReading is core (see above), so it's not listed here even for Research. */
+/** Additive modules each starter pack turns on beyond the core set (plan §8.1) — stagedReading is core (see above), so it's not listed here even for Research. Hidden (rollout-flag) modules are excluded even from "everything": see `FeatureModule.hidden`. */
 export const PACK_MODULES: Record<PackId, ModuleId[]> = {
   coursework: ["courses", "revise"],
   research: ["revise", "goals"],
   writing: ["goals", "weeklyCheckin"],
-  everything: Object.keys(FEATURE_MODULES) as ModuleId[],
+  everything: (Object.keys(FEATURE_MODULES) as ModuleId[]).filter((id) => !FEATURE_MODULES[id].hidden && !FEATURE_MODULES[id].optIn),
   core: []
 };
 

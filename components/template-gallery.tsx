@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { ChevronDown, ChevronUp, Star, X } from "lucide-react";
 import { clsx } from "clsx";
+import { DayStrip } from "@/components/plan/day-strip";
 import { InfoHint } from "@/components/info-hint";
 import { createDayTemplate, saveDailySchedule, setDefaultTemplate } from "@/lib/firestore";
 import { friendlyDate } from "@/lib/dates";
-import { formatMinutes, materializeSlots, minutesFromTime, scheduleFromTemplate, shiftTemplateSlots, slotDuration, slotTypeLabels, slotTypeStyles, sortedSlots } from "@/lib/schedule";
+import { formatMinutes, materializeSlots, scheduleFromTemplate, shiftTemplateSlots, slotDuration, slotTypeLabels, slotTypeStyles, sortedSlots } from "@/lib/schedule";
 import { BUILTIN_DAY_TEMPLATES, materializeBuiltinDayTemplate, type BuiltinDayTemplate } from "@/lib/templates/builtin";
 import { useTemplateCatalog } from "@/hooks/use-template-catalog";
 import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
@@ -227,14 +228,8 @@ function TemplateCard({
         </div>
         <span className="whitespace-nowrap text-xs text-ink-500">{formatMinutes(focusMinutes)} deep work</span>
       </div>
-      <div className="mt-2 flex h-2.5 overflow-hidden rounded-full border border-ink-200 dark:border-ink-800" aria-hidden>
-        {ordered.map((slot, index) => (
-          <div
-            key={index}
-            className={clsx("min-w-0.5 border-r border-white/70 last:border-r-0 dark:border-ink-950", slotTypeStyles[slot.type])}
-            style={{ flexGrow: Math.max(1, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime)) }}
-          />
-        ))}
+      <div className="mt-2">
+        <DayStrip variant="mini" slots={ordered} />
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         <button className="btn-secondary py-1.5 text-xs" onClick={onToggle}>

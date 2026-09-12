@@ -1,3 +1,4 @@
+import { Book, Briefcase, Brain, Car, Coffee, Dumbbell, GraduationCap, Moon, Sparkles, Utensils, type LucideIcon } from "lucide-react";
 import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotStatus, ScheduleSlotType, Task } from "@/types";
 
 export const slotTypes: ScheduleSlotType[] = ["deep_work", "reading", "meal", "free", "admin", "break", "commute", "sleep", "gym", "class", "custom"];
@@ -28,6 +29,21 @@ export const slotTypeStyles: Record<ScheduleSlotType, string> = {
   gym: "border-rose-500 bg-rose-500/10 text-rose-700 dark:text-rose-300",
   class: "border-fuchsia-500 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300",
   custom: "border-ink-400 bg-white text-ink-700 dark:bg-ink-900 dark:text-ink-200"
+};
+
+/** §9 "colour not the only signal" — a type icon on every block/strip segment, DP4. */
+export const slotTypeIcons: Record<ScheduleSlotType, LucideIcon> = {
+  deep_work: Brain,
+  reading: Book,
+  meal: Utensils,
+  free: Coffee,
+  admin: Briefcase,
+  break: Coffee,
+  commute: Car,
+  sleep: Moon,
+  gym: Dumbbell,
+  class: GraduationCap,
+  custom: Sparkles
 };
 
 export function minutesFromTime(time: string) {
@@ -124,7 +140,7 @@ export function taskNamesForSlot(slot: ScheduleSlot, tasks: Task[]) {
 export function createSlot(partial: Partial<ScheduleSlot> = {}): ScheduleSlot {
   return {
     id: partial.id ?? crypto.randomUUID(),
-    title: partial.title ?? "New slot",
+    title: partial.title ?? "New block",
     type: partial.type ?? "deep_work",
     startTime: partial.startTime ?? "09:00",
     endTime: partial.endTime ?? "10:30",
