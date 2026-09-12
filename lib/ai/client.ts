@@ -1,6 +1,8 @@
 "use client";
 
 import type { AiJob, AiProvider, AiTaskId, HighlightCandidate, LayeredNotes } from "@/types";
+import type { GenerateDayTemplateOutput } from "@/lib/ai/schemas";
+import type { GenerateDayTemplatePayload } from "@/lib/ai/tasks";
 
 export interface AiTaskCallResult<Output> {
   output: Output;
@@ -58,6 +60,18 @@ export async function generateHighlightCandidates(user: { getIdToken: () => Prom
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || "Failed to generate highlight candidates.");
   return body.quotes as HighlightCandidate[];
+}
+
+/**
+ * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.2 — no dedicated route: unlike
+ * layeredNotes/highlightCandidates, this task never touches a file, so the generic
+ * `callAiTask`/`/api/ai/run` already covers it.
+ */
+export async function generateDayTemplate(
+  user: { getIdToken: () => Promise<string> },
+  payload: GenerateDayTemplatePayload
+): Promise<AiTaskCallResult<GenerateDayTemplateOutput>> {
+  return callAiTask<GenerateDayTemplateOutput>(user, "plan.generateDayTemplate", payload);
 }
 
 export type { AiJob };

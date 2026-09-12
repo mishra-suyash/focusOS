@@ -14,6 +14,8 @@ import { useAuth } from "@/components/auth-provider";
 import { useFeatures } from "@/hooks/use-features";
 import { useTemplateCatalog } from "@/hooks/use-template-catalog";
 import { useUserCollection } from "@/hooks/use-user-collection";
+import { useUserSettings } from "@/hooks/use-user-settings";
+import { courseSlotsForDate } from "@/lib/courses";
 import {
   createDayTemplate,
   deleteDayTemplate,
@@ -25,15 +27,19 @@ import {
 import {
   createSlot,
   materializeSlots,
+  minutesFromTime,
   scheduleFromTemplate,
   slotTypeLabels,
   slotTypes,
   sortedSlots,
   validateSlots
 } from "@/lib/schedule";
+import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
+import { isBreakMode } from "@/lib/terms";
+import { rangeOverlapsSlots } from "@/lib/timeline";
 import { friendlyDate, todayKey } from "@/lib/dates";
 import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
-import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
+import type { Course, DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotType, Task, Term } from "@/types";
 
 type CatalogDayEntry = PublicCatalog["templates"][number] & { payload: DayTemplatePayload };
 
@@ -54,8 +60,22 @@ function DayPlannerContent() {
   const { items: schedules, loading: schedulesLoading } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
   const { items: templates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: courses, loading: coursesLoading } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: terms, loading: termsLoading } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
+  const { settings, loaded: settingsLoaded } = useUserSettings();
   const { catalog } = useTemplateCatalog();
   const schedule = schedules.find((item) => item.dateKey === dateKey);
+  // Routine-Blocks-and-AI-Templates spec §2.4 — this date's class + enabled routine blocks,
+  // always passed to `DayTimelineEditor` (which merges in whichever aren't already on the saved
+  // day — see its own `wantedLockedSlots` doc comment), not just when nothing is saved yet.
+  // Classes win on conflict: a lecture is a fixed external commitment, a routine anchor isn't.
+  const wantedLockedSlots = useMemo(() => {
+    const classSlots = isBreakMode(terms, dateKey) ? [] : courseSlotsForDate(courses, dateKey);
+    const routineSlots = routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, dateKey).filter(
+      (slot) => !rangeOverlapsSlots(minutesFromTime(slot.startTime), minutesFromTime(slot.endTime), classSlots)
+    );
+    return [...classSlots, ...routineSlots];
+  }, [terms, courses, settings.routineBlocks, dateKey]);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [templateName, setTemplateName] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
@@ -207,16 +227,25 @@ function DayPlannerContent() {
             </div>
           ) : null}
           {timelineEditorEnabled ? (
-            // `DayTimelineEditor` seeds its undo stack and autosave baseline from `schedule` once,
-            // on mount — mounting it before the `dailySchedules` snapshot has ever arrived would
-            // seed both from "no schedule" (an empty day), which the real doc's later arrival can
-            // never correct: the undo stack would start from an empty day, and the autosave
+            // `DayTimelineEditor` seeds its undo stack and autosave baseline from `schedule` (merged
+            // with `wantedLockedSlots`) once, on mount — mounting it before the
+            // `dailySchedules`/`courses`/`terms`/settings snapshots have all arrived would seed from
+            // stale/incomplete data (an empty day, or one missing class/routine blocks) that no later
+            // snapshot arrival can ever correct: the undo stack would start wrong, and the autosave
             // baseline would then read the real doc as a foreign, newer "another tab" change —
-            // "Keep mine" on that banner would overwrite the real saved day with an empty one.
-            schedulesLoading ? (
+            // "Keep mine" on that banner would overwrite the real saved day with the wrong one.
+            schedulesLoading || coursesLoading || termsLoading || !settingsLoaded ? (
               <p className="text-sm text-ink-500">Loading…</p>
             ) : (
-              <DayTimelineEditor key={dateKey} uid={user!.uid} dateKey={dateKey} schedule={schedule ?? null} tasks={tasks} onSlotsChange={setSlots} />
+              <DayTimelineEditor
+                key={dateKey}
+                uid={user!.uid}
+                dateKey={dateKey}
+                schedule={schedule ?? null}
+                wantedLockedSlots={wantedLockedSlots}
+                tasks={tasks}
+                onSlotsChange={setSlots}
+              />
             )
           ) : (
             <div className="space-y-3">

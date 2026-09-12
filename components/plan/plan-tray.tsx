@@ -1,13 +1,19 @@
 "use client";
 
 import { orderBy } from "firebase/firestore";
+import { Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { clsx } from "clsx";
 import { DayStrip } from "@/components/plan/day-strip";
 import type { TimeGridHandle } from "@/components/plan/time-grid";
+import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
+import { useUserSettings } from "@/hooks/use-user-settings";
+import { generateDayTemplate } from "@/lib/ai/client";
 import { addDaysToKey, todayKey } from "@/lib/dates";
-import { createSlot, minutesFromTime, minutesToTime, shiftTemplateSlots, slotTypeStyles, sortedSlots } from "@/lib/schedule";
+import { createDayTemplate } from "@/lib/firestore";
+import { createSlot, materializeSlots, minutesFromTime, minutesToTime, shiftTemplateSlots, slotTypeStyles, sortedSlots, validateSlots } from "@/lib/schedule";
+import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import {
   createTaskBlock,
   fillGaps,
@@ -21,7 +27,7 @@ import {
   type QuickBlockPreset
 } from "@/lib/timeline";
 import { BUILTIN_DAY_TEMPLATES, materializeBuiltinDayTemplate, type BuiltinDayTemplate } from "@/lib/templates/builtin";
-import type { DayTemplate, Priority, ScheduleSlot, Task } from "@/types";
+import type { DayTemplate, Goal, Priority, ScheduleSlot, Task } from "@/types";
 
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
 
@@ -32,6 +38,15 @@ function relevantTasks(tasks: Task[]): Task[] {
     .filter((task) => task.status !== "done")
     .filter((task) => task.status === "in_progress" || (task.dueDate && task.dueDate <= weekAhead))
     .sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || (a.dueDate ?? "9999-12-31").localeCompare(b.dueDate ?? "9999-12-31"));
+}
+
+/** `templateSlotSchema`'s "HH:mm" regex accepts any two digits per field — "99:99" passes it but
+ * isn't a real time, and `minutesFromTime` would happily turn it into a nonsensical-but-numeric
+ * minute count that could pass `validateSlots`' overlap math anyway. Checked separately from
+ * `validateSlots` since it's a per-slot format concern, not a cross-slot schedule one. */
+function isPlausibleTime(time: string): boolean {
+  const [hours, minutes] = time.split(":").map(Number);
+  return Number.isInteger(hours) && Number.isInteger(minutes) && hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
 }
 
 type TemplateSource = { id?: string; name: string; slots: ScheduleSlot[] };
@@ -54,14 +69,18 @@ type TrayGesture =
  * at its own original start time instead of a dragged-to one.
  */
 export function PlanTray({
+  dateKey,
   tasks,
   workMinutes,
   anchorMinute,
   slots,
   gridRef,
   onCommit,
-  onApplyTemplate
+  announce
 }: {
+  /** Which day this tray's "Create with AI" grounds its routine-block blackout windows in — the
+   * date `DayTimelineEditor` is currently showing, not necessarily today. */
+  dateKey: string;
   tasks: Task[];
   workMinutes: number;
   /** Where the non-drag "Schedule" actions anchor their `nearestFreeGap` search — the same value DayTimelineEditor's own "N" shortcut and duplicate-block action use (now, or the day's default start on other dates). */
@@ -69,11 +88,21 @@ export function PlanTray({
   slots: ScheduleSlot[];
   gridRef: RefObject<TimeGridHandle | null>;
   onCommit: (next: ScheduleSlot[]) => void;
-  onApplyTemplate: (next: ScheduleSlot[], templateId: string | undefined) => void;
+  /** DayTimelineEditor's §9 live-region announcer — lets `confirmFillGaps` say what happened when
+   * a template's blocks all conflicted with something already on the day (including class blocks),
+   * since silently doing nothing after a confirm click is indistinguishable from a broken button. */
+  announce?: (message: string) => void;
 }) {
+  const { user } = useAuth();
+  const { settings } = useUserSettings();
   const { items: userTemplates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
   const dragRef = useRef<TrayGesture | null>(null);
   const [templateDrop, setTemplateDrop] = useState<{ templateId?: string; name: string; slots: ScheduleSlot[] } | null>(null);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
   useEffect(() => {
     if (!templateDrop) return;
@@ -206,16 +235,84 @@ export function PlanTray({
     setTemplateDrop({ templateId: template.id, name: template.name, slots: freshTemplateSlots(template.slots) });
   }
 
-  function confirmReplace() {
+  // Template apply never overwrites anything — courses or otherwise. There used to be a "Replace
+  // day" option that wholesale-replaced `slots` with the template's own, which silently discarded
+  // any class blocks already on the day (they're never in a template, only ever materialized from
+  // `courses`). `fillGaps` already skips any template block that would overlap something existing
+  // (see its own doc comment), so it's the *only* apply mode now — a template can only add into
+  // genuinely free time. "Clear all" (`DayTimelineEditor`'s header) is the explicit, separate way
+  // to start a day over, and it too always keeps class blocks.
+  function confirmFillGaps() {
     if (!templateDrop) return;
-    onApplyTemplate(sortedSlots(templateDrop.slots), templateDrop.templateId);
+    const merged = fillGaps(slots, templateDrop.slots);
+    const added = merged.length - slots.length;
+    if (added === 0) {
+      // Nothing fit anywhere free — every template block conflicted with something already on the
+      // day (a class block or otherwise). Say so instead of silently no-opping, and skip the
+      // commit: an identical array on the undo stack would just be a wasted Undo step.
+      announce?.(`Every block in "${templateDrop.name}" overlapped something already on the day — nothing added.`);
+    } else {
+      onCommit(merged);
+      const skipped = templateDrop.slots.length - added;
+      announce?.(`Added ${added} block${added === 1 ? "" : "s"} from "${templateDrop.name}"${skipped > 0 ? `, skipped ${skipped} that overlapped` : ""}.`);
+    }
     setTemplateDrop(null);
   }
 
-  function confirmFillGaps() {
-    if (!templateDrop) return;
-    onCommit(fillGaps(slots, templateDrop.slots));
-    setTemplateDrop(null);
+  /** plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.3 — feeds the AI the user's free-text
+   * prompt plus routine blocks (as blackout windows the model is told not to overlap), open tasks,
+   * and active goals as grounding context. The result is fed into the exact same `templateDrop`
+   * confirm-bar/preview-ghost flow a dragged template already uses (`confirmFillGaps` above), so it
+   * inherits the never-overwrite guarantee for free — no new placement logic. */
+  async function generateWithAi() {
+    if (!user || !aiPrompt.trim()) return;
+    setAiBusy(true);
+    setAiError("");
+    try {
+      const routineBlocks = routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, dateKey).map((slot) => ({
+        label: slot.title,
+        type: slot.type,
+        startTime: slot.startTime,
+        endTime: slot.endTime
+      }));
+      const openTasks = relevantTasks(tasks).map((task) => ({ title: task.title, priority: task.priority, dueDate: task.dueDate }));
+      const activeGoals = goals.filter((goal) => goal.status === "active").map((goal) => ({ title: goal.title }));
+      const result = await generateDayTemplate(user, {
+        prompt: aiPrompt.trim(),
+        routineBlocks,
+        openTasks,
+        goals: activeGoals,
+        packId: settings.packId
+      });
+      const materialized = materializeSlots(result.output.slots);
+      // The schema (lib/ai/schemas.ts) only validates shape — "HH:mm" format, a known type enum,
+      // 1-16 slots. It doesn't (and can't, being per-slot) catch two AI slots overlapping each
+      // other, a slot ending before it starts, or an out-of-range hour/minute a regex alone can't
+      // reject. Reusing `validateSlots` here means a malformed candidate never reaches the grid or
+      // (via "Add & save as template") Firestore, where there'd be no UI left to repair it.
+      const invalidTime = materialized.find((slot) => !isPlausibleTime(slot.startTime) || !isPlausibleTime(slot.endTime));
+      const scheduleErrors = invalidTime ? [`${invalidTime.title} has an invalid time.`] : validateSlots(materialized);
+      if (scheduleErrors.length > 0) {
+        setAiError(`The AI produced an invalid schedule (${scheduleErrors[0]}) — try rephrasing the prompt.`);
+        return;
+      }
+      setTemplateDrop({ templateId: undefined, name: result.output.name, slots: materialized });
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : "Failed to generate a template.");
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  async function confirmSaveAsTemplate() {
+    if (!templateDrop || !user || savingTemplate) return;
+    setSavingTemplate(true);
+    try {
+      await createDayTemplate(user.uid, { name: templateDrop.name, slots: sortedSlots(templateDrop.slots) });
+      confirmFillGaps();
+    } finally {
+      setSavingTemplate(false);
+    }
   }
 
   // Fresh ids only need to be minted once per template list change, not on every render (every
@@ -236,9 +333,11 @@ export function PlanTray({
           <span className="flex-1">
             Apply &quot;{templateDrop.name}&quot; starting {templateDrop.slots[0]?.startTime}?
           </span>
-          <button className="btn-primary py-1 text-[11px]" onClick={confirmReplace}>Replace day</button>
-          <button className="btn-secondary py-1 text-[11px]" onClick={confirmFillGaps}>Fill gaps only</button>
-          <button className="btn-secondary py-1 text-[11px]" onClick={() => setTemplateDrop(null)}>Cancel</button>
+          <button className="btn-primary py-1 text-[11px]" onClick={confirmFillGaps} disabled={savingTemplate}>Add (skips conflicts)</button>
+          <button className="btn-secondary py-1 text-[11px]" onClick={confirmSaveAsTemplate} disabled={savingTemplate}>
+            {savingTemplate ? "Saving..." : "Add & save as template"}
+          </button>
+          <button className="btn-secondary py-1 text-[11px]" onClick={() => setTemplateDrop(null)} disabled={savingTemplate}>Cancel</button>
         </div>
       ) : null}
 
@@ -309,6 +408,22 @@ export function PlanTray({
 
       <section>
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-500">Templates</h3>
+        <div className="mb-3 space-y-1.5 rounded-md border border-ink-200 p-2 dark:border-ink-800">
+          <label className="flex items-center gap-1 text-[11px] font-medium text-ink-500">
+            <Sparkles className="h-3 w-3" />
+            Create with AI
+          </label>
+          <textarea
+            className="input min-h-14 text-xs"
+            value={aiPrompt}
+            onChange={(event) => setAiPrompt(event.target.value)}
+            placeholder="A balanced writing day with a long lunch..."
+          />
+          <button className="btn-secondary w-full py-1 text-[11px]" onClick={generateWithAi} disabled={aiBusy || !aiPrompt.trim()}>
+            {aiBusy ? "Generating..." : "Generate"}
+          </button>
+          {aiError ? <p className="text-[11px] text-red-600 dark:text-red-400">{aiError}</p> : null}
+        </div>
         <div className="space-y-2">
           {templateSources.map((template, index) => (
             <div

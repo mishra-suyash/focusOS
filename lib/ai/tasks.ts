@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import {
+  generateDayTemplateSchema,
   groupSynthesisSchema,
   highlightCandidatesSchema,
   insightDailySchema,
@@ -11,6 +12,7 @@ import {
   reviewEodSchema,
   splitTopicsSchema,
   triageActionsSchema,
+  type GenerateDayTemplateOutput,
   type GroupSynthesisOutput,
   type HighlightCandidatesOutput,
   type InsightDailyOutput,
@@ -24,7 +26,9 @@ import {
   type TriageActionsOutput
 } from "@/lib/ai/schemas";
 import { splitTopics as ruleSplitTopics } from "@/lib/classlog";
-import type { AiTaskId, AiTaskTier } from "@/types";
+import { minutesFromTime } from "@/lib/schedule";
+import { resolvePackWorkdayTemplate } from "@/lib/templates/builtin";
+import type { AiTaskId, AiTaskTier, PackId, ScheduleSlotType } from "@/types";
 
 export interface AiTaskDef<Payload, Output> {
   id: AiTaskId;
@@ -301,9 +305,65 @@ const insightDailyTask: AiTaskDef<InsightDailyPayload, InsightDailyOutput> = {
   fallback: ({ fallbackSummary, fallbackSuggestions }) => ({ summary: fallbackSummary, suggestions: fallbackSuggestions })
 };
 
+// --- plan.generateDayTemplate ----------------------------------------------
+// plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.1 — "Create a template with AI". No
+// dedicated route (unlike paper.layeredNotes/highlightCandidates): this never touches a file, so
+// the generic /api/ai/run already fits. No Firestore import anywhere in this task or its fallback
+// — `AI_TASKS` is loaded by a server route (app/api/ai/run/route.ts), so everything it touches
+// (lib/schedule.ts, lib/templates/builtin) has to stay a pure function of plain data.
+export interface GenerateDayTemplatePayload {
+  prompt: string;
+  routineBlocks: { label: string; type: ScheduleSlotType; startTime: string; endTime: string }[];
+  openTasks: { title: string; priority: string; dueDate?: string }[];
+  goals: { title: string }[];
+  packId?: PackId;
+}
+function overlapsAnyRoutineBlock(
+  slot: { startTime: string; endTime: string },
+  routineBlocks: GenerateDayTemplatePayload["routineBlocks"]
+): boolean {
+  const start = minutesFromTime(slot.startTime);
+  const end = minutesFromTime(slot.endTime);
+  return routineBlocks.some((block) => start < minutesFromTime(block.endTime) && minutesFromTime(block.startTime) < end);
+}
+const generateDayTemplateTask: AiTaskDef<GenerateDayTemplatePayload, GenerateDayTemplateOutput> = {
+  id: "plan.generateDayTemplate",
+  tier: "small",
+  preferLocal: true,
+  maxTokens: 800,
+  schema: generateDayTemplateSchema,
+  buildPrompt: ({ prompt, routineBlocks, openTasks, goals }) => {
+    const blackout =
+      routineBlocks.map((b) => `- ${b.label} (${b.type}): ${b.startTime}-${b.endTime}, do not overlap this`).join("\n") || "None";
+    const taskList = openTasks.slice(0, 10).map((t) => `- ${t.title} (${t.priority}${t.dueDate ? `, due ${t.dueDate}` : ""})`).join("\n") || "None";
+    const goalList = goals.slice(0, 5).map((g) => `- ${g.title}`).join("\n") || "None";
+    return {
+      system:
+        'You design a single day\'s schedule (a "day template") for a PhD student, as blocks with a title, type, ' +
+        'startTime, and endTime in 24-hour "HH:mm" format. The blocks below are already fixed on the user\'s calendar — ' +
+        "never propose anything that overlaps them:\n" +
+        `${blackout}\n` +
+        "Every block's type must be exactly one of: deep_work, reading, meal, free, admin, break, commute, sleep, gym, " +
+        "class, custom. Blocks must not overlap each other, must stay within 00:00-24:00, and each must end after it " +
+        'starts. Respond with ONLY JSON: {"name": string, "description": string, "slots": [{"title": string, "type": ' +
+        'string, "startTime": "HH:mm", "endTime": "HH:mm"}]} (4-12 slots).',
+      prompt: `Request: ${prompt}\n\nOpen tasks:\n${taskList}\n\nGoals:\n${goalList}`
+    };
+  },
+  // No AI provider available: hand back the user's own pack workday template with anything that
+  // overlaps a routine block stripped out — degraded, but still a usable candidate rather than
+  // hiding the "Create with AI" button entirely (AiTaskDef.fallback's own contract).
+  fallback: ({ routineBlocks, packId }) => {
+    const builtin = resolvePackWorkdayTemplate(packId);
+    const slots = builtin.slots.filter((slot) => !overlapsAnyRoutineBlock(slot, routineBlocks));
+    return { name: `${builtin.name} (offline fallback)`, description: builtin.description, slots };
+  }
+};
+
 export const AI_TASKS = {
   "course.splitTopics": splitTopicsTask,
   "plan.tomorrow": planTomorrowTask,
+  "plan.generateDayTemplate": generateDayTemplateTask,
   "triage.actions": triageActionsTask,
   "review.eod": reviewEodTask,
   "paper.readingPlan": readingPlanTask,

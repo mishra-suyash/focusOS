@@ -75,6 +75,26 @@ export function sortedSlots(slots: ScheduleSlot[]) {
   return [...slots].sort((a, b) => minutesFromTime(a.startTime) - minutesFromTime(b.startTime));
 }
 
+/** plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.1 — a class block (`type === "class"`)
+ * or a materialized routine block (`locked: true`) can't be dragged, resized, or deleted in the
+ * timeline editor. Deliberately absolute ("never remove a course/routine slot, at any cost"): no
+ * per-day exception exists, by design — see that spec's D5. */
+export function isLockedSlot(slot: ScheduleSlot): boolean {
+  return slot.type === "class" || slot.locked === true;
+}
+
+/** Appends any `wanted` slot whose `id` isn't already present in `existing`, leaving every other
+ * slot — locked or not — exactly as it was. Used to make sure this date's class/routine blocks
+ * are on the grid the moment it's opened, whether or not a schedule was ever saved for it (see
+ * the Routine-Blocks spec §2.4 for why this supersedes the narrower "only when nothing is saved
+ * yet" scope `FocusOS-v2-Plan-Day-Auto-Class-Blocks.md` originally described). Safe to run
+ * unconditionally because locked slots are never deletable (`isLockedSlot`) — there is no
+ * deliberate removal this could ever resurrect. */
+export function mergeMissingLockedSlots(existing: ScheduleSlot[], wanted: ScheduleSlot[]): ScheduleSlot[] {
+  const missing = wanted.filter((slot) => !existing.some((item) => item.id === slot.id));
+  return missing.length > 0 ? sortedSlots([...existing, ...missing]) : existing;
+}
+
 export function validateSlots(slots: ScheduleSlot[]) {
   const errors: string[] = [];
   const ordered = sortedSlots(slots);

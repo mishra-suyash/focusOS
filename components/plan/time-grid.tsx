@@ -3,7 +3,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { clsx } from "clsx";
 import { Check, Lock, X } from "lucide-react";
-import { computeSlotStatus, createSlot, minutesFromTime, minutesToTime, slotTypeIcons, slotTypeLabels, slotTypeStyles } from "@/lib/schedule";
+import { computeSlotStatus, createSlot, isLockedSlot, minutesFromTime, minutesToTime, slotTypeIcons, slotTypeLabels, slotTypeStyles } from "@/lib/schedule";
 import { clampToDay, laneLayout, magnetize, minutesToPx, MINUTES_PER_DAY, nearestFreeGap, pxToMinutes, rangeOverlapsSlots, rippleMove } from "@/lib/timeline";
 import type { ScheduleSlot, ScheduleSlotType } from "@/types";
 
@@ -75,8 +75,9 @@ type DragPreview = {
  * which is correct but not necessarily smooth; that's a tuning question for whenever this is
  * actually tried on a device, not a correctness one.
  *
- * D2: class blocks (`type === "class"`) don't start a move/resize gesture — `BlockInspector`
- * carries the "Edit course schedule" link instead.
+ * D2, extended by the Routine-Blocks spec: any locked slot (`isLockedSlot`, lib/schedule.ts — a
+ * class block or a materialized routine block) doesn't start a move/resize gesture —
+ * `BlockInspector` carries an "Edit course schedule"/"Edit in Settings" link instead.
  */
 export const TimeGrid = forwardRef<
   TimeGridHandle,
@@ -204,7 +205,7 @@ export const TimeGrid = forwardRef<
 
   function handleBlockPointerDown(event: React.PointerEvent<HTMLDivElement>, slot: ScheduleSlot) {
     event.stopPropagation();
-    if (slot.type === "class") return; // D2 — locked; BlockInspector links to editing the course instead.
+    if (isLockedSlot(slot)) return; // D2 — locked; BlockInspector links to editing the course/routine settings instead.
     if (event.pointerType === "mouse" && event.button !== 0) return;
     onSelect(slot.id); // "Tap block" selects immediately regardless of input — only the *move* gesture itself waits out the long-press below.
     const target = event.currentTarget;
@@ -226,7 +227,7 @@ export const TimeGrid = forwardRef<
 
   function handleHandlePointerDown(event: React.PointerEvent<HTMLDivElement>, slot: ScheduleSlot, edge: "start" | "end") {
     event.stopPropagation();
-    if (slot.type === "class") return;
+    if (isLockedSlot(slot)) return;
     if (event.pointerType === "mouse" && event.button !== 0) return;
     // No long-press here — a resize handle is already a small, dedicated, only-visible-when-selected
     // target (§5 touch column lists no delay for it), so there's no scroll gesture to disambiguate from.
@@ -434,7 +435,7 @@ export const TimeGrid = forwardRef<
               >
                 <span className="flex items-center gap-1 truncate font-medium">
                   <TypeIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
-                  {slot.type === "class" ? <Lock className="h-3 w-3 shrink-0" aria-hidden="true" /> : null}
+                  {isLockedSlot(slot) ? <Lock className="h-3 w-3 shrink-0" aria-hidden="true" /> : null}
                   <span className="truncate">{slot.title}</span>
                   {taskCount > 0 ? (
                     <span className="ml-auto shrink-0 rounded-full bg-black/10 px-1 text-[10px] font-normal dark:bg-white/10">{taskCount}</span>
@@ -446,7 +447,7 @@ export const TimeGrid = forwardRef<
                 {isBeingDragged && !preview!.valid && preview!.hintStart != null ? (
                   <span className="block truncate font-medium text-red-700 dark:text-red-300">Free at {minutesToTime(preview!.hintStart)}</span>
                 ) : null}
-                {isSelected && slot.type !== "class" ? (
+                {isSelected && !isLockedSlot(slot) ? (
                   <>
                     <div
                       className="absolute inset-x-0 top-0 h-6 touch-none cursor-ns-resize"

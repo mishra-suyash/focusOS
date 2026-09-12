@@ -67,6 +67,11 @@ export default function SettingsPage() {
           <Link href="/settings/features" className="btn-secondary py-1.5 text-xs">Manage features</Link>
         </section>
         <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Routine</h2>
+          <p className="mb-3 text-xs text-ink-500">Sleep, meals, gym, or a custom recurring block — whichever are on appear locked on every matching day.</p>
+          <Link href="/settings/routine" className="btn-secondary py-1.5 text-xs">Manage routine</Link>
+        </section>
+        <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Preferences</h2>
           <div className="flex items-center justify-between rounded-md bg-ink-50 p-3 dark:bg-ink-800">
             <div>

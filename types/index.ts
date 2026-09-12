@@ -16,6 +16,7 @@ export type AiInsightSource = "manual" | "cron";
 export type AiTaskId =
   | "course.splitTopics"
   | "plan.tomorrow"
+  | "plan.generateDayTemplate"
   | "triage.actions"
   | "review.eod"
   | "paper.readingPlan"
@@ -193,6 +194,26 @@ export interface ScheduleSlot {
   note?: string;
   status: ScheduleSlotStatus;
   color?: string;
+  /** Set on a class block or a materialized routine block (see `RoutineBlock`) — undraggable, unresizable, and undeletable in the timeline editor. Never set by hand; `type === "class"` alone already implies this for class blocks (`isLockedSlot`, lib/schedule.ts), so this field only actually needs to be `true` for routine-derived slots. */
+  locked?: boolean;
+}
+
+/**
+ * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2 — a recurring personal-time anchor
+ * (Sleep, a meal, Gym, or a custom one) configured once in Settings rather than re-typed into
+ * every template. `lib/routine.ts`'s `routineSlotsForDate` turns the enabled ones into locked
+ * `ScheduleSlot`s for a given date.
+ */
+export interface RoutineBlock {
+  id: string;
+  label: string;
+  type: ScheduleSlotType;
+  startTime: string;
+  /** May be <= `startTime`, meaning this block crosses midnight (e.g. Sleep 23:00→07:00) — see `routineSlotsForDate`'s own doc comment for how that materializes. */
+  endTime: string;
+  enabled: boolean;
+  /** 0 (Sun) – 6 (Sat); absent = every day. */
+  daysOfWeek?: number[];
 }
 
 export interface DayTemplate {
@@ -730,6 +751,8 @@ export interface UserSettings {
   activeNudge?: { key: string; shownDate: string };
   /** One-time "We renamed a few things" notice (plan §10.2) has been shown and dismissed. */
   vocabularyRenameSeen?: boolean;
+  /** Absent = `DEFAULT_ROUTINE_BLOCKS` (lib/routine.ts) — nothing is written here until the user actually edits something on `/settings/routine`, matching every other settings default in this interface. */
+  routineBlocks?: RoutineBlock[];
   updatedAt: string;
 }
 

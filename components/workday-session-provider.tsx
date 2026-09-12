@@ -7,6 +7,7 @@ import { useDay } from "@/hooks/use-day";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { todayKey } from "@/lib/dates";
 import { courseSlotsForDate } from "@/lib/courses";
+import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import {
   endWorkdaySession,
   fetchCollection,
@@ -152,18 +153,27 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         }
 
         const classSlots = onBreak ? [] : courseSlotsForDate(courses, today);
-        // F3: class blocks always win — skip any template block that overlaps one, rather than
-        // silently colliding (Plan/Save day would reject the overlap outright otherwise).
-        const nonOverlapping = baseSlots.filter((slot) => !classSlots.some((classSlot) => slotsOverlap(slot, classSlot)));
+        // Routine-Blocks-and-AI-Templates spec §2.4 — routine blocks (Sleep, meals, Gym, or a
+        // custom one) get the same "always win over the template" treatment class blocks already
+        // have (F3), just one rung below classes: a lecture is a fixed external commitment, a
+        // personal routine anchor isn't, so classes get first pick of the day and routine takes
+        // whatever's left after that.
+        const routineSlots = routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, today).filter(
+          (slot) => !classSlots.some((classSlot) => slotsOverlap(slot, classSlot))
+        );
+        const lockedSlots = [...classSlots, ...routineSlots];
+        // F3: class/routine blocks always win — skip any template block that overlaps one, rather
+        // than silently colliding (Plan/Save day would reject the overlap outright otherwise).
+        const nonOverlapping = baseSlots.filter((slot) => !lockedSlots.some((lockedSlot) => slotsOverlap(slot, lockedSlot)));
         const skippedTitles = baseSlots.filter((slot) => !nonOverlapping.includes(slot)).map((slot) => slot.title);
-        const slots = sortedSlots([...nonOverlapping, ...classSlots]);
+        const slots = sortedSlots([...nonOverlapping, ...lockedSlots]);
         if (slots.length > 0) {
           await saveDailySchedule(user.uid, { dateKey: today, templateId: chosenTemplate?.id, slots });
         }
 
         const notices: string[] = [];
         if (usedFallbackName) notices.push(`Used the ${usedFallbackName} template. Change it in Plan → Templates.`);
-        if (skippedTitles.length > 0) notices.push(`Skipped ${skippedTitles.length} template block${skippedTitles.length > 1 ? "s" : ""} that overlapped a class: ${skippedTitles.join(", ")}.`);
+        if (skippedTitles.length > 0) notices.push(`Skipped ${skippedTitles.length} template block${skippedTitles.length > 1 ? "s" : ""} that overlapped a class or routine block: ${skippedTitles.join(", ")}.`);
         if (notices.length > 0) setStartDayNotice(notices.join(" "));
       }
       await startWorkdaySession(user.uid, today);

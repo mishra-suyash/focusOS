@@ -5,7 +5,7 @@ import { Lock, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { MoreOptions } from "@/components/more-options";
 import { TypedTimeInput } from "@/components/plan/typed-time-input";
-import { minutesFromTime, slotTypeLabels, slotTypes } from "@/lib/schedule";
+import { isLockedSlot, minutesFromTime, slotTypeLabels, slotTypes } from "@/lib/schedule";
 import { categoryForSlotType, rangeOverlapsSlots } from "@/lib/timeline";
 import type { ScheduleSlot, ScheduleSlotType, Task } from "@/types";
 
@@ -18,8 +18,9 @@ import type { ScheduleSlot, ScheduleSlotType, Task } from "@/types";
  *
  * DP2 adds §6's inline validation ("end after start, no overlap") to the two time fields — the
  * only fields that can violate an invariant the rest of the app depends on — and D2's lock: a
- * class block's times aren't editable here either (matching TimeGrid's drag lock), with a link to
- * edit the course's schedule instead of the block directly.
+ * locked block's (class, or a materialized routine block — `isLockedSlot`, lib/schedule.ts) times
+ * aren't editable here either (matching TimeGrid's drag lock), and it can't be deleted here either
+ * (Routine-Blocks spec D5) — a link takes you to edit the course/routine settings instead.
  */
 export function BlockInspector({
   slot,
@@ -42,7 +43,8 @@ export function BlockInspector({
   const openTasks = tasks.filter((task) => task.status !== "done");
   const titleRef = useRef<HTMLInputElement>(null);
   const [timeError, setTimeError] = useState<string | null>(null);
-  const isLocked = slot.type === "class";
+  const isLocked = isLockedSlot(slot);
+  const isClass = slot.type === "class";
 
   useEffect(() => {
     if (autoFocusTitle) titleRef.current?.focus();
@@ -70,9 +72,9 @@ export function BlockInspector({
       {isLocked ? (
         <div className="flex items-center gap-2 rounded-md border border-fuchsia-500/40 bg-fuchsia-500/10 px-2.5 py-2 text-xs text-fuchsia-800 dark:text-fuchsia-200">
           <Lock className="h-3.5 w-3.5 shrink-0" />
-          <span className="flex-1">Class block — locked here.</span>
-          <Link href="/courses" className="font-medium underline">
-            Edit course schedule
+          <span className="flex-1">{isClass ? "Class block — locked here." : "Routine block — locked here."}</span>
+          <Link href={isClass ? "/courses" : "/settings/routine"} className="font-medium underline">
+            {isClass ? "Edit course schedule" : "Edit in Settings"}
           </Link>
         </div>
       ) : null}
@@ -139,9 +141,11 @@ export function BlockInspector({
         <Play className="h-3.5 w-3.5" />
         Start focus session
       </Link>
-      <button className="btn-secondary w-full py-1.5 text-xs text-red-600" onClick={onDelete}>
-        Delete block
-      </button>
+      {!isLocked ? (
+        <button className="btn-secondary w-full py-1.5 text-xs text-red-600" onClick={onDelete}>
+          Delete block
+        </button>
+      ) : null}
     </div>
   );
 }

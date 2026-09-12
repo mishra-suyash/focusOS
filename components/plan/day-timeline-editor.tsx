@@ -2,7 +2,7 @@
 
 import { orderBy } from "firebase/firestore";
 import { clsx } from "clsx";
-import { Plus, Redo2, Undo2, X } from "lucide-react";
+import { Eraser, Plus, Redo2, Undo2, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BlockInspector } from "@/components/plan/block-inspector";
 import { DayStrip } from "@/components/plan/day-strip";
@@ -15,7 +15,7 @@ import { useDay } from "@/hooks/use-day";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { createDayTemplate, saveDayFields } from "@/lib/firestore";
-import { createSlot, formatMinutes, minutesFromTime, minutesToTime, slotDuration, sortedSlots } from "@/lib/schedule";
+import { createSlot, formatMinutes, isLockedSlot, mergeMissingLockedSlots, minutesFromTime, minutesToTime, slotDuration, sortedSlots } from "@/lib/schedule";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 import { MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay } from "@/lib/timeline";
 import type { DailySchedule, PomodoroSession, ScheduleSlot, Task } from "@/types";
@@ -50,12 +50,25 @@ export function DayTimelineEditor({
   uid,
   dateKey,
   schedule,
+  wantedLockedSlots,
   tasks,
   onSlotsChange
 }: {
   uid: string;
   dateKey: string;
   schedule: DailySchedule | null;
+  /**
+   * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.4 — this date's class + enabled routine
+   * blocks, computed fresh from `courses`/`UserSettings.routineBlocks` regardless of whether a
+   * schedule doc exists yet. `mergeMissingLockedSlots` (lib/schedule.ts) appends whichever of
+   * these aren't already present (by id) in `schedule?.slots`, both in the initial `useUndoStack`
+   * seed below and in `handleReload` — so a block newly enabled in Settings shows up the next time
+   * this date is opened, even if it was already saved, without ever touching any other slot. Never
+   * written to Firestore on its own: the first real edit autosaves the full merged `slots` array
+   * through the same path as any other change. Safe to merge unconditionally because locked slots
+   * are never deletable (`isLockedSlot`) — there's no deliberate removal this could resurrect.
+   */
+  wantedLockedSlots?: ScheduleSlot[];
   tasks: Task[];
   onSlotsChange: (slots: ScheduleSlot[]) => void;
 }) {
@@ -65,7 +78,6 @@ export function DayTimelineEditor({
   const [viewportRange, setViewportRange] = useState<{ startMinute: number; endMinute: number } | null>(null);
   const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
   const [showDeleteToast, setShowDeleteToast] = useState(false);
-  const [templateOverride, setTemplateOverride] = useState<{ active: boolean; value?: string }>({ active: false });
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
@@ -84,10 +96,17 @@ export function DayTimelineEditor({
   const { items: allSessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
   const todaySessions = useMemo(() => allSessions.filter((session) => session.completedAt.startsWith(dateKey)), [allSessions, dateKey]);
 
+  const { present: slots, action, canUndo, canRedo, commit, undo, redo, reset } = useUndoStack<ScheduleSlot[]>(
+    mergeMissingLockedSlots(schedule?.slots ?? [], wantedLockedSlots ?? [])
+  );
+
   // S3 "Suggestions for tomorrow" ghosts — the evening rollup for the day *before* this one
   // proposes blocks for this date; `day.rollup.slotDecisions` (keyed by index, shared with the
   // Daily review page's own accept/dismiss buttons — see `EveningRollupCard`) tracks which of them
-  // are still undecided.
+  // are still undecided. Also skips any proposal whose time range already overlaps a real slot —
+  // otherwise a rollup that proposed roughly the same day the user already built manually renders
+  // every one of those blocks as a dashed ghost directly on top of the real one. Left undecided
+  // rather than auto-dismissed, so it comes back if that slot is later freed up.
   const previousDateKey = addDaysToKey(dateKey, -1);
   const { day: previousDay } = useDay(previousDateKey);
   const proposedSlots = previousDay?.rollup?.proposedSlots ?? [];
@@ -101,17 +120,12 @@ export function DayTimelineEditor({
       type: proposed.type,
       start: minutesFromTime(proposed.startTime),
       end: minutesFromTime(proposed.endTime)
-    }));
-
-  const { present: slots, action, canUndo, canRedo, commit, undo, redo, reset } = useUndoStack<ScheduleSlot[]>(sortedSlots(schedule?.slots ?? []));
-  // Applying a template (tray, DP3) changes what this day should save as `templateId` before
-  // Firestore's snapshot round-trips back with the same value — an explicit local override wins
-  // until the next "Reload", rather than the derived `schedule?.templateId` racing the write.
-  const templateId = templateOverride.active ? templateOverride.value : schedule?.templateId;
+    }))
+    .filter((suggestion) => !rangeOverlapsSlots(suggestion.start, suggestion.end, slots));
   const { status, scheduleSave, conflict, forceSave, dismissConflict } = useDayAutosave({
     uid,
     dateKey,
-    templateId,
+    templateId: schedule?.templateId,
     remoteUpdatedAt: schedule?.updatedAt
   });
 
@@ -262,9 +276,12 @@ export function DayTimelineEditor({
     announce(`Block created, ${next.startTime} to ${next.endTime}.`);
   }
 
+  /** Accepting another tab/device's newer write must never be the one path that drops a locked
+   * block this tab already knows about (e.g. that other write predates this day ever being saved
+   * with them, or came from the old editor). Uses the same `mergeMissingLockedSlots` the mount
+   * seed above does, so both agree; safe unconditionally since locked slots aren't deletable. */
   function handleReload() {
-    if (schedule) reset(sortedSlots(schedule.slots));
-    setTemplateOverride({ active: false }); // defer back to the reloaded doc's own templateId, not our stale local guess
+    if (schedule) reset(mergeMissingLockedSlots(schedule.slots, wantedLockedSlots ?? []));
     dismissConflict();
   }
 
@@ -272,10 +289,17 @@ export function DayTimelineEditor({
     void forceSave(slots);
   }
 
-  /** §4.4 tray — "Replace day" on a template drop; "Fill gaps only" goes through `commitSlots` directly since it never changes `templateId`. */
-  function handleApplyTemplate(next: ScheduleSlot[], appliedTemplateId: string | undefined) {
-    setTemplateOverride({ active: true, value: appliedTemplateId });
-    commitSlots(next);
+  /** Blanks the day back to a fresh canvas — but never at the cost of a locked (class or routine)
+   * block: those come from `courses`/Settings, not from anything a template or a manual edit puts
+   * on the day, so clearing "everything" can only ever mean everything except them. Confirmed
+   * first since, unlike a single delete, there's no small "Undo" toast for a whole-day clear — only
+   * the header's Undo button. */
+  function clearUnlockedSlots() {
+    const kept = slots.filter((slot) => isLockedSlot(slot));
+    if (kept.length === slots.length) return; // nothing but locked blocks (or nothing at all) — no-op
+    if (!window.confirm("Clear every block except classes and routine blocks?")) return;
+    commitSlots(kept);
+    announce(kept.length > 0 ? "Day cleared, locked blocks kept." : "Day cleared.");
   }
 
   /** S3 — accepting a suggestion ghost adds it to *this* day's own `slots` via the normal `commitSlots`
@@ -364,7 +388,7 @@ export function DayTimelineEditor({
       }
 
       const selected = selectedId ? slots.find((slot) => slot.id === selectedId) : null;
-      if (!selected || selected.type === "class") return;
+      if (!selected || isLockedSlot(selected)) return;
 
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
@@ -408,6 +432,15 @@ export function DayTimelineEditor({
           <button className="btn-secondary py-1.5 text-xs" onClick={createAtFocusedTime}>
             <Plus className="h-3.5 w-3.5" />
             Add block
+          </button>
+          <button
+            className="btn-secondary py-1.5 text-xs"
+            onClick={clearUnlockedSlots}
+            disabled={!slots.some((slot) => slot.type !== "class")}
+            title="Removes every block except classes"
+          >
+            <Eraser className="h-3.5 w-3.5" />
+            Clear all
           </button>
           {isToday ? (
             <div className="relative">
@@ -558,13 +591,14 @@ export function DayTimelineEditor({
             <>
               <p className="mb-3 text-sm text-ink-500">Select a block to edit it, drag on the grid to create one, or press N.</p>
               <PlanTray
+                dateKey={dateKey}
                 tasks={tasks}
                 workMinutes={workMinutes}
                 anchorMinute={isToday ? nowMinute : DEFAULT_SCROLL_MINUTE}
                 slots={slots}
                 gridRef={gridRef}
                 onCommit={commitSlots}
-                onApplyTemplate={handleApplyTemplate}
+                announce={announce}
               />
             </>
           )}

@@ -1,0 +1,194 @@
+# FocusOS v2 — Routine Blocks (locked recurring anchors) & AI-Generated Templates
+
+**Status:** Draft for review, implementing directly · **Route:** `/plan/day`, new `/settings/routine` · **Companion to:** `FocusOS-v2-Plan-Day-Timeline.md`, `FocusOS-v2-Plan-Day-Auto-Class-Blocks.md`
+**Principle carried over:** additive and non-destructive. No migration, no schema break, old saved days open unchanged.
+
+---
+
+## 0. TL;DR
+
+Two features, designed together because the second reuses the first's machinery almost entirely:
+
+1. **Routine blocks** — Sleep, Breakfast, Lunch, Dinner, Gym (plus any custom recurring block the user defines) become settings, not template content. Each is a recurring time-of-day rule. Whichever ones are enabled get auto-materialized as **locked** blocks directly on the day timeline — exactly the same mechanism `FocusOS-v2-Plan-Day-Auto-Class-Blocks.md` built for class blocks, generalized to a second source. Templates never need to "know" about them: because they're already locked on the grid before a template applies, and template application already refuses to overlap anything (`fillGaps`, fixed in the prior session turn), a template's own stock "Lunch" block is simply skipped in favor of the user's real, locked one. That *is* the "rule-based template modification" — no separate retiming engine needed.
+2. **Create a template with AI** — a free-text prompt ("a balanced writing day with a long lunch"), plus the user's routine blocks/open tasks/goals as context, produces a candidate template through the existing `AI_TASKS` registry. It's previewed through the exact same ghost-preview + "Add (skips conflicts)" flow a dragged template already uses, so it inherits the same never-overwrite guarantee for free.
+
+---
+
+## 1. Goals and non-goals
+
+**Goals**
+
+- Sleep/meals/gym (and any custom recurring block) are configured once, in Settings, not re-typed into every template.
+- Whichever are enabled show up locked on every day automatically — consistent with how class blocks already work.
+- A template applied on top never displaces a routine block, for the same reason it never displaces a class block: the slot is already there, locked, before the template's own blocks are considered.
+- One click ("Create with AI") produces a template candidate from a free-text description, grounded in the user's actual routine so it doesn't invent a 6pm gym block for someone who set gym at 7am.
+- No schema migration. `ScheduleSlot.locked` and `UserSettings.routineBlocks` are both new optional fields; every existing document is valid with neither present.
+
+**Non-goals**
+
+- No retroactive reconciliation of already-saved days when routine settings change (same non-goal `FocusOS-v2-Plan-Day-Auto-Class-Blocks.md` already stated for courses — a saved day's slots stay exactly what they were saved as).
+- No one-off recurrence exceptions UI (e.g. "skip gym this Friday only"). Locked blocks (class or routine) are not deletable at all, from any path — see §2.1's revised lock scope below. "Never remove a course/routine slot" is taken literally: there is deliberately no per-day escape hatch, including a one-off skip. Wanting to skip gym one day means disabling Gym in Settings and re-enabling it later.
+- AI generation only ever produces a *fresh* candidate template; it does not edit an already-open day or an existing saved template in place.
+- No multi-turn AI chat/iteration. One prompt in, one candidate out; regenerating means editing the prompt and generating again.
+
+---
+
+## 2. Routine blocks
+
+### 2.1 Data model
+
+```ts
+// types/index.ts
+export interface RoutineBlock {
+  id: string;
+  label: string;                 // "Sleep", "Breakfast", "Gym", or a custom name
+  type: ScheduleSlotType;
+  startTime: string;             // "HH:mm"
+  endTime: string;               // "HH:mm" — may be <= startTime, meaning it crosses midnight (Sleep)
+  enabled: boolean;
+  /** 0 (Sun) – 6 (Sat); absent = every day. */
+  daysOfWeek?: number[];
+}
+```
+
+`UserSettings` gains `routineBlocks?: RoutineBlock[]`. Absent (the common case — nobody has touched the new settings page yet) falls back to `DEFAULT_ROUTINE_BLOCKS`, the same pattern `hooks/use-user-settings.ts`'s own `DEFAULTS` constant already uses for `hydrationMinutes`/`breakMinutes` — nothing is written to Firestore just because a default exists.
+
+`ScheduleSlot` gains `locked?: boolean`. This generalizes the existing `slot.type === "class"` special-casing scattered across `TimeGrid`/`BlockInspector` into one concept a second source (routine blocks) can also set. A small helper carries the combined check:
+
+```ts
+// lib/schedule.ts
+export function isLockedSlot(slot: ScheduleSlot): boolean {
+  return slot.type === "class" || slot.locked === true;
+}
+```
+
+Every existing `slot.type === "class"` gesture/lock guard in `time-grid.tsx` and `block-inspector.tsx` switches to `isLockedSlot(slot)`. Class blocks themselves are untouched — `lib/courses.ts`'s `courseSlotsForDate` doesn't need to start setting `locked: true`, since `isLockedSlot` already covers `type === "class"` on its own.
+
+**Lock scope, tightened.** Today, a class block can't be dragged/resized, but *can* still be deleted via `BlockInspector`'s unconditional "Delete block" button and via the keyboard's Delete/Backspace (which does correctly guard on `type === "class"`) — an existing inconsistency between the two paths. Since the instruction behind this whole feature is "never remove a course/routine slot, at any cost," this spec closes that gap rather than propagating it to routine blocks: `isLockedSlot(slot)` also gates `BlockInspector`'s "Delete block" button (hidden/disabled, same banner styling as the existing lock notice extended with routine-specific copy). Locked means fully locked — no move, no resize, no delete — for both class and routine blocks alike.
+
+### 2.2 Defaults
+
+| Block | Default time | Default enabled |
+|---|---|---|
+| Sleep | 23:00 → 07:00 | on |
+| Breakfast | 07:30 → 08:00 | on |
+| Lunch | 12:30 → 13:15 | on |
+| Dinner | 19:00 → 19:45 | on |
+| Gym | 17:30 → 18:30 | **off** — matches the user's own framing ("user can enable things like gym") as opt-in, unlike the meals/sleep everyone has. |
+
+All five ship as `DEFAULT_ROUTINE_BLOCKS` in `lib/routine.ts`, editable (times, enabled, or deleted — the built-in five can be disabled but not permanently removed from the list, matching `CORE_MODULES`' "always present, toggleable" precedent) from the new settings page.
+
+### 2.3 Materializing a date's routine slots
+
+New `lib/routine.ts`, mirroring `lib/courses.ts`'s `courseSlotsForDate`:
+
+```ts
+export function routineSlotsForDate(blocks: RoutineBlock[], dateKey: string): ScheduleSlot[]
+```
+
+For each `enabled` block whose `daysOfWeek` (if set) includes that date's day-of-week:
+
+- **Same-day** (`endTime > startTime`): one locked slot, `id: "routine-${block.id}"`.
+- **Crosses midnight** (`endTime <= startTime`, e.g. Sleep 23:00→07:00): the current `ScheduleSlot` model has no cross-midnight representation (`validateSlots` rejects `end <= start` outright) — split into two locked slots on the same calendar day, exactly how a real calendar splits an overnight event across two day-cells: `"00:00"→endTime` (`id: "routine-${block.id}-wake"`) and `startTime→"24:00"` (`id: "routine-${block.id}-bed"`, using the grid's existing 24:00 boundary — `TimeGrid`'s own hour axis already renders through 24:00, and `minutesToTime(1440)` round-trips through `minutesFromTime` cleanly).
+
+Two enabled blocks that overlap each other (e.g. a custom "Meditation" block placed across Breakfast) resolve by array order — first-listed wins, later one skipped — the same "accepted so far" pattern `lib/timeline.ts`'s `fillGaps` already uses for two overlapping template slots.
+
+### 2.4 Wiring into the two places slots get materialized
+
+**This section revises `FocusOS-v2-Plan-Day-Auto-Class-Blocks.md`'s original design in one important way.** That spec's `initialSlotsIfNoSchedule` only ever seeds the grid when `schedule` is `null` — a date that already has *any* saved schedule (which, for an active account, is most days, since "Start day" creates one) was explicitly left alone, by design, as a non-goal ("old saved days open unchanged"). For class blocks that was invisible in practice, because class blocks only ever arrive *through* "Start day" in the first place. Routine blocks have no other delivery path — a block newly enabled in Settings has to reach every day the user opens, including ones already saved, or enabling Gym would appear to do nothing on any day the user is actually looking at. So the merge described below applies **regardless of whether `schedule` exists**, superseding the older "only when null" scope for both class and routine blocks:
+
+- **`app/(app)/plan/day/page.tsx`**: compute `routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, dateKey)`, merge with the existing class slots — classes win on conflict (a lecture is a fixed external commitment; a personal routine anchor isn't) — into one `wantedLockedSlots` list (the renamed, broadened `initialClassSlots`). Needs `useUserSettings()` in this file (not currently imported there).
+- **`components/plan/day-timeline-editor.tsx`**: the `useUndoStack` seed changes from `schedule?.slots ?? initialSlotsIfNoSchedule ?? []` to a merge that runs either way: `mergeMissingLockedSlots(schedule?.slots ?? [], wantedLockedSlots)`, a small pure helper (`lib/schedule.ts`) that appends any `wantedLockedSlots` entry whose `id` isn't already present, leaving every other slot (locked or not) exactly as saved. `handleReload` (added in the prior turn) uses the same helper instead of its own inline filter, so both paths agree.
+- **`components/workday-session-provider.tsx`**'s `start()`: unchanged in spirit from the original draft — after computing `classSlots` (F3), also compute `routineSlots` the same way, extending the existing "class blocks always win, skip overlapping template blocks" filter to skip against *both* before merging. This still matters even though the editor now self-heals a missing block on open: `start()` is what persists locked blocks into the doc other readers (`dashboard`, the reminder/active-slot logic in `WorkdaySessionProvider` itself) see directly, without ever opening `/plan/day`.
+
+Because deleting a locked block is no longer possible (§2.1's tightened lock scope), this merge can never resurrect a deliberate deletion — there isn't one to resurrect. That's what makes merging unconditionally on every mount safe.
+
+### 2.5 Why this also satisfies "modify templates, rule-based"
+
+No template ever gets rewritten. A template applied via `PlanTray`'s "Add (skips conflicts)" (`fillGaps`) is checked against `existing` slots before any of its own blocks are accepted — and by the time a template is being applied, the day's routine blocks are already sitting in `existing`, locked. The template's own "Lunch 12:00–13:00" block overlaps the user's real, locked Lunch at (say) 12:30–13:15, so `fillGaps` silently skips it — the user's actual lunch time is what's left on the grid. This is precisely "the template gets modified based on the user's routine," produced entirely by machinery that already exists and was already hardened in the prior turn (never-overwrite guarantee) — nothing new to get wrong.
+
+### 2.6 Settings UI
+
+New `app/(app)/settings/routine/page.tsx`, linked from `/settings`, mirroring `/settings/features`'s structure:
+
+- One row per `RoutineBlock` (five defaults + any custom ones): label, a start/end `TypedTimeInput` pair, an enabled toggle, and (custom blocks only) a delete button.
+- A day-of-week chip row (Sun–Sat) per block, defaulting to every day selected; deselecting means "not on this day."
+- "Add custom recurring block": label input, a `slotTypes` select (reusing the same list `BlockInspector` already offers), start/end time, days.
+- Saves the whole `routineBlocks` array via `useUserSettings().update({ routineBlocks })` on every change — same whole-array-write pattern `/settings/features` already uses for `enabledModules`.
+
+### 2.7 Edge cases
+
+| Case | Behavior |
+|---|---|
+| User disables Gym after having it on for a while | Future dates stop getting a Gym block. Already-saved days keep whatever they had (non-goal §1). |
+| A locked routine block needs to move for one specific day (appointment conflicts with gym) | No per-day override — disable the block in Settings, or accept the conflict for that day (nothing schedules on top of it either, per the never-overwrite guarantee). Same limitation already applies to class blocks today. |
+| Two enabled blocks overlap | First-listed wins; the later one is silently skipped for that date, matching `fillGaps`'s existing overlap policy. |
+| No routine blocks enabled at all | `routineSlotsForDate` returns `[]`; behavior is identical to before this feature shipped. |
+| Sleep spans midnight | Represented as two locked slots that day (`00:00`→wake, bedtime→`24:00`) — see §2.3. Deleting one segment doesn't delete the other; they're independent slots sharing a settings source. |
+
+---
+
+## 3. Create a template with AI
+
+### 3.1 Task registration
+
+`lib/ai/schemas.ts` — new schema, reusing the existing `templateSlotSchema` shape (`lib/templates/schema.ts`) so the AI's output and a hand-built template are validated identically:
+
+```ts
+export const generateDayTemplateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  slots: z.array(templateSlotSchema).min(1).max(16)
+});
+export type GenerateDayTemplateOutput = z.infer<typeof generateDayTemplateSchema>;
+```
+
+`lib/ai/tasks.ts` — new task `plan.generateDayTemplate` (added to the `AiTaskId` union in `types/index.ts`):
+
+- **Payload**: `{ prompt: string; routineBlocks: { label: string; type: ScheduleSlotType; startTime: string; endTime: string }[]; openTasks: { title: string; priority: string; dueDate?: string }[]; goals: { title: string }[] }`.
+- **tier**: `"small"`, `preferLocal: true`, `maxTokens: 800` — matches `plan.tomorrow`'s weight class; this is short structured JSON, not a document read.
+- **`buildPrompt`**: system message states the routine blocks as fixed/non-negotiable blackout windows the generated slots must not overlap, lists the valid `ScheduleSlotType` values, and requires ONLY the JSON shape above; the user-facing prompt is the free-text description plus a compact listing of open tasks/goals for grounding.
+- **`fallback`**: when no provider is configured/available, builds a template deterministically from the user's pack's built-in workday template (`resolvePackWorkdayTemplate`) with routine-conflicting blocks stripped via the same `fillGaps`-style skip — so the "Create with AI" button never has to hide itself for lack of a provider (matching the `AiTaskDef.fallback` contract: no fallback would hide the button entirely, which is wrong here since a degraded-but-usable result is better than none).
+
+### 3.2 Client
+
+`lib/ai/client.ts` — `generateDayTemplate(user, payload)`, a thin wrapper over the existing generic `callAiTask<GenerateDayTemplateOutput>(user, "plan.generateDayTemplate", payload)`. No dedicated `/api/ai/...` route needed — unlike `paper.layeredNotes`, this task never touches a file, so the generic `/api/ai/run` route already covers it.
+
+### 3.3 UI
+
+`PlanTray`'s existing "Templates" section gains a "Create with AI" subsection: a text input for the prompt, a "Generate" button (`Sparkles` icon, matching `LayeredNotesCard`'s existing convention for AI actions elsewhere in the app), busy/error state.
+
+On a successful generation, the result is fed into the **same `templateDrop` state `PlanTray` already has** for a dragged/clicked template (`setTemplateDrop({ templateId: undefined, name: result.name, slots: freshTemplateSlots(materializedSlots) })`) — so the exact same preview ghost and "Add (skips conflicts)" / "Cancel" confirm bar built in the prior turn handles placement. No new placement logic, and the never-overwrite guarantee applies automatically, for free.
+
+A "Save as my template" option on the same confirm bar additionally persists the accepted candidate as a normal `DayTemplate` via the existing `createDayTemplate`, so a generated day can be reused later exactly like a hand-built one.
+
+### 3.4 Edge cases
+
+| Case | Behavior |
+|---|---|
+| No AI provider configured (dev/demo) | The task's `fallback` fires; button stays visible (per `AiTaskDef.fallback`'s contract), result is marked `degraded` in the response meta. |
+| User's AI budget exceeded | `runAiTask`'s existing budget check throws before any provider call; `PlanTray` shows the error text, same as `LayeredNotesCard`'s existing try/catch. |
+| AI proposes a block overlapping a routine/class block despite the prompt's blackout-window instruction | Caught the same way any other template conflict is: `fillGaps` skips it silently on "Add." The prompt asking the model to avoid it is a quality improvement, not a correctness dependency — correctness is enforced by the same mechanism as every other template source. |
+| Empty/garbage prompt | No special-casing — the model (or fallback) still returns *some* template; "Cancel" on the confirm bar discards it same as any unwanted template drop. |
+
+---
+
+## 4. Phased rollout
+
+| Phase | Scope | Done when |
+|---|---|---|
+| **1 — Routine blocks** (M) | `RoutineBlock`/`locked` types, `lib/routine.ts`, `isLockedSlot`, `mergeMissingLockedSlots`, wiring into `page.tsx`/`day-timeline-editor.tsx`/`start()`, tightened lock scope in `time-grid.tsx`/`block-inspector.tsx`, `/settings/routine` page. | Enabling Gym in settings makes it appear locked the next time *any* day is opened — including today's already-saved schedule, not only a future unsaved one — and it can't be dragged, resized, or deleted. Applying any template on top never displaces it. |
+| **2 — AI templates** (S–M, depends on Phase 1 for routine context) | `plan.generateDayTemplate` task + schema, client wrapper, `PlanTray` "Create with AI" section reusing the existing confirm-bar flow. | A free-text prompt produces a previewed candidate that can be added without ever overwriting an existing block, and optionally saved as a reusable template. |
+
+---
+
+## 5. Decisions made without a further round-trip
+
+| # | Decision | Reasoning |
+|---|---|---|
+| D1 | Gym defaults off; Sleep/Breakfast/Lunch/Dinner default on | Matches the user's own framing: fixed anchors everyone has vs. one they explicitly called out as something to "enable." |
+| D2 | Class blocks outrank routine blocks on conflict | A lecture is an external fixed commitment; a personal routine anchor is a preference. Consistent with F3's existing "class blocks always win" precedent. |
+| D3 | Overnight Sleep splits into two same-day locked slots rather than extending the schema to support cross-midnight ranges | The `end <= start` invariant (`validateSlots`) is load-bearing across the whole timeline/undo/ripple system; changing it is a much bigger, riskier change than splitting one recurring block into two slots, and the grid already renders through a 24:00 boundary. |
+| D4 | AI task tier `"small"`, no dedicated API route | Structured JSON output of similar size/complexity to the existing `plan.tomorrow` task; no file access needed, so the generic `/api/ai/run` route already fits. |
+| D6 | A routine block with `startTime === endTime` materializes nothing, rather than being treated as crossing midnight | An advisor pass on the implementation caught that the crossing-midnight check (`endTime <= startTime`) would otherwise turn a data-entry mistake (typing the same time into both fields) into two locked slots blacking out nearly the entire day. Since locked blocks are undeletable (D5), the only recovery would be going back to Settings — better to skip materializing the degenerate entry at all. |
+| D5 | Locked blocks (class or routine) are not deletable at all — tightened from the original draft, which assumed `BlockInspector`'s Delete button stayed open for them (it does today, inconsistently with the keyboard path, which already blocks it) | The instruction driving this whole feature is "never remove a course/routine slot, at any cost." Leaving a delete escape hatch open contradicts that, and it's also what makes merging locked blocks into an already-saved day's mount seed safe (§2.4) — there's no deliberate deletion state to accidentally resurrect. |

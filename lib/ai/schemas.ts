@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { templateSlotSchema } from "@/lib/templates/schema";
 
 /**
  * One zod schema per AI task's structured output (plan §9.1: "structured output
@@ -115,3 +116,15 @@ export const highlightCandidatesSchema = z.object({
     .max(40)
 });
 export type HighlightCandidatesOutput = z.infer<typeof highlightCandidatesSchema>;
+
+/**
+ * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.1 — reuses `templateSlotSchema`
+ * (lib/templates/schema.ts) so an AI-generated template and a hand-built one are validated
+ * identically.
+ */
+export const generateDayTemplateSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  slots: z.array(templateSlotSchema).min(1).max(16)
+});
+export type GenerateDayTemplateOutput = z.infer<typeof generateDayTemplateSchema>;
