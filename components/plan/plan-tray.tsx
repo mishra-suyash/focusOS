@@ -43,10 +43,18 @@ function relevantTasks(tasks: Task[]): Task[] {
 /** `templateSlotSchema`'s "HH:mm" regex accepts any two digits per field — "99:99" passes it but
  * isn't a real time, and `minutesFromTime` would happily turn it into a nonsensical-but-numeric
  * minute count that could pass `validateSlots`' overlap math anyway. Checked separately from
- * `validateSlots` since it's a per-slot format concern, not a cross-slot schedule one. */
+ * `validateSlots` since it's a per-slot format concern, not a cross-slot schedule one.
+ *
+ * "24:00" is a real, valid end-of-day time in this app — `lib/timeline.ts`'s `parseTypedTime`
+ * accepts it from a typed field, and `routineSlotsForDate`'s overnight split (Sleep) uses it as an
+ * end time — so it must be accepted here too, matching `parseTypedTime`'s exact rule, not rejected
+ * as "hour > 23". The AI's own prompt lists blackout windows using that same boundary (e.g. "Sleep:
+ * 23:00-24:00"), and a model can echo it back into its own proposed slots. */
 function isPlausibleTime(time: string): boolean {
   const [hours, minutes] = time.split(":").map(Number);
-  return Number.isInteger(hours) && Number.isInteger(minutes) && hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) return false;
+  if (hours === 24) return minutes === 0;
+  return hours >= 0 && hours <= 23;
 }
 
 type TemplateSource = { id?: string; name: string; slots: ScheduleSlot[] };

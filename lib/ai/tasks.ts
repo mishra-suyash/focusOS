@@ -341,7 +341,7 @@ const generateDayTemplateTask: AiTaskDef<GenerateDayTemplatePayload, GenerateDay
       system:
         'You design a single day\'s schedule (a "day template") for a PhD student, as blocks with a title, type, ' +
         'startTime, and endTime in 24-hour "HH:mm" format. The blocks below are already fixed on the user\'s calendar — ' +
-        "never propose anything that overlaps them:\n" +
+        "do not include them in your own output, and never propose anything that overlaps them:\n" +
         `${blackout}\n` +
         "Every block's type must be exactly one of: deep_work, reading, meal, free, admin, break, commute, sleep, gym, " +
         "class, custom. Blocks must not overlap each other, must stay within 00:00-24:00, and each must end after it " +
