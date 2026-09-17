@@ -52,6 +52,11 @@ export function PomodoroTimer({
   const [mode, setMode] = useState<TimerMode>("work");
   const [secondsLeft, setSecondsLeft] = useState(25 * 60);
   const [running, setRunning] = useState(false);
+  // Epoch ms the running countdown is anchored to (null while paused). `secondsLeft` is always
+  // recomputed from this real timestamp rather than decremented tick-by-tick, so a throttled or
+  // backgrounded tab (browsers slow/suspend setInterval when hidden) can't make the timer drift or
+  // stall — the next tick, or the visibilitychange resync below, just recomputes the true remainder.
+  const [targetEndTime, setTargetEndTime] = useState<number | null>(null);
   const [cycle, setCycle] = useState(1);
   const [label, setLabel] = useState("writing");
   const [category, setCategory] = useState<Category>("research");
@@ -72,7 +77,9 @@ export function PomodoroTimer({
     // default and where a session normally ends up) — leaving this implicit would start the timer
     // running with whatever seconds happened to be left over from the previous session, which
     // `completeSession` then reports as a full `duration`-minute session, inflating focus metrics.
-    setSecondsLeft(work * 60);
+    const totalSeconds = work * 60;
+    setSecondsLeft(totalSeconds);
+    setTargetEndTime(Date.now() + totalSeconds * 1000);
     setRunning(true);
     onInitialFocusConsumed?.();
   }, [initialFocus]);
@@ -81,7 +88,13 @@ export function PomodoroTimer({
   const progress = 100 - (secondsLeft / (duration * 60)) * 100;
 
   useEffect(() => {
-    setSecondsLeft(duration * 60);
+    const totalSeconds = duration * 60;
+    setSecondsLeft(totalSeconds);
+    // Re-anchor rather than blindly clearing: this effect also re-fires when `initialFocus` (above)
+    // changes `mode` in the same batch as starting the timer, and reading `running` from this
+    // render's closure (not as a dependency) lets it tell that apart from a real pause/mode-cycle,
+    // where the timer should stay stopped until the user presses Start.
+    setTargetEndTime(running ? Date.now() + totalSeconds * 1000 : null);
   }, [duration, mode]);
 
   // Pulls saved lengths (and built-in preset choices — lib/templates/builtin/timer-presets.ts) in once
@@ -106,26 +119,60 @@ export function PomodoroTimer({
   }
 
   useEffect(() => {
-    if (!running) return;
-    const id = window.setInterval(() => {
-      setSecondsLeft((current) => Math.max(current - 1, 0));
-    }, 1000);
+    if (!running || targetEndTime == null) return;
+    function syncFromClock() {
+      setSecondsLeft(Math.max(0, Math.ceil((targetEndTime! - Date.now()) / 1000)));
+    }
+    syncFromClock();
+    const id = window.setInterval(syncFromClock, 1000);
     return () => window.clearInterval(id);
-  }, [running]);
+  }, [running, targetEndTime]);
+
+  // A tab that was backgrounded can have its setInterval throttled or fully suspended, so the
+  // countdown above may not have ticked in a while — resync the instant the tab is foregrounded
+  // again instead of waiting for the next (possibly late) interval fire.
+  useEffect(() => {
+    if (!running || targetEndTime == null) return;
+    function syncOnForeground() {
+      if (document.visibilityState !== "visible") return;
+      setSecondsLeft(Math.max(0, Math.ceil((targetEndTime! - Date.now()) / 1000)));
+    }
+    document.addEventListener("visibilitychange", syncOnForeground);
+    window.addEventListener("focus", syncOnForeground);
+    return () => {
+      document.removeEventListener("visibilitychange", syncOnForeground);
+      window.removeEventListener("focus", syncOnForeground);
+    };
+  }, [running, targetEndTime]);
 
   useEffect(() => {
     if (secondsLeft !== 0 || !running || !user) return;
-    completeSession();
+    // The tab may have been backgrounded well past the real end time before this effect got to run
+    // (see the anchoring comment above) — stamp completion at `targetEndTime`, not `Date.now()`, so
+    // a session doesn't get logged hours late or land on the wrong day across a midnight boundary.
+    completeSession(targetEndTime ?? undefined);
   }, [secondsLeft, running, user]);
 
-  function completeSession() {
+  function toggleRunning() {
+    if (running) {
+      setSecondsLeft(targetEndTime == null ? secondsLeft : Math.max(0, Math.ceil((targetEndTime - Date.now()) / 1000)));
+      setTargetEndTime(null);
+      setRunning(false);
+      return;
+    }
+    setTargetEndTime(Date.now() + secondsLeft * 1000);
+    setRunning(true);
+  }
+
+  function completeSession(endedAt?: number) {
     setRunning(false);
+    setTargetEndTime(null);
     const data: PendingSession = {
       label,
       category,
       mode,
       minutes: duration,
-      completedAt: new Date().toISOString(),
+      completedAt: new Date(endedAt ?? Date.now()).toISOString(),
       cycle,
       taskId: taskId || undefined,
       slotId
@@ -203,15 +250,15 @@ export function PomodoroTimer({
         </div>
       )}
       <div className="mt-4 grid grid-cols-3 gap-2">
-        <button className="btn-primary" onClick={() => setRunning((current) => !current)}>
+        <button className="btn-primary" onClick={toggleRunning}>
           {running ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           {running ? "Pause" : secondsLeft === duration * 60 ? "Start" : "Resume"}
         </button>
-        <button className="btn-secondary" onClick={() => { setRunning(false); setSecondsLeft(duration * 60); }}>
+        <button className="btn-secondary" onClick={() => { setRunning(false); setTargetEndTime(null); setSecondsLeft(duration * 60); }}>
           <RotateCcw className="h-4 w-4" />
           Reset
         </button>
-        <button className="btn-secondary" onClick={completeSession}>
+        <button className="btn-secondary" onClick={() => completeSession()}>
           <SkipForward className="h-4 w-4" />
           Finish
         </button>
