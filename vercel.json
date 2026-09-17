@@ -19,8 +19,8 @@
     "app/api/ai/run/route.ts": { "maxDuration": 120 },
     "app/api/admin/users/[uid]/delete-job/route.ts": { "maxDuration": 300 },
     "app/api/admin/jobs/[jobId]/route.ts": { "maxDuration": 300 },
-    "app/api/ai/papers/[paperId]/layered-notes/route.ts": { "maxDuration": 120 },
-    "app/api/ai/papers/[paperId]/highlights/route.ts": { "maxDuration": 120 },
+    "app/api/ai/papers/[paperId]/layered-notes/route.ts": { "maxDuration": 300 },
+    "app/api/ai/papers/[paperId]/highlights/route.ts": { "maxDuration": 300 },
     "app/api/cron/evening-rollup/route.ts": { "maxDuration": 120 },
     "app/api/daily-loop/rollup/route.ts": { "maxDuration": 120 }
   }

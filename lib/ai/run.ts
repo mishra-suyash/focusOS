@@ -21,8 +21,8 @@ export interface RunAiTaskResult<Output> {
 }
 
 export class NoFallbackAvailableError extends Error {
-  constructor(task: AiTaskId) {
-    super(`No AI provider is available for "${task}" and this task has no fallback.`);
+  constructor(task: AiTaskId, reason?: string) {
+    super(`No AI provider is available for "${task}" and this task has no fallback.${reason ? ` (${reason})` : ""}`);
   }
 }
 
@@ -31,8 +31,8 @@ async function attemptProvider(
   task: AnyAiTaskDef,
   provider: "claude" | "gemini" | "ollama",
   prompt: { system?: string; prompt: string; fileId?: string }
-): Promise<{ text: string; model?: string } | null> {
-  if (isBreakerOpen(provider)) return null;
+): Promise<{ ok: true; text: string; model?: string } | { ok: false; error: string }> {
+  if (isBreakerOpen(provider)) return { ok: false, error: `${provider} circuit breaker is open` };
   const startedAt = Date.now();
   try {
     const result =
@@ -59,18 +59,19 @@ async function attemptProvider(
         ? recordAiUsage(uid, { task: task.id, provider, inputTokens: result.inputTokens, outputTokens: result.outputTokens, costUsd })
         : Promise.resolve()
     ]);
-    return { text: result.text, model: result.model };
+    return { ok: true, text: result.text, model: result.model };
   } catch (error) {
     const latencyMs = Date.now() - startedAt;
+    const message = error instanceof Error ? error.message : "unknown error";
     recordFailure(provider);
     await logAiRun(uid, {
       task: task.id,
       provider,
       latencyMs,
       ok: false,
-      error: error instanceof Error ? error.message : "unknown error"
+      error: message
     });
-    return null;
+    return { ok: false, error: message };
   }
 }
 
@@ -96,8 +97,8 @@ export async function runAiTask(uid: string, taskId: AiTaskId, payload: unknown)
   const task = AI_TASKS[taskId] as AnyAiTaskDef;
   const promptInput = task.buildPrompt(payload as never);
 
-  const runFallback = async (reason: RunAiTaskResult<unknown>["meta"]["reason"]) => {
-    if (!task.fallback) throw new NoFallbackAvailableError(taskId);
+  const runFallback = async (reason: RunAiTaskResult<unknown>["meta"]["reason"], detail?: string) => {
+    if (!task.fallback) throw new NoFallbackAvailableError(taskId, detail);
     const output = task.fallback(payload as never);
     await logAiRun(uid, { task: taskId, provider: "fallback", latencyMs: 0, ok: true, error: reason });
     return { output, meta: { provider: "fallback" as const, degraded: true, reason } };
@@ -118,8 +119,8 @@ export async function runAiTask(uid: string, taskId: AiTaskId, payload: unknown)
     const { available } = await isOllamaAvailable();
     if (available) {
       const result = await attemptProvider(uid, task, "ollama", promptInput);
-      const parsed = result ? task.schema.safeParse(safeJsonParse(result.text)) : null;
-      if (parsed?.success) return { output: parsed.data, meta: { provider: "ollama", model: result?.model, degraded: false } };
+      const parsed = result.ok ? task.schema.safeParse(safeJsonParse(result.text)) : null;
+      if (parsed?.success) return { output: parsed.data, meta: { provider: "ollama", model: result.ok ? result.model : undefined, degraded: false } };
     }
   }
 
@@ -132,17 +133,22 @@ export async function runAiTask(uid: string, taskId: AiTaskId, payload: unknown)
   // return a hallucinated-but-schema-valid response as if it had read the PDF.
   if (task.requiresAnthropicFile) cloudProviders = cloudProviders.filter((provider) => provider === "claude");
 
+  let lastFailureDetail: string | undefined;
   for (const provider of cloudProviders) {
     const result = await attemptProvider(uid, task, provider, promptInput);
-    if (!result) continue;
+    if (!result.ok) {
+      lastFailureDetail = result.error;
+      continue;
+    }
     const parsed = task.schema.safeParse(safeJsonParse(result.text));
     if (parsed.success) return { output: parsed.data, meta: { provider, model: result.model, degraded: false } };
     // Unparsable structured output is that provider's failure, not something to render raw.
     recordFailure(provider);
+    lastFailureDetail = "schema validation failed";
     await logAiRun(uid, { task: taskId, provider, model: result.model, latencyMs: 0, ok: false, error: "schema validation failed" });
   }
 
-  return runFallback("no_provider_available");
+  return runFallback("no_provider_available", lastFailureDetail);
 }
 
 export async function aiHealthSnapshot(uid: string) {
