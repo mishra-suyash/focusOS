@@ -241,9 +241,12 @@ const layeredNotesTask: AiTaskDef<LayeredNotesPayload, LayeredNotesOutput> = {
   tier: "large",
   preferLocal: false,
   // The full L0-L3 shape plus a <=1200-token promptPack routinely exceeds 2000
-  // output tokens — verified live: a real call hit exactly maxTokens, produced
-  // truncated (invalid) JSON, and fell through to this no-fallback task's 503.
-  maxTokens: 4000,
+  // output tokens — verified live: a real call on a ~27k-input-token paper hit
+  // exactly 4000/4000 output tokens, produced truncated (invalid) JSON, and
+  // fell through to this no-fallback task's 503. Confirmed live that Sonnet 5
+  // accepts max_tokens up to at least 16000 with no beta header, so 8000 here
+  // leaves real headroom rather than just nudging the same ceiling.
+  maxTokens: 8000,
   schema: layeredNotesSchema,
   requiresAnthropicFile: true,
   buildPrompt: ({ fileId, title, goal, notes, pass1Summary, pass2Summary }) => ({

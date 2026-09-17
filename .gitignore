@@ -9,3 +9,5 @@ coverage
 *.serviceAccountKey.json
 service-account*.json
 .migration-backups
+.vercel
+.env*
