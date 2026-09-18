@@ -1,7 +1,8 @@
 "use client";
 
 import { orderBy } from "firebase/firestore";
-import { Sparkles, Star, Trash2 } from "lucide-react";
+import { RefreshCw, Sparkles, Star, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CheckpointForm, checkpointTypeLabels } from "@/components/checkpoint-form";
 import { ClassLogForm } from "@/components/class-log-form";
@@ -10,6 +11,7 @@ import { CourseSessionsEditor } from "@/components/course-sessions-editor";
 import { EmptyState, focusSection } from "@/components/empty-state";
 import { InfoHint } from "@/components/info-hint";
 import { ModuleGate } from "@/components/module-gate";
+import { RecurringCommitmentForm } from "@/components/recurring-commitment-form";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -23,17 +25,36 @@ import { computeCourseCoverage } from "@/lib/loadindex";
 import {
   createCheckpoint,
   createCourse,
+  createRecurringTaskTemplate,
   createTerm,
   deleteCheckpoint,
   deleteCourse,
+  deleteRecurringTaskTemplate,
   deleteTerm,
   subscribeCourseClassLogs,
   subscribeCourseTopics,
   updateCheckpoint,
   updateCourse,
+  updateRecurringTaskTemplate,
   updateTopic
 } from "@/lib/firestore";
-import type { ClassLog, Checkpoint, CheckpointStatus, Course, CourseSession, NewTerm, RevisionItem, Term, TermKind, Topic } from "@/types";
+import type {
+  ClassLog,
+  Checkpoint,
+  CheckpointStatus,
+  Course,
+  CourseSession,
+  Goal,
+  NewRecurringTaskTemplate,
+  NewTerm,
+  Paper,
+  RecurringTaskTemplate,
+  RevisionItem,
+  Task,
+  Term,
+  TermKind,
+  Topic
+} from "@/types";
 
 const CHECKPOINT_STATUSES: CheckpointStatus[] = ["upcoming", "prepping", "submitted", "done", "missed"];
 
@@ -44,6 +65,13 @@ function CoursesPageContent() {
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: revisionItems } = useUserCollection<RevisionItem>("revisionItems", useMemo(() => [], []));
   const { checkpointsByCourse } = useCourseCheckpoints(courses);
+  // Fetched in full and grouped client-side, same as every other collection on this page (and
+  // everywhere else in the app — there's no where()-filtered client subscription anywhere in this
+  // codebase) rather than one filtered subscription per course card.
+  const { items: recurringTemplates } = useUserCollection<RecurringTaskTemplate>("recurringTaskTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
 
   return (
     <>
@@ -69,6 +97,10 @@ function CoursesPageContent() {
                 today={today}
                 checkpoints={checkpointsByCourse[course.id] ?? []}
                 revisionItems={revisionItems}
+                recurringTemplates={recurringTemplates.filter((item) => item.courseId === course.id)}
+                papers={papers.filter((item) => item.relatedCourseId === course.id)}
+                openTasks={tasks.filter((item) => item.courseId === course.id && item.status !== "done")}
+                linkedGoals={goals.filter((item) => item.linked.courseIds.includes(course.id))}
               />
             ))
           )}
@@ -130,18 +162,28 @@ function CourseCard({
   terms,
   today,
   checkpoints,
-  revisionItems
+  revisionItems,
+  recurringTemplates,
+  papers,
+  openTasks,
+  linkedGoals
 }: {
   course: Course;
   terms: Term[];
   today: string;
   checkpoints: Checkpoint[];
   revisionItems: RevisionItem[];
+  recurringTemplates: RecurringTaskTemplate[];
+  papers: Paper[];
+  openTasks: Task[];
+  linkedGoals: Goal[];
 }) {
   const { user } = useAuth();
   const [editingSessions, setEditingSessions] = useState(false);
   const [logs, setLogs] = useState<ClassLog[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState("");
   const status = effectiveCourseStatus(course, today);
   const term = terms.find((item) => item.id === course.termId);
   const coverage = computeCourseCoverage(topics, revisionItems, course.id);
@@ -163,6 +205,38 @@ function CourseCard({
     setEditingSessions(false);
   }
 
+  /** plan §7's open question, resolved: a course flipped to "dropped" OR "completed" also pauses
+   * (not deletes — still reactivatable) every one of its recurring templates in the same write,
+   * rather than relying only on each template's own copied-at-creation endDate — a course with no
+   * term and no explicit dates has no endDate to copy in the first place, so without this a
+   * template on a manually-completed course would otherwise keep generating forever. */
+  async function changeStatus(nextStatus: Course["status"]) {
+    if (!user) return;
+    await updateCourse(user.uid, course.id, { status: nextStatus });
+    if (nextStatus === "active") return;
+    await Promise.all(
+      recurringTemplates.filter((template) => template.active).map((template) => updateRecurringTaskTemplate(user.uid, template.id, { active: false }))
+    );
+  }
+
+  async function generateNow() {
+    if (!user) return;
+    setGenerating(true);
+    setGenerateError("");
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch("/api/daily-loop/recurring-tasks", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to generate recurring tasks.");
+      }
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : "Failed to generate recurring tasks.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   return (
     <article className="card p-5">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -182,11 +256,7 @@ function CourseCard({
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          <select
-            className="input py-1.5 text-xs"
-            value={course.status}
-            onChange={(e) => user && updateCourse(user.uid, course.id, { status: e.target.value as Course["status"] })}
-          >
+          <select className="input py-1.5 text-xs" value={course.status} onChange={(e) => changeStatus(e.target.value as Course["status"])}>
             <option value="active">Active</option>
             <option value="completed">Completed</option>
             <option value="dropped">Dropped</option>
@@ -227,6 +297,76 @@ function CourseCard({
         </div>
       </div>
 
+      <div className="mt-4">
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="label flex items-center gap-1">Recurring commitments</p>
+          <button
+            className="btn-secondary py-1 text-xs"
+            onClick={generateNow}
+            disabled={generating}
+            title="Generates due tasks for every recurring commitment across all your courses, not just this one — the daily cron does this automatically."
+          >
+            <RefreshCw className={generating ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
+            {generating ? "Generating..." : "Generate now"}
+          </button>
+        </div>
+        {generateError ? <p className="mb-2 text-xs text-red-600 dark:text-red-400">{generateError}</p> : null}
+        <div className="space-y-2">
+          {recurringTemplates.map((template) => (
+            <RecurringCommitmentRow key={template.id} uid={user!.uid} template={template} />
+          ))}
+          {recurringTemplates.length === 0 ? <p className="text-sm text-ink-500">No recurring commitments yet — a TA meeting, office hours, or a problem set due every week.</p> : null}
+        </div>
+        <div className="mt-2">
+          <RecurringCommitmentForm
+            courseStartDate={course.startDate}
+            courseEndDate={course.endDate}
+            onCreate={(template) => createRecurringTaskTemplate(user!.uid, { ...template, courseId: course.id })}
+          />
+        </div>
+      </div>
+
+      {papers.length > 0 || openTasks.length > 0 || linkedGoals.length > 0 ? (
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+          {papers.length > 0 ? (
+            <div>
+              <p className="label mb-2">Papers</p>
+              <div className="space-y-1">
+                {papers.map((paper) => (
+                  <Link key={paper.id} href={`/papers/${paper.id}`} className="block truncate rounded-md bg-ink-50 px-2 py-1 text-xs text-ink-600 hover:underline dark:bg-ink-800 dark:text-ink-300">
+                    {paper.title}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {openTasks.length > 0 ? (
+            <div>
+              <p className="label mb-2">Open tasks</p>
+              <div className="space-y-1">
+                {openTasks.map((task) => (
+                  <p key={task.id} className="truncate rounded-md bg-ink-50 px-2 py-1 text-xs text-ink-600 dark:bg-ink-800 dark:text-ink-300">
+                    {task.title}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {linkedGoals.length > 0 ? (
+            <div>
+              <p className="label mb-2">Linked goals</p>
+              <div className="space-y-1">
+                {linkedGoals.map((goal) => (
+                  <p key={goal.id} className="truncate rounded-md bg-ink-50 px-2 py-1 text-xs text-ink-600 dark:bg-ink-800 dark:text-ink-300">
+                    {goal.title}
+                  </p>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <div>
           <p className="label mb-2 flex items-center gap-1">
@@ -266,6 +406,62 @@ function CourseCard({
         </div>
       </div>
     </article>
+  );
+}
+
+/** plan/FocusOS-v2-Connected-Flow-Plan.md §4.5 — editing title/category/priority only reshapes
+ * future generations (there's nothing here to edit those in place); "Active"/"Paused" and delete
+ * are the only controls a template needs, mirroring CheckpointRow's shape for the same course card. */
+function RecurringCommitmentRow({ uid, template }: { uid: string; template: RecurringTaskTemplate }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const days = template.daysOfWeek.map((day) => dayOfWeekLabels[day].slice(0, 3)).join(", ");
+
+  async function toggleActive() {
+    setBusy(true);
+    setError("");
+    try {
+      await updateRecurringTaskTemplate(uid, template.id, { active: !template.active });
+    } catch {
+      setError("Couldn't save that change — try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    setError("");
+    try {
+      await deleteRecurringTaskTemplate(uid, template.id);
+    } catch {
+      setError("Couldn't delete this — try again.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-ink-200 p-2 text-sm dark:border-ink-800">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <span className={template.active ? "" : "text-ink-400 line-through"}>{template.title}</span>
+          <p className="text-xs text-ink-500">
+            {days} · {template.cadence === "biweekly" ? "every 2 weeks" : "every week"}
+            {template.time ? ` · ${template.time.startTime}–${template.time.endTime}` : ""}
+            {template.time?.location ? ` · ${template.time.location}` : ""}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button className="btn-secondary py-1 text-xs" onClick={toggleActive} disabled={busy}>
+            {template.active ? "Pause" : "Resume"}
+          </button>
+          <button className="text-ink-400 hover:text-red-600 disabled:opacity-50" onClick={remove} disabled={busy} aria-label="Delete recurring commitment">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+      {error ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p> : null}
+    </div>
   );
 }
 

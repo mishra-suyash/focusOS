@@ -3,10 +3,17 @@
 import { useState } from "react";
 import { MoreOptions } from "@/components/more-options";
 import { priorities } from "@/lib/options";
-import type { NewPaper, Priority } from "@/types";
+import type { Course, NewPaper, Priority } from "@/types";
 
 /** Plan §9.5 — Title and link always visible; authors, venue, year, tags, priority behind "More options". */
-export function PaperForm({ onCreate }: { onCreate: (paper: NewPaper) => Promise<void> }) {
+export function PaperForm({
+  onCreate,
+  courses = []
+}: {
+  onCreate: (paper: NewPaper) => Promise<void>;
+  /** plan/FocusOS-v2-Connected-Flow-Plan.md §5.4 — wires up Paper.relatedCourseId, which existed in the type with no way to ever set it before this. */
+  courses?: Course[];
+}) {
   const [title, setTitle] = useState("");
   const [authors, setAuthors] = useState("");
   const [venue, setVenue] = useState("");
@@ -14,6 +21,7 @@ export function PaperForm({ onCreate }: { onCreate: (paper: NewPaper) => Promise
   const [link, setLink] = useState("");
   const [tags, setTags] = useState("");
   const [priority, setPriority] = useState<Priority>("medium");
+  const [relatedCourseId, setRelatedCourseId] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function submit(event: React.FormEvent) {
@@ -28,7 +36,8 @@ export function PaperForm({ onCreate }: { onCreate: (paper: NewPaper) => Promise
       link: link.trim() || undefined,
       status: "to_read",
       priority,
-      tags: tags.split(",").map((item) => item.trim()).filter(Boolean)
+      tags: tags.split(",").map((item) => item.trim()).filter(Boolean),
+      relatedCourseId: relatedCourseId || undefined
     });
     setTitle("");
     setAuthors("");
@@ -36,6 +45,7 @@ export function PaperForm({ onCreate }: { onCreate: (paper: NewPaper) => Promise
     setYear("");
     setLink("");
     setTags("");
+    setRelatedCourseId("");
     setSaving(false);
   }
 
@@ -57,6 +67,16 @@ export function PaperForm({ onCreate }: { onCreate: (paper: NewPaper) => Promise
             ))}
           </select>
         </div>
+        {courses.length > 0 ? (
+          <select className="input" value={relatedCourseId} onChange={(e) => setRelatedCourseId(e.target.value)} aria-label="Course">
+            <option value="">— No course —</option>
+            {courses.map((course) => (
+              <option key={course.id} value={course.id}>
+                {course.code ? `${course.code} · ${course.name}` : course.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
       </MoreOptions>
       <button className="btn-primary w-full sm:w-auto" disabled={saving}>
         Add to reading list

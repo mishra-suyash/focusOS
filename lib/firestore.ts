@@ -43,6 +43,7 @@ import type {
   NewPaper,
   NewPaperGroup,
   NewPaperNote,
+  NewRecurringTaskTemplate,
   NewRevisionItem,
   NewTask,
   NewTerm,
@@ -52,6 +53,7 @@ import type {
   PaperNote,
   PomodoroSession,
   ProposedSlot,
+  RecurringTaskTemplate,
   RevisionItem,
   ScheduleSlot,
   Task,
@@ -347,6 +349,37 @@ export async function deleteGoal(uid: string, id: string) {
   await deleteDoc(doc(userCollection(uid, "goals"), id));
 }
 
+export async function createRecurringTaskTemplate(uid: string, template: NewRecurringTaskTemplate): Promise<string> {
+  const createdAt = now();
+  trackWrite();
+  const ref = await addDoc(userCollection(uid, "recurringTaskTemplates"), withoutUndefined({ ...template, createdAt, updatedAt: createdAt }));
+  return ref.id;
+}
+
+export async function updateRecurringTaskTemplate(uid: string, id: string, patch: Partial<RecurringTaskTemplate>) {
+  trackWrite();
+  await updateDoc(doc(userCollection(uid, "recurringTaskTemplates"), id), withoutUndefined({ ...patch, updatedAt: now() }));
+}
+
+/**
+ * Deleting a template also removes the task instances it already generated, so long as they're
+ * still open — a deleted series shouldn't leave zombie tasks in the list pointing at a template
+ * that no longer exists. Instances the user already completed are left alone; they're history.
+ */
+export async function deleteRecurringTaskTemplate(uid: string, id: string) {
+  if (!db) return;
+  // Equality-only filter (no composite index needed) — "done" ones are filtered out client-side
+  // before deleting, same trick used below in deleteCourse.
+  const instances = await getDocs(query(userCollection(uid, "tasks"), where("seriesId", "==", id)));
+  trackRead(instances.size);
+  const openInstances = instances.docs.filter((item) => item.data().status !== "done");
+  const batch = writeBatch(db);
+  openInstances.forEach((item) => batch.delete(item.ref));
+  batch.delete(doc(userCollection(uid, "recurringTaskTemplates"), id));
+  trackWrite(openInstances.length + 1);
+  await batch.commit();
+}
+
 /**
  * Appends one Accept-ed rollup slot into a date's DailySchedule, creating the
  * schedule from the default (or break) template first if that date has no
@@ -396,19 +429,31 @@ export async function updateCourse(uid: string, id: string, patch: Partial<Cours
   await updateDoc(doc(userCollection(uid, "courses"), id), withoutUndefined({ ...patch, updatedAt: now() }));
 }
 
-/** Deletes a course and cascades to its nested checkpoints/classLogs (topics are kept — they outlive the course). */
+/**
+ * Deletes a course and cascades to its nested checkpoints/classLogs (topics are kept — they
+ * outlive the course) plus its recurringTaskTemplates (plan `FocusOS-v2-Connected-Flow-Plan.md`
+ * §7's "flip templates off with their course" — those aren't a subcollection, so they need their
+ * own query, not just a subcollection delete), plus any still-open task instances those templates
+ * already generated — same "don't leave zombie tasks behind" rule as deleteRecurringTaskTemplate.
+ * Ordinary hand-created tasks that merely reference the course (no seriesId) are left alone.
+ */
 export async function deleteCourse(uid: string, id: string) {
   if (!db) return;
-  const [checkpoints, classLogs] = await Promise.all([
+  const [checkpoints, classLogs, templates, courseTasks] = await Promise.all([
     getDocs(courseSubcollection(uid, id, "checkpoints")),
-    getDocs(courseSubcollection(uid, id, "classLogs"))
+    getDocs(courseSubcollection(uid, id, "classLogs")),
+    getDocs(query(userCollection(uid, "recurringTaskTemplates"), where("courseId", "==", id))),
+    getDocs(query(userCollection(uid, "tasks"), where("courseId", "==", id)))
   ]);
-  trackRead(checkpoints.size + classLogs.size);
+  const openInstances = courseTasks.docs.filter((item) => item.data().seriesId && item.data().status !== "done");
+  trackRead(checkpoints.size + classLogs.size + templates.size + courseTasks.size);
   const batch = writeBatch(db);
   checkpoints.docs.forEach((item) => batch.delete(item.ref));
   classLogs.docs.forEach((item) => batch.delete(item.ref));
+  templates.docs.forEach((item) => batch.delete(item.ref));
+  openInstances.forEach((item) => batch.delete(item.ref));
   batch.delete(doc(userCollection(uid, "courses"), id));
-  trackWrite(checkpoints.size + classLogs.size + 1);
+  trackWrite(checkpoints.size + classLogs.size + templates.size + openInstances.length + 1);
   await batch.commit();
 }
 

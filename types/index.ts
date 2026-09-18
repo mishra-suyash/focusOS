@@ -157,12 +157,16 @@ export interface Task {
   dueDate?: string;
   estimatedPomodoros?: number;
   completedAt?: string;
-  /** "external" (G6): a hard-deadline, non-study task (visa renewal, a form, a submission portal) — excluded from the Load Index's `required` term but still counts toward `actual` on completion. Unset/"internal" is every other task, unchanged. There's no separate `oneOff` flag: this app has no recurring-task concept at all, so every task is already one-off. */
+  /** "external" (G6): a hard-deadline, non-study task (visa renewal, a form, a submission portal) — excluded from the Load Index's `required` term but still counts toward `actual` on completion. Unset/"internal" is every other task, unchanged. */
   kind?: "internal" | "external";
   /** Only meaningful with kind "external" and a dueDate — days-before-due to surface a reminder (e.g. [7, 2, 0]). */
   reminderLeadDays?: number[];
   /** Plan §11.2 F5 — the status a task had right before it was last marked "done", so unchecking can restore it instead of always landing on "todo". */
   previousStatus?: TaskStatus;
+  /** Which course this task belongs to (plan `FocusOS-v2-Connected-Flow-Plan.md` §3.1). Only meaningful when the "courses" module is on; absent = unlinked, same as every task before this field existed. */
+  courseId?: string;
+  /** Set only on a task materialized from a RecurringTaskTemplate (§4) — points back at it. Absent = an ordinary, hand-created task, the common case, unchanged. A generated instance is immutable-after-creation (§4.3): editing it is always just editing that one task by hand. */
+  seriesId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -286,6 +290,41 @@ export interface Course {
   createdAt: string;
   updatedAt: string;
 }
+
+export type RecurrenceCadence = "weekly" | "biweekly";
+
+/**
+ * A weekly/biweekly commitment (plan `FocusOS-v2-Connected-Flow-Plan.md` §3.2/§4) — a TA meeting,
+ * office hours, or a problem set due every Friday — configured once and materialized into ordinary
+ * `Task` docs (`Task.seriesId` pointing back here) on a rolling window, the same "compute a rule
+ * into concrete records" pattern `RoutineBlock`/`CourseSession` already use for `ScheduleSlot`s.
+ * Lives at users/{uid}/recurringTaskTemplates/{id}, a flat collection (not nested under the
+ * course), so `Task.courseId`/`Paper.relatedCourseId` and this can all be queried the same way.
+ */
+export interface RecurringTaskTemplate {
+  id: string;
+  title: string;
+  courseId?: string;
+  category: Category;
+  priority: Priority;
+  estimatedPomodoros?: number;
+  description?: string;
+  cadence: RecurrenceCadence;
+  /** 0 (Sun) – 6 (Sat), one or more — same convention as RoutineBlock.daysOfWeek and CourseSession.dayOfWeek. */
+  daysOfWeek: number[];
+  /** Required whenever cadence is "biweekly" (parity — odd/even calendar week — is computed relative to it); meaningless and left unset for "weekly". Set once at creation time (to that moment's date), so this is never left unset in practice for a biweekly template. */
+  anchorDate?: string;
+  /** Optional clock time. Plain due-dated tasks like "grade problem sets" leave this unset. */
+  time?: { startTime: string; endTime: string; location?: string };
+  active: boolean;
+  /** Bounds, resolved and copied in at creation time from the linked course's own startDate/endDate (the same "copy the term's dates in" pattern `CourseForm`'s submit handler already uses). Left unset for an unlinked template, which then runs indefinitely until paused. */
+  startDate?: string;
+  endDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NewRecurringTaskTemplate = Omit<RecurringTaskTemplate, "id" | "createdAt" | "updatedAt">;
 
 /** One class session's log, doc id = yyyy-MM-dd, nested under courses/{courseId}/classLogs. */
 export interface ClassLog {
@@ -689,7 +728,16 @@ export interface Goal {
   why?: string;
   definitionOfDone: string;
   milestones: GoalMilestone[];
-  linked: { courseIds: string[]; paperIds: string[]; taskIds: string[]; goalIds: string[] };
+  linked: {
+    /** The one relationship actually surfaced in the UI (`/goals`'s course-link checkboxes) and read back (the course card's "Linked goals" list — plan `FocusOS-v2-Connected-Flow-Plan.md` §5.1). */
+    courseIds: string[];
+    /** @deprecated Never had UI, never read anywhere. Once Task/Paper carry `courseId`/`relatedCourseId`, "papers/tasks for this goal" is already answerable transitively via the goal's linked courses — a second direct link would just be two sources of truth to keep in sync by hand. Left in the type only so existing empty-array documents don't need a migration; do not add UI for this. */
+    paperIds: string[];
+    /** @deprecated see paperIds. */
+    taskIds: string[];
+    /** @deprecated see paperIds. Sub-goal nesting is a real idea but a separate one from that plan's pass. */
+    goalIds: string[];
+  };
   targetHoursPerWeek?: number;
   status: GoalStatus;
   reviewCadence: ReviewCadence;

@@ -1,0 +1,244 @@
+# FocusOS v2 — Connected Flow: course-linked tasks, papers, and recurring commitments
+
+**Status:** Draft for review · **Routes touched:** `/courses`, `/tasks`, `/papers`, `/goals`, new cron `app/api/cron/recurring-tasks` · **Companion to:** `FocusOS-v2-Plan.md` §5.3 (Task), §5.7 (Papers), §5.8 (Goals), §7 (Courses subsystem); reuses the materialization pattern from `FocusOS-v2-Routine-Blocks-and-AI-Templates.md`
+**Principle carried over:** additive and non-destructive. Every new field is optional; no migration; every existing document stays valid untouched.
+**Evidence basis:** every current-state claim below is grounded in source (`grep`, direct file reads) plus a live click-through of the running app done earlier in this working session. The browser connector was unavailable when writing this specific doc, so the UI claims were not re-verified live in this pass — they rest on source plus that earlier session pass, not a fresh screenshot-by-screenshot walkthrough today.
+
+---
+
+## Implementation status
+
+Phase 1 (direct links) and Phase 2 (the recurring-task engine) are both implemented in full. Phase 3 (§4.4, optional calendar/`ScheduleSlot` materialization for timed commitments) was deliberately cut, per this doc's own §6 guidance that it's "a nice-to-have, not the core ask" — a recurring commitment with a time set still shows up as a due-dated task and its time/location render as text on the course card's row, it just doesn't also lock a block on the day timeline.
+
+- **§3.1 `Task.courseId`/`seriesId`** — added to the type, wired into `TaskForm` (course `<select>` behind "More options"), the Tasks page (course filter + fetch), and `TaskList` (course-name chip + a "generated from a series" chip).
+- **§3.3 `Paper.relatedCourseId`** — wired into `PaperForm` (course `<select>`) and the Papers page (fetches courses, passes them down). No schema change needed — the field already existed, dead.
+- **§3.4 `Goal.linked`** — the three unused sub-fields (`paperIds`/`taskIds`/`goalIds`) marked `@deprecated`; `courseIds` is the one that's actually read (course card's "Linked goals" list).
+- **§4 the recurring-task engine** — `lib/recurring-tasks.ts` (pure `isTemplateDueOn`/`recurringTaskInstanceId`/`dateKeysInRange`, unit-tested by `scripts/verify-recurring-tasks.ts`), `lib/admin-recurring-tasks.ts` (Admin-SDK generation using `.create()` for idempotency, per §4.3), a daily cron (`app/api/cron/recurring-tasks`, `vercel.json`) and a manual "Generate now" endpoint (`app/api/daily-loop/recurring-tasks`), mirroring the Morning overview/Evening rollup pattern exactly.
+- **§5.1 course card** — new "Recurring commitments" section (`RecurringCommitmentForm` + `RecurringCommitmentRow`, add/pause/resume/delete) and a read-only "Papers / Open tasks / Linked goals" grid, both on `app/(app)/courses/page.tsx`.
+- **Beyond the original spec, added during implementation review:** a course flipped to "completed" (not just "dropped") also pauses its recurring templates now — a course with no term and no explicit dates has no `endDate` to fall back on, so without this a template on a manually-completed course would generate forever. Deleting a template or a course now also deletes that series' still-open (not-yet-done) generated task instances instead of leaving them orphaned with a `seriesId` pointing at nothing.
+
+**Deliberate deviation from this doc's own §5.1 proposal:** §5.1 as originally written proposed per-course-card `where()`-filtered Firestore subscriptions for a course's papers/tasks/goals, plus a new composite index for a `linked.courseIds` array-contains query. A grep of every `useUserCollection<...>` call site in the app during implementation found **zero** `where()`-filtered client subscriptions anywhere — the universal, established convention is "fetch the whole collection once, filter client-side" (see `hooks/use-user-collection.ts`). Implementation followed that existing convention instead: `recurringTaskTemplates`/`papers`/`tasks`/`goals` are each fetched once at the page level and filtered per-course with `.filter()`. No new Firestore index was needed as a result.
+
+**Verification performed:** `tsc --noEmit` and `eslint . --max-warnings=0` clean on the whole repo, a full production `npm run build`, curl smoke-tests of both new API routes (correct 401s, no 500s), the new `scripts/verify-recurring-tasks.ts` (hand-verified weekly/biweekly/startDate/endDate/inactive cases, all passing), and a regression run of the other existing `verify:*` scripts. **Not done:** live browser verification — the browser connector was unavailable for this entire implementation pass (same limitation noted above for the planning pass), so nothing here has been click-tested end-to-end (submitting the new forms, confirming a template write round-trips, confirming generated tasks actually appear in the Tasks list). Recommend a manual pass through `/courses` → add a recurring commitment → "Generate now" → check `/tasks` before treating this as fully verified.
+
+**Known pre-existing, unrelated issue found during regression testing, left untouched as out of scope:** `verify:vocabulary` fails on `components/floating-widget-content.tsx:85`, which uses the retired term "Load Index" instead of "Workload." That file is untracked, pre-existing WIP unrelated to this plan.
+
+---
+
+## 0. TL;DR
+
+The user's complaint: *"things are not connected... I wanted a cycled flow with courses, papers, recurring tasks (like TA meets) etc."* That's accurate, not a vague feeling — I verified it against the running app and the source. Courses, Papers, Tasks, and Goals are four separate silos today:
+
+- `Task` has no way to say "this belongs to CS201." No `courseId`, no `paperId` field at all.
+- `Paper.relatedCourseId` and `Paper.relatedTaskId` exist in `types/index.ts` but are **dead** — grep finds zero reads or writes anywhere in the UI. The field has existed with no way to ever set it.
+- `Goal.linked.courseIds` has a checkbox in the UI (`app/(app)/goals/page.tsx`) but the value is **never read back anywhere** — not on the course card, not in `lib/goals.ts`'s Load Index math, nowhere. `Goal.linked.paperIds`/`.taskIds`/`.goalIds` have no UI at all — three more dead fields.
+- There is no way to represent a recurring commitment — a weekly TA meeting, weekly office hours, a problem set due every Friday — at all. The `Task` type's own doc comment says it outright: *"this app has no recurring-task concept at all, so every task is already one-off."* Every week, the user has to retype the same task by hand.
+- `Course` has no detail page and no per-course view of "everything about this course" — the `CourseCard` on `/courses` shows Checkpoints, Class Log, and Topics, but never the papers or tasks that belong to it, because nothing currently can belong to it.
+
+The fix, in one paragraph: give `Task` and `Paper` a real `courseId` link (Paper's already has the field — it just needs wiring), add a small recurring-commitment engine that materializes real, completable `Task` docs on a schedule (reusing the exact "compute a rule into concrete records" pattern the codebase already uses for `RoutineBlock` and `CourseSession`, and the exact "generate on cron, or click Generate now" pattern already used for the Morning overview / Evening rollup / AI Insights), and turn the course card into the hub where all of it actually shows up together. Retire the two dead `Goal.linked` sub-fields instead of half-finishing a second, competing linking system.
+
+---
+
+## 1. Goals and non-goals
+
+**Goals**
+
+- A task, a paper, and a recurring commitment can all say which course they belong to, and the course card is where you see all three together.
+- A recurring commitment ("TA office hours, every Tue 14:00–15:00" or "grade problem sets, due every Friday") is configured **once**, on the course, the same way `CourseSession` already handles weekly lecture times — not retyped by hand every week.
+- Recurring commitments materialize into ordinary `Task` docs — they show up in the existing Tasks list, filters, and Today page with zero new UI to learn, the same way a class block or a routine block is just an ordinary `ScheduleSlot` once materialized.
+- `Goal` stays the one genuinely different relationship (a goal spans one or more courses, e.g. "pass the quals" spans three courses) but stops carrying two more link arrays nothing ever reads.
+
+**Non-goals**
+
+- No general-purpose RRULE/iCal recurrence engine. Cadence is `weekly | biweekly`, driven by `daysOfWeek`, exactly like `RoutineBlock` and `CourseSession` already express "every Tuesday" — anything more exotic ("first Monday of the month") is out of scope, same restraint the routine-blocks doc already took.
+- No one-off "skip this occurrence" UI in this pass, for the same reason `FocusOS-v2-Routine-Blocks-and-AI-Templates.md` §1 gave for routine blocks: it's a real feature but a separate one. A generated task can always just be deleted like any other task if a specific week's TA meeting is cancelled — that already works today, no new code needed.
+- No retroactive relinking. Turning on `courseId` for `Task`/`Paper` does not try to guess which existing tasks/papers belong to which course from titles or categories. Old records stay unlinked until the user links them by hand.
+- No course detail *route*. This reuses the existing expandable `CourseCard` on `/courses` rather than building a new `/courses/[id]` page — smaller change, and the course list is short enough (a handful of courses per term) that a route isn't earning its complexity yet.
+- Not touching `Checkpoint` in this pass. A recurring *assessment* ("weekly quiz") is a real, different idea from a recurring *commitment/task* and deserves its own look later — see §7.
+
+---
+
+## 2. What's actually broken today, with receipts
+
+| Claim | Where it's proven |
+|---|---|
+| `Task` has no course/paper link | `types/index.ts` `Task` interface — only `title/description/status/priority/category/dueDate/estimatedPomodoros/kind/reminderLeadDays`. No `courseId`, no `paperId`. |
+| `Task` has no recurrence concept | `types/index.ts`, the `Task.kind` doc comment: *"There's no separate `oneOff` flag: this app has no recurring-task concept at all, so every task is already one-off."* |
+| `Paper.relatedCourseId` / `relatedTaskId` are dead | `grep -rn "relatedCourseId\|relatedTaskId" --include="*.tsx" app/ components/` → zero results. The field is declared, never rendered, never set. |
+| `Goal.linked.paperIds`/`.taskIds`/`.goalIds` are dead | `grep -rn "courseIds\b"` shows only `courseIds` has any UI (`app/(app)/goals/page.tsx:256-257,317`, a checkbox). The other three sub-fields of `linked` have no matches anywhere outside the type declaration and the two empty-object initializers. |
+| `Goal.linked.courseIds` is write-only | Same grep — the only reads are the checkbox's own `checked=` prop, computed from the goal being edited. Nothing else (not `CourseCard`, not `lib/goals.ts`) ever queries it. `lib/goals.ts` only reads `targetHoursPerWeek`. |
+| Papers UI never mentions courses at all | `grep -rn "course" app/(app)/papers/ components/paper*.tsx` → zero results (excluding `Coursera`-type false positives, which there are also none of). |
+| `CourseSession` is lecture-only, not general | `lib/courses.ts`'s `courseSlotsForDate` hardcodes `type: "class"` and the slot title to the course name/code — there's no way to label a session "TA office hours" vs. "Lecture." |
+
+---
+
+## 3. Data model changes
+
+### 3.1 `Task` gains a course link and a series link
+
+```ts
+// types/index.ts — Task, additive only
+export interface Task {
+  // ...existing fields unchanged...
+  /** Which course this task belongs to. Only meaningful when the "courses" module is on; absent = unlinked, same as every task today. */
+  courseId?: string;
+  /** Set only on a task materialized from a RecurringTaskTemplate — points back at it. Absent = an ordinary, hand-created task (the common case, unchanged). */
+  seriesId?: string;
+}
+```
+
+No existing `Task` document gets either of these two fields — both optional, both absent on every record that exists right now. (An earlier draft of this spec also proposed an `occurrenceDate` field; dropped — the deterministic document id in §4.3 already encodes the date, and `dueDate` already carries it on the task itself, so a third place storing the same date would be exactly the kind of field nothing reads that §2 is complaining about.)
+
+### 3.2 New `RecurringTaskTemplate` — the rule a real task gets generated from
+
+```ts
+// types/index.ts — new
+export type RecurrenceCadence = "weekly" | "biweekly";
+
+export interface RecurringTaskTemplate {
+  id: string;
+  title: string;
+  courseId?: string;
+  category: Category;
+  priority: Priority;
+  estimatedPomodoros?: number;
+  description?: string;
+  cadence: RecurrenceCadence;
+  /** 0 (Sun) – 6 (Sat), one or more — same convention as RoutineBlock.daysOfWeek and CourseSession.dayOfWeek. */
+  daysOfWeek: number[];
+  /** Required whenever cadence is "biweekly" (parity — odd/even ISO week — is computed relative to it); meaningless and omitted for "weekly". Set once at creation time, to the template's own createdAt date, so this is never left unset in practice — a biweekly template with no anchor would otherwise silently behave as weekly (see §4.1). */
+  anchorDate?: string;
+  /** Optional clock time. When set, generation also materializes a locked ScheduleSlot for the day (§4.4) — same dual "task + calendar" surface Checkpoint already gets (plan §7.4: "Checkpoints appear on the calendar, the dashboard next-up strip, and the course page"). Absent = a plain due-dated task with no fixed time, like "grade problem sets." */
+  time?: { startTime: string; endTime: string; location?: string };
+  active: boolean;
+  /** Bounds, resolved and copied in at creation time from the linked course's own startDate/endDate — the same "copy the term's dates in when the course is created" pattern `CourseForm`'s submit handler already uses (`startDate: startDate || term?.startDate`). Left both unset for an unlinked template, which then runs indefinitely until paused. Resolving at creation time (not as a read-time fallback) means §4.1's due-check never needs the course doc at all, only the template. */
+  startDate?: string;
+  endDate?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NewRecurringTaskTemplate = Omit<RecurringTaskTemplate, "id" | "createdAt" | "updatedAt">;
+```
+
+Lives at `users/{uid}/recurringTaskTemplates/{templateId}`, alongside the other per-user collections in `lib/firestore.ts`.
+
+### 3.3 `Paper.relatedCourseId` — no schema change, just wire it up
+
+The field already exists (`types/index.ts:457`). Nothing to add here — §5.4 is purely UI work: a course `<select>` in `PaperForm` that was simply never built.
+
+### 3.4 `Goal.linked` — stop half-finishing a second hub
+
+Recommendation: keep `Goal.linked.courseIds` (it's a real, different relationship — a goal can legitimately span several courses, e.g. "pass quals" spanning three), but finally read it somewhere (§5.1 — a course card can show "Linked goals: Pass quals"). Mark the other three sub-fields deprecated rather than building UI for them:
+
+```ts
+// types/index.ts — Goal, no field removed (no migration needed), just documented as dead-and-staying-dead
+linked: {
+  courseIds: string[];
+  /** @deprecated Never had UI, never read. Once Task/Paper carry courseId (§3.1, §3.3), "papers/tasks for this goal" is already answerable transitively via the goal's linked courses — a second direct link would just be two sources of truth to keep in sync by hand. Left in the type only so existing empty-array documents don't need a migration; do not add UI for this. */
+  paperIds: string[];
+  /** @deprecated see paperIds. */
+  taskIds: string[];
+  /** @deprecated see paperIds. Sub-goal nesting is a real idea but a separate one from this pass. */
+  goalIds: string[];
+};
+```
+
+This matches the codebase's own existing convention for a field kept only for back-compat — see `Course.term`'s `@deprecated` comment for precedent.
+
+---
+
+## 4. The recurring-task engine
+
+### 4.1 A pure "is this rule due today" function, mirroring the codebase's existing materializers
+
+```ts
+// lib/recurring-tasks.ts
+import { getDay, differenceInCalendarWeeks, parseISO } from "date-fns";
+import type { RecurringTaskTemplate } from "@/types";
+
+/** Mirrors lib/routine.ts's routineSlotsForDate and lib/courses.ts's courseSlotsForDate in shape:
+ * a pure function of plain data, no Firestore import, safe to reuse from a cron route or a test. */
+export function isTemplateDueOn(template: RecurringTaskTemplate, dateKey: string): boolean {
+  if (!template.active) return false;
+  if (template.startDate && dateKey < template.startDate) return false;
+  if (template.endDate && dateKey > template.endDate) return false;
+  const dayOfWeek = getDay(parseISO(dateKey));
+  if (!template.daysOfWeek.includes(dayOfWeek)) return false;
+  if (template.cadence === "weekly") return true;
+  // biweekly: same-parity ISO week as the anchor. §3.2 requires anchorDate to be set at creation
+  // time for every biweekly template, so there's no "unset anchor" case to silently fall back on here.
+  const weeksSinceAnchor = differenceInCalendarWeeks(parseISO(dateKey), parseISO(template.anchorDate!));
+  return weeksSinceAnchor % 2 === 0;
+}
+```
+
+### 4.2 Where generation runs
+
+Two triggers, both idempotent (§4.3), both reusing infrastructure that already exists:
+
+1. **A new cron**, `app/api/cron/recurring-tasks/route.ts`, alongside the existing `morning-brief`/`evening-rollup`/`daily-insight` routes. Runs once daily, generates a **rolling 14-day window** (today through today+13) for every active template, for every user. A 14-day window (not just "today") is what makes a recurring task show up in the Tasks page's existing "This week" / "Upcoming" filters ahead of time instead of appearing the morning it's due.
+2. **A manual "Generate now"** affordance next to the recurring-commitments list on the course card, for the same reason every other AI/derived surface in this app has one — the Morning overview card, the Evening rollup, and AI Insights all already say some variant of *"No overview yet — the cron will generate one automatically, or click Generate for it now."* This is that same, already-established UX pattern, not a new one.
+
+Both call the same `generateRecurringTaskInstances(uid, fromDateKey, toDateKey)` in `lib/recurring-tasks.ts`.
+
+### 4.3 Idempotency without a query, and generated instances are immutable after creation
+
+Generation always runs server-side through the Admin SDK — same as every other cron route (`lib/admin-dailyloop.ts`'s `adminDb()`, called from `app/api/cron/morning-brief/route.ts` and its siblings). That gives access to `DocumentReference.create()`, which is atomic and throws `ALREADY_EXISTS` if the document is already there, instead of silently overwriting it the way `.set()` would.
+
+Give every generated task a **deterministic Firestore document id**: `` `rec-${template.id}-${dateKey}` ``, and write it with `.create()`, catching and ignoring `ALREADY_EXISTS`. Regenerating an overlapping window — the daily cron re-covering its 14-day rolling window, or a manual "Generate now" overlapping the next cron run — just re-throws-and-ignores on every date that's already materialized. No existence-check read needed first (a `.create()` attempt *is* the check), no race between two generation runs, and, because `.create()` by definition never touches a document that already exists, **a generated instance is immutable after creation**: this is the one and only story, and it's what makes §4.5's claims true — editing an already-generated task is always just editing that one task by hand (nothing will silently revert it), and editing the template only ever reshapes instances not yet generated.
+
+### 4.4 Optional calendar presence, reusing the Checkpoint precedent
+
+When a template has `time` set, generation also calls a new `recurringSlotsForDate(templates, dateKey)` (same shape as `courseSlotsForDate`/`routineSlotsForDate`) to place a locked `ScheduleSlot` on that day's timeline, titled from the template and colored from its course. This isn't a new pattern — plan §7.4 already establishes that a Checkpoint "appears on the calendar, the dashboard next-up strip, and the course page" simultaneously; a timed recurring commitment (an actual meeting, unlike an untimed one like "grade problem sets") is the same kind of dual-surface object.
+
+### 4.5 Editing a series vs. one instance
+
+A generated task (`seriesId` set) shows a small "↻ weekly" chip in `components/task-list.tsx` (reads `seriesId`, no new query — it's already on the task). Editing title/category/priority happens on the `RecurringTaskTemplate` (via the course card), which only affects *future* generations, matching how editing a `CourseSession`'s time only reshapes future days (see `lib/courses.ts`'s `refreshCourseSlotsAfterSessionsChange`, which explicitly only touches days from today forward). One already-generated instance can always be edited or deleted individually like any other task — no special-case UI needed there, that's just existing task editing.
+
+---
+
+## 5. UI changes, page by page
+
+### 5.1 Course card (`app/(app)/courses/page.tsx`, `CourseCard`) — becomes the actual hub
+
+Add two new subsections alongside the existing Checkpoints / Class Log / Topics (same collapsible-section style already used there):
+
+- **Recurring commitments** — a row-based editor matching `CourseForm`'s existing "Weekly sessions" editor pattern exactly (`newSession()`-style factory, `dayOfWeekLabels` from `lib/courses.ts`, a trash icon per row, "+ Add commitment"), plus a title field, optional time, and cadence. Each row shows an active/paused toggle. A "Generate now" button next to the list (§4.2).
+- **Papers for this course** — papers where `relatedCourseId === course.id`. *Query cost:* one `useUserCollection<Paper>("papers", [where("relatedCourseId","==",course.id)])` subscription per expanded course card. `relatedCourseId` is a plain scalar field, so this is a single-field query — Firestore auto-indexes those, no entry needed in `firestore.indexes.json`. Read-only list with progress/status, linking out to `/papers/[id]`.
+- **Open tasks for this course** — tasks where `courseId === course.id && status !== "done"`. Same single-field-plus-inequality shape as the existing task queries elsewhere in the app; no new composite index needed as long as it stays a `where("courseId","==",...)` filtered client-side by status (matching how `/tasks` already filters `view`/`category`/`priority`/`status` client-side after one collection read, per `app/(app)/tasks/page.tsx`), rather than a second server-side `where` clause.
+- **Linked goals** (small, read-only) — goals whose `linked.courseIds` includes this course. *Query cost:* this one is different — `where("linked.courseIds", "array-contains", course.id)` **does** need a composite index entry added to `firestore.indexes.json` (an `array-contains` filter on a nested field isn't auto-indexed the way a top-level scalar equality is), the same way master plan §7.3 calls out the explicit composite index its own revision-engine query needs. Flag this for whoever implements Phase 1 so it doesn't surface as a runtime "missing index" error on first deploy.
+
+### 5.2 Task quick-add (`components/task-form.tsx`)
+
+Inside the existing `MoreOptions` block, next to category/priority: a Course `<select>` (options from a `courses` prop, `"— No course —"` as the unset option), rendered only when the caller passes a non-empty `courses` array — matching how the whole Courses module is already optional (`moduleId: "courses"` gating in `components/app-shell.tsx`). Requires `app/(app)/tasks/page.tsx` and the dashboard's compact `TaskForm` usage to fetch `useUserCollection<Course>("courses", ...)` and pass it down — neither currently does.
+
+### 5.3 Tasks page (`app/(app)/tasks/page.tsx`)
+
+Add a fifth filter — Course — next to the existing Inbox/category/priority/status row (already a responsive grid, `grid grid-cols-2 gap-3 md:grid-cols-4` after the mobile audit fix; becomes `md:grid-cols-5` or wraps to a second row). `components/task-list.tsx` gets a small course-color chip per row (reusing `course.color`, the same field `courseSlotsForDate` already uses to color class blocks) plus the "↻" series chip from §4.5.
+
+### 5.4 Add-a-paper form (`components/paper-form.tsx`)
+
+One new `<select>` inside the existing `MoreOptions` block, next to Tags/Priority, writing `relatedCourseId`. Same "only render if the user has courses" rule as §5.2. `app/(app)/papers/page.tsx` needs a `useUserCollection<Course>` subscription it doesn't currently have.
+
+### 5.5 Goals page (`app/(app)/goals/page.tsx`)
+
+No UI change required — `courseIds` linking already exists there. This page is the one place in the whole flow that's already correctly built; it just needed something on the *other* end (§5.1's "Linked goals") to make the link visible from both directions instead of only one.
+
+---
+
+## 6. Phasing
+
+Ship in this order — each phase is independently useful, and later phases build cleanly on earlier ones:
+
+1. **Phase 1 — direct links, no recurrence yet.** §3.1's `courseId` on `Task`, §3.3's wiring of `Paper.relatedCourseId`, §5.2–§5.4's three small form changes, §5.1's read-only "Papers/Tasks/Linked goals" lists on the course card. This alone directly answers "why doesn't a task know what course it's for" with the smallest possible diff, and needs no new collection, no cron, no generation logic.
+2. **Phase 2 — the recurring engine.** §3.2's `RecurringTaskTemplate`, §4's generation logic and cron, §5.1's recurring-commitments editor, §4.5's series chip and edit-vs-instance behavior. This is the part that actually answers "TA meets every week and I'm sick of retyping it."
+3. **Phase 3 — optional, do only if Phase 2 lands well.** §4.4's calendar (`ScheduleSlot`) materialization for timed commitments. Cut if Phase 2's task-only version already feels sufficient in practice — a locked calendar block is a nice-to-have, not the core ask.
+
+---
+
+## 7. Open questions (real product decisions, not mine to make unilaterally)
+
+- **Should `Checkpoint` gain recurrence too** (a weekly quiz, not just a one-off midterm)? Today every checkpoint instance is hand-created. This plan deliberately doesn't touch it (§1 non-goals), but it's the same underlying gap and could reuse `RecurringTaskTemplate`'s cadence machinery later if it turns out weekly quizzes are common enough to be worth it.
+- **Cross-course tasks** — a task like "buy a new laptop charger" clearly shouldn't be forced into a course. `courseId` being optional already covers this, but worth confirming: should the Tasks page's Inbox/default view still show course-linked tasks mixed in with unlinked ones (current plan), or split them into a separate section? Leaning toward "mixed, filterable" (simpler, matches how category already works) unless real use surfaces a reason not to.
+- **What happens to a `RecurringTaskTemplate` when its linked course ends** (term over, course marked `dropped`/`completed`)? The template's `endDate` is only resolved from the course *once*, at creation time (§3.2), so a course ending on schedule already stops generation for free via `isTemplateDueOn`'s existing `endDate` check — but a course dropped *early*, mid-term, won't retroactively update a template's already-copied `endDate`. Leaning toward: when a course's status flips to `dropped`, also flip every one of its `RecurringTaskTemplate`s to `active: false` in the same write (mirroring how `refreshCourseSlotsAfterSessionsChange` already reacts to a course-level edit by touching its downstream records) rather than relying on date comparison alone. Already-generated task instances stay untouched either way — they're real, independent tasks now. Flagging this so it gets a deliberate "yes, that's right" rather than being an accidental gap nobody decided on.

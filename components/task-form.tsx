@@ -4,12 +4,21 @@ import { useState } from "react";
 import { MoreOptions } from "@/components/more-options";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 import { categories, priorities } from "@/lib/options";
-import type { Category, NewTask, Priority } from "@/types";
+import type { Category, Course, NewTask, Priority } from "@/types";
 
 const DEFAULT_EXTERNAL_LEAD_DAYS = [7, 2, 0];
 
 /** Plan §9.5 — Title and due date (Today / Tomorrow / Pick) always visible; everything else behind "More options". */
-export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTask) => Promise<unknown>; compact?: boolean }) {
+export function TaskForm({
+  onCreate,
+  compact = false,
+  courses = []
+}: {
+  onCreate: (task: NewTask) => Promise<unknown>;
+  compact?: boolean;
+  /** plan/FocusOS-v2-Connected-Flow-Plan.md §5.2 — the course picker only renders when there's at least one course to pick, matching how the whole Courses module is already optional. */
+  courses?: Course[];
+}) {
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState<Category>("research");
   const [priority, setPriority] = useState<Priority>("medium");
@@ -17,6 +26,7 @@ export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTa
   const [description, setDescription] = useState("");
   const [estimatedPomodoros, setEstimatedPomodoros] = useState(1);
   const [external, setExternal] = useState(false);
+  const [courseId, setCourseId] = useState("");
   const [saving, setSaving] = useState(false);
 
   const today = todayKey();
@@ -36,13 +46,15 @@ export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTa
       dueDate: dueDate || undefined,
       estimatedPomodoros,
       kind: external ? "external" : undefined,
-      reminderLeadDays: external ? DEFAULT_EXTERNAL_LEAD_DAYS : undefined
+      reminderLeadDays: external ? DEFAULT_EXTERNAL_LEAD_DAYS : undefined,
+      courseId: courseId || undefined
     });
     setTitle("");
     setDescription("");
     setDueDate("");
     setEstimatedPomodoros(1);
     setExternal(false);
+    setCourseId("");
     setSaving(false);
   }
 
@@ -91,6 +103,16 @@ export function TaskForm({ onCreate, compact = false }: { onCreate: (task: NewTa
             <input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} />
             Hard deadline (visa renewal, a form, a submission portal — excluded from Workload&apos;s planned target)
           </label>
+          {courses.length > 0 ? (
+            <select className="input" value={courseId} onChange={(e) => setCourseId(e.target.value)} aria-label="Course">
+              <option value="">— No course —</option>
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>
+                  {course.code ? `${course.code} · ${course.name}` : course.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
         </MoreOptions>
       ) : null}
       <button className="btn-primary w-full sm:w-auto" disabled={saving || (external && !dueDate)}>

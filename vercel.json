@@ -10,6 +10,10 @@
       "schedule": "30 0 * * *"
     },
     {
+      "path": "/api/cron/recurring-tasks",
+      "schedule": "35 0 * * *"
+    },
+    {
       "path": "/api/cron/evening-rollup",
       "schedule": "30 16 * * *"
     }

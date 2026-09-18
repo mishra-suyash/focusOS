@@ -15,7 +15,7 @@ import { createPaper, deletePaper, subscribeBlobUsage } from "@/lib/firestore";
 import { formatBytes, isNearSoftCap, isOverSoftCap } from "@/lib/files";
 import { pass1DropRate, paperStatusLabels } from "@/lib/papers";
 import { useUserTier } from "@/lib/tiers";
-import type { Paper, PaperStatus } from "@/types";
+import type { Course, Paper, PaperStatus } from "@/types";
 
 const statusOrder: PaperStatus[] = ["to_read", "reading", "read", "archived"];
 
@@ -23,6 +23,7 @@ export default function PapersPage() {
   const { user } = useAuth();
   const { isEnabled } = useFeatures();
   const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const [statusFilter, setStatusFilter] = useState<PaperStatus | "all">("all");
   const [tagFilter, setTagFilter] = useState("all");
   const [blobBytes, setBlobBytes] = useState(0);
@@ -62,7 +63,7 @@ export default function PapersPage() {
       <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
         <section id="paper-add" className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Add a paper</h2>
-          <PaperForm onCreate={(paper) => createPaper(user!.uid, paper)} />
+          <PaperForm onCreate={(paper) => createPaper(user!.uid, paper)} courses={courses} />
         </section>
         <section className="space-y-6">
           {papers.length === 0 ? (

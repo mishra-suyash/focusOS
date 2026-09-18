@@ -21,7 +21,8 @@
     "verify:vocabulary": "tsx scripts/verify-vocabulary.ts",
     "verify:timeline": "tsx scripts/verify-timeline.ts",
     "verify:undo-stack": "tsx scripts/verify-undo-stack.ts",
-    "verify:routine": "tsx scripts/verify-routine.ts"
+    "verify:routine": "tsx scripts/verify-routine.ts",
+    "verify:recurring-tasks": "tsx scripts/verify-recurring-tasks.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
