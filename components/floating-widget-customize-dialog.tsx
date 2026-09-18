@@ -2,20 +2,20 @@
 
 import { useState } from "react";
 import { X } from "lucide-react";
-import { OPTIONAL_DASHBOARD_WIDGETS, resolveDashboardWidgets } from "@/lib/dashboard-widgets";
+import { FLOATING_WIDGET_ITEMS, resolveFloatingWidgetItems } from "@/lib/floating-widget";
 import type { UserSettings } from "@/types";
 
-/** "Customize" (plan §9.4) — toggles the five optional Today widgets, persisted as an explicit `dashboardWidgets` list (present = exact set, overriding the pack-derived default). */
-export function DashboardCustomizeDialog({
+/** Checkbox list for the floating widget's rows — same shape as `DashboardCustomizeDialog`, new domain. */
+export function FloatingWidgetCustomizeDialog({
   settings,
   onChange,
   onClose
 }: {
-  settings: Pick<UserSettings, "packId" | "dashboardWidgets">;
-  onChange: (widgetIds: string[]) => void;
+  settings: Pick<UserSettings, "floatingWidgetItems">;
+  onChange: (itemIds: string[]) => void;
   onClose: () => void;
 }) {
-  const [enabled, setEnabled] = useState(() => resolveDashboardWidgets(settings));
+  const [enabled, setEnabled] = useState(() => resolveFloatingWidgetItems(settings));
 
   function toggle(id: string) {
     setEnabled((current) => {
@@ -31,16 +31,19 @@ export function DashboardCustomizeDialog({
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-16" onClick={onClose}>
       <div className="card w-full max-w-sm p-5" onClick={(event) => event.stopPropagation()}>
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold">Customize</h2>
+          <h2 className="text-lg font-semibold">Floating widget</h2>
           <button className="btn-secondary px-2 py-1.5" onClick={onClose} aria-label="Close">
             <X className="h-4 w-4" />
           </button>
         </div>
+        <p className="mb-3 text-xs text-ink-500">
+          Shown in the floating window (the picture-in-picture button near the top of the app). Chromium browsers only — Chrome, Edge, Arc, Dia.
+        </p>
         <div className="space-y-2">
-          {OPTIONAL_DASHBOARD_WIDGETS.map((widget) => (
-            <label key={widget.id} className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={enabled.has(widget.id)} onChange={() => toggle(widget.id)} />
-              {widget.label}
+          {FLOATING_WIDGET_ITEMS.map((item) => (
+            <label key={item.id} className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={enabled.has(item.id)} onChange={() => toggle(item.id)} />
+              {item.label}
             </label>
           ))}
         </div>

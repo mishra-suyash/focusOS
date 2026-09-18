@@ -108,7 +108,7 @@ export default function PaperDetailPage() {
           ) : null}
           {paper.pass2?.status === "done" ? (
             <section className="card p-5">
-              <div className="mb-3 flex items-center justify-between">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-lg font-semibold">Deep dive — re-implement (opt-in)</h2>
                 {!paper.pass3 ? <span className="text-xs text-ink-500">Most papers never need this pass.</span> : null}
               </div>
@@ -217,7 +217,7 @@ function ReadingPlanCard({ paper }: { paper: Paper }) {
 
   return (
     <section className="card p-4">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">Reading plan</h2>
         <button className="btn-secondary py-1 text-xs" onClick={generate} disabled={loading}>
           <Sparkles className="h-3.5 w-3.5" />

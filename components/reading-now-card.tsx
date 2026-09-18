@@ -11,7 +11,7 @@ export function ReadingNowCard({ papers, onBreak }: { papers: Paper[]; onBreak?:
 
   return (
     <section className="card p-4">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-base font-semibold">Reading now</h2>
         <Link href="/papers" className="text-xs font-medium text-moss-700 dark:text-moss-400">Papers</Link>
       </div>

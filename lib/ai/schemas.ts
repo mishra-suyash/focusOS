@@ -71,6 +71,17 @@ export type InsightDailyOutput = z.infer<typeof insightDailySchema>;
 
 const notesLayerSchema = z.enum(["L1", "L2", "L3"]);
 
+// A paper with no baselines/datasets/etc. gives the model every reason to omit or null out that
+// key rather than force an empty array — verified live: a real layeredNotes generation that
+// otherwise looked fine failed `safeParse` outright with no diagnosable reason logged. Every list
+// field below tolerates absent/null and normalizes to `[]` rather than rejecting the whole
+// response over one inapplicable section.
+const lenientStringArray = () =>
+  z
+    .array(z.string())
+    .nullish()
+    .transform((value) => value ?? []);
+
 /** plan §8.6 — `relatedInLibrary` deliberately cut (see types/index.ts's LayeredNotes doc comment). */
 export const layeredNotesSchema = z.object({
   L0: z.string().min(1),
@@ -81,23 +92,28 @@ export const layeredNotesSchema = z.object({
     whyItMattersToMe: z.string()
   }),
   L2: z.object({
-    method: z.array(z.string()),
-    datasets: z.array(z.string()),
-    metrics: z.array(z.string()),
-    baselines: z.array(z.string()),
-    ablations: z.array(z.string()),
-    assumptions: z.array(z.string())
+    method: lenientStringArray(),
+    datasets: lenientStringArray(),
+    metrics: lenientStringArray(),
+    baselines: lenientStringArray(),
+    ablations: lenientStringArray(),
+    assumptions: lenientStringArray()
   }),
   L3: z.object({
     formulation: z.string(),
     hyperparameters: z.string(),
-    failureModes: z.array(z.string()),
-    reproductionChecklist: z.array(z.string())
+    failureModes: lenientStringArray(),
+    reproductionChecklist: lenientStringArray()
   }),
-  citationsToRead: z.array(z.string()),
-  openQuestions: z.array(z.string()),
-  claimsToVerify: z.array(z.string()),
-  sourceRefs: z.array(z.object({ quote: z.string().min(1), page: z.number(), layer: notesLayerSchema })).max(20),
+  citationsToRead: lenientStringArray(),
+  openQuestions: lenientStringArray(),
+  claimsToVerify: lenientStringArray(),
+  // `page` coerced since a model will sometimes write it as "12" rather than 12.
+  sourceRefs: z
+    .array(z.object({ quote: z.string().min(1), page: z.coerce.number(), layer: notesLayerSchema }))
+    .max(20)
+    .nullish()
+    .transform((value) => value ?? []),
   promptPack: z.string().min(1)
 });
 export type LayeredNotesOutput = z.infer<typeof layeredNotesSchema>;

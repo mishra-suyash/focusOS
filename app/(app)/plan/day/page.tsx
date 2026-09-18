@@ -141,7 +141,7 @@ function DayPlannerContent() {
         {!timelineEditorEnabled ? (
           <aside className="space-y-6">
             <section className="card p-5">
-              <div className="mb-4 flex items-center justify-between">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-lg font-semibold">Templates</h2>
                 <button className="btn-secondary py-1.5 text-xs" onClick={() => setGalleryOpen(true)}>Browse templates</button>
               </div>

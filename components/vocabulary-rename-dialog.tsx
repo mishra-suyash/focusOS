@@ -31,7 +31,7 @@ export function VocabularyRenameDialog({ onDismiss }: { onDismiss: () => void })
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-16" onClick={onDismiss}>
       <div className="card w-full max-w-lg p-5" onClick={(event) => event.stopPropagation()}>
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold">We renamed a few things</h2>
           <button className="btn-secondary px-2 py-1.5" onClick={onDismiss} aria-label="Close">
             <X className="h-4 w-4" />

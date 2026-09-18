@@ -3,197 +3,50 @@
 import { clsx } from "clsx";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { useAuth } from "@/components/auth-provider";
+import { useFocusSession } from "@/components/focus-session-provider";
 import { MoreOptions } from "@/components/more-options";
-import { PomodoroSurveyModal } from "@/components/pomodoro-survey-modal";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { savePomodoro } from "@/lib/firestore";
 import { categories } from "@/lib/options";
 import { BUILTIN_TIMER_PRESETS } from "@/lib/templates/builtin/timer-presets";
-import type { Category, PomodoroSession, Task, TimerMode } from "@/types";
+import type { Category, PomodoroSession, Task } from "@/types";
 
-const modeLabel: Record<TimerMode, string> = {
-  work: "Focus",
-  short_break: "Short break",
-  long_break: "Long break"
-};
-
-interface PendingSession {
-  label: string;
-  category: Category;
-  mode: TimerMode;
-  minutes: number;
-  completedAt: string;
-  cycle: number;
-  taskId?: string;
-  slotId?: string;
-}
-
+/** A view over `FocusSessionProvider` — the timer's state lives there now (so it survives
+ * navigating away from whichever page mounts this), not in local state. */
 export function PomodoroTimer({
   sessions,
   tasks = [],
-  compact = false,
-  initialFocus,
-  onInitialFocusConsumed
+  compact = false
 }: {
   sessions: PomodoroSession[];
   tasks?: Task[];
   compact?: boolean;
-  /** DP5 S4 "Start focus session from a block" — pre-fills label/category/slotId and starts the timer running immediately, closing the plan-to-do loop in one click from `BlockInspector`. Consumed once (via `onInitialFocusConsumed`) so a re-render doesn't keep restarting the timer. */
-  initialFocus?: { label: string; category: Category; slotId?: string } | null;
-  onInitialFocusConsumed?: () => void;
 }) {
-  const { user } = useAuth();
-  const { settings, loaded: settingsLoaded, update: updateSettings } = useUserSettings();
-  const [work, setWork] = useState(25);
-  const [shortBreak, setShortBreak] = useState(5);
-  const [longBreak, setLongBreak] = useState(15);
-  const [mode, setMode] = useState<TimerMode>("work");
-  const [secondsLeft, setSecondsLeft] = useState(25 * 60);
-  const [running, setRunning] = useState(false);
-  // Epoch ms the running countdown is anchored to (null while paused). `secondsLeft` is always
-  // recomputed from this real timestamp rather than decremented tick-by-tick, so a throttled or
-  // backgrounded tab (browsers slow/suspend setInterval when hidden) can't make the timer drift or
-  // stall — the next tick, or the visibilitychange resync below, just recomputes the true remainder.
-  const [targetEndTime, setTargetEndTime] = useState<number | null>(null);
-  const [cycle, setCycle] = useState(1);
-  const [label, setLabel] = useState("writing");
-  const [category, setCategory] = useState<Category>("research");
-  const [taskId, setTaskId] = useState("");
-  const [slotId, setSlotId] = useState<string | undefined>(undefined);
-  const [pendingSession, setPendingSession] = useState<PendingSession | null>(null);
+  const { settings } = useUserSettings();
+  const {
+    mode,
+    modeLabel,
+    secondsLeft,
+    running,
+    duration,
+    progress,
+    cycle,
+    label,
+    category,
+    taskId,
+    work,
+    shortBreak,
+    longBreak,
+    setLabel,
+    setCategory,
+    setTaskId,
+    setSlotId,
+    setLength,
+    applyPreset,
+    toggleRunning,
+    reset,
+    finishNow
+  } = useFocusSession();
   const openTasks = tasks.filter((task) => task.status !== "done");
-
-  useEffect(() => {
-    if (!initialFocus) return;
-    setLabel(initialFocus.label);
-    setCategory(initialFocus.category);
-    setSlotId(initialFocus.slotId);
-    setTaskId("");
-    setMode("work");
-    // Explicit, not left to the `[duration, mode]` effect below: that effect only fires on a real
-    // *change* to `mode`/`duration`, and `mode` is already "work" in the common case (it's the
-    // default and where a session normally ends up) — leaving this implicit would start the timer
-    // running with whatever seconds happened to be left over from the previous session, which
-    // `completeSession` then reports as a full `duration`-minute session, inflating focus metrics.
-    const totalSeconds = work * 60;
-    setSecondsLeft(totalSeconds);
-    setTargetEndTime(Date.now() + totalSeconds * 1000);
-    setRunning(true);
-    onInitialFocusConsumed?.();
-  }, [initialFocus]);
-
-  const duration = useMemo(() => (mode === "work" ? work : mode === "short_break" ? shortBreak : longBreak), [longBreak, mode, shortBreak, work]);
-  const progress = 100 - (secondsLeft / (duration * 60)) * 100;
-
-  useEffect(() => {
-    const totalSeconds = duration * 60;
-    setSecondsLeft(totalSeconds);
-    // Re-anchor rather than blindly clearing: this effect also re-fires when `initialFocus` (above)
-    // changes `mode` in the same batch as starting the timer, and reading `running` from this
-    // render's closure (not as a dependency) lets it tell that apart from a real pause/mode-cycle,
-    // where the timer should stay stopped until the user presses Start.
-    setTargetEndTime(running ? Date.now() + totalSeconds * 1000 : null);
-  }, [duration, mode]);
-
-  // Pulls saved lengths (and built-in preset choices — lib/templates/builtin/timer-presets.ts) in once
-  // settings load, so a preset applied elsewhere (Settings) takes effect here without a refresh.
-  useEffect(() => {
-    if (!settingsLoaded) return;
-    if (typeof settings.workMinutes === "number") setWork(settings.workMinutes);
-    if (typeof settings.shortBreakMinutes === "number") setShortBreak(settings.shortBreakMinutes);
-    if (typeof settings.longBreakMinutes === "number") setLongBreak(settings.longBreakMinutes);
-  }, [settingsLoaded, settings.workMinutes, settings.shortBreakMinutes, settings.longBreakMinutes]);
-
-  function setLength(field: "work" | "shortBreak" | "longBreak", minutes: number) {
-    if (field === "work") setWork(minutes);
-    if (field === "shortBreak") setShortBreak(minutes);
-    if (field === "longBreak") setLongBreak(minutes);
-    updateSettings({
-      workMinutes: field === "work" ? minutes : work,
-      shortBreakMinutes: field === "shortBreak" ? minutes : shortBreak,
-      longBreakMinutes: field === "longBreak" ? minutes : longBreak,
-      timerPresetId: "custom"
-    });
-  }
-
-  useEffect(() => {
-    if (!running || targetEndTime == null) return;
-    function syncFromClock() {
-      setSecondsLeft(Math.max(0, Math.ceil((targetEndTime! - Date.now()) / 1000)));
-    }
-    syncFromClock();
-    const id = window.setInterval(syncFromClock, 1000);
-    return () => window.clearInterval(id);
-  }, [running, targetEndTime]);
-
-  // A tab that was backgrounded can have its setInterval throttled or fully suspended, so the
-  // countdown above may not have ticked in a while — resync the instant the tab is foregrounded
-  // again instead of waiting for the next (possibly late) interval fire.
-  useEffect(() => {
-    if (!running || targetEndTime == null) return;
-    function syncOnForeground() {
-      if (document.visibilityState !== "visible") return;
-      setSecondsLeft(Math.max(0, Math.ceil((targetEndTime! - Date.now()) / 1000)));
-    }
-    document.addEventListener("visibilitychange", syncOnForeground);
-    window.addEventListener("focus", syncOnForeground);
-    return () => {
-      document.removeEventListener("visibilitychange", syncOnForeground);
-      window.removeEventListener("focus", syncOnForeground);
-    };
-  }, [running, targetEndTime]);
-
-  useEffect(() => {
-    if (secondsLeft !== 0 || !running || !user) return;
-    // The tab may have been backgrounded well past the real end time before this effect got to run
-    // (see the anchoring comment above) — stamp completion at `targetEndTime`, not `Date.now()`, so
-    // a session doesn't get logged hours late or land on the wrong day across a midnight boundary.
-    completeSession(targetEndTime ?? undefined);
-  }, [secondsLeft, running, user]);
-
-  function toggleRunning() {
-    if (running) {
-      setSecondsLeft(targetEndTime == null ? secondsLeft : Math.max(0, Math.ceil((targetEndTime - Date.now()) / 1000)));
-      setTargetEndTime(null);
-      setRunning(false);
-      return;
-    }
-    setTargetEndTime(Date.now() + secondsLeft * 1000);
-    setRunning(true);
-  }
-
-  function completeSession(endedAt?: number) {
-    setRunning(false);
-    setTargetEndTime(null);
-    const data: PendingSession = {
-      label,
-      category,
-      mode,
-      minutes: duration,
-      completedAt: new Date(endedAt ?? Date.now()).toISOString(),
-      cycle,
-      taskId: taskId || undefined,
-      slotId
-    };
-    if (mode === "work") {
-      setPendingSession(data);
-    } else {
-      finalizeSession(data);
-    }
-  }
-
-  async function finalizeSession(data: PendingSession, survey?: { productivityRating: number; comment: string }) {
-    await savePomodoro(user!.uid, {
-      ...data,
-      productivityRating: survey?.productivityRating,
-      comment: survey?.comment || undefined
-    });
-    const nextMode: TimerMode = data.mode === "work" ? (data.cycle % 4 === 0 ? "long_break" : "short_break") : "work";
-    if (data.mode === "work") setCycle((current) => current + 1);
-    setMode(nextMode);
-  }
 
   const minutes = Math.floor(secondsLeft / 60)
     .toString()
@@ -204,7 +57,7 @@ export function PomodoroTimer({
     <section className={`card ${compact ? "p-4" : "p-5"}`}>
       <div>
         <p className="label">Focus timer</p>
-        <h2 className={`${compact ? "mt-0.5 text-lg" : "mt-1 text-xl"} font-semibold`}>{modeLabel[mode]} session</h2>
+        <h2 className={`${compact ? "mt-0.5 text-lg" : "mt-1 text-xl"} font-semibold`}>{modeLabel} session</h2>
       </div>
       <div className={compact ? "my-4" : "my-6"}>
         <div className="mb-3 h-2 overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
@@ -254,11 +107,11 @@ export function PomodoroTimer({
           {running ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
           {running ? "Pause" : secondsLeft === duration * 60 ? "Start" : "Resume"}
         </button>
-        <button className="btn-secondary" onClick={() => { setRunning(false); setTargetEndTime(null); setSecondsLeft(duration * 60); }}>
+        <button className="btn-secondary" onClick={reset}>
           <RotateCcw className="h-4 w-4" />
           Reset
         </button>
-        <button className="btn-secondary" onClick={() => completeSession()}>
+        <button className="btn-secondary" onClick={finishNow}>
           <SkipForward className="h-4 w-4" />
           Finish
         </button>
@@ -282,17 +135,7 @@ export function PomodoroTimer({
               type="button"
               className={clsx("btn-secondary py-1 text-xs", settings.timerPresetId === id && "ring-2 ring-moss-500")}
               title={preset.description}
-              onClick={() => {
-                setWork(preset.workMinutes);
-                setShortBreak(preset.shortBreakMinutes);
-                setLongBreak(preset.longBreakMinutes);
-                updateSettings({
-                  workMinutes: preset.workMinutes,
-                  shortBreakMinutes: preset.shortBreakMinutes,
-                  longBreakMinutes: preset.longBreakMinutes,
-                  timerPresetId: id as "classic" | "extended" | "short"
-                });
-              }}
+              onClick={() => applyPreset(preset.workMinutes, preset.shortBreakMinutes, preset.longBreakMinutes, id as "classic" | "extended" | "short")}
             >
               {preset.name}
             </button>
@@ -321,19 +164,6 @@ export function PomodoroTimer({
           {sessions.length === 0 ? <p className="text-sm text-ink-500">Completed sessions will appear here.</p> : null}
         </div>
       </div>
-      {pendingSession ? (
-        <PomodoroSurveyModal
-          label={pendingSession.label}
-          onSave={(productivityRating, comment) => {
-            finalizeSession(pendingSession, { productivityRating, comment });
-            setPendingSession(null);
-          }}
-          onSkip={() => {
-            finalizeSession(pendingSession);
-            setPendingSession(null);
-          }}
-        />
-      ) : null}
     </section>
   );
 }

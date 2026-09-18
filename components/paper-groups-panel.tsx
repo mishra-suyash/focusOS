@@ -68,14 +68,20 @@ export function PaperGroupsPanel({ papers }: { papers: Paper[] }) {
           </div>
           <button className="btn-secondary">Create</button>
         </div>
-        <div className="grid max-h-32 gap-1 overflow-auto rounded-md bg-ink-50 p-2 dark:bg-ink-800 sm:grid-cols-2">
-          {papers.map((paper) => (
-            <label key={paper.id} className="flex items-center gap-2 text-xs">
-              <input type="checkbox" checked={selected.has(paper.id)} onChange={() => toggle(paper.id)} />
-              <span className="truncate">{paper.title}</span>
-            </label>
-          ))}
-        </div>
+        {papers.length > 0 ? (
+          <div className="grid max-h-32 gap-1 overflow-auto rounded-md bg-ink-50 p-2 dark:bg-ink-800 sm:grid-cols-2">
+            {papers.map((paper) => (
+              <label key={paper.id} className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={selected.has(paper.id)} onChange={() => toggle(paper.id)} />
+                <span className="truncate">{paper.title}</span>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-md bg-ink-50 p-2 text-xs text-ink-500 dark:bg-ink-800 dark:text-ink-400">
+            Add a paper above first — sets are built from papers on your reading list.
+          </p>
+        )}
       </form>
       <div className="space-y-3">
         {groups.map((group) => (

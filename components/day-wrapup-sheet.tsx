@@ -116,7 +116,7 @@ export function DayWrapupSheet({
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center" onClick={onClose}>
       <div className="card max-h-[85vh] w-full max-w-md overflow-y-auto p-5 sm:rounded-xl" onClick={(event) => event.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-semibold">Day wrap-up</h2>
           <button className="btn-secondary px-2 py-1.5" onClick={onClose} aria-label="Close">
             <X className="h-4 w-4" />

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
+import { FloatingWidgetCustomizeDialog } from "@/components/floating-widget-customize-dialog";
 import { InfoHint } from "@/components/info-hint";
 import { useTheme } from "@/components/theme-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -23,6 +24,7 @@ export default function SettingsPage() {
   const { items: templates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { tier, limits: tierLimits, allowedModels } = useUserTier();
   const [exporting, setExporting] = useState<"json" | "csv" | null>(null);
+  const [floatingWidgetCustomizeOpen, setFloatingWidgetCustomizeOpen] = useState(false);
 
   function updateRevisionCap(field: "maxRevisionsPerDay" | "maxRevisionMinutesPerDay", value: number) {
     const ceiling = field === "maxRevisionsPerDay" ? tierLimits.maxRevisionsPerDay : tierLimits.maxRevisionMinutesPerDay;
@@ -102,6 +104,15 @@ export default function SettingsPage() {
             </label>
             <p className="text-xs text-ink-500">Reminders only fire while your day is started and this tab is open. Allow browser notifications when prompted to get alerts outside the tab.</p>
           </div>
+        </section>
+        <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Floating widget</h2>
+          <p className="mb-3 text-xs text-ink-500">
+            The picture-in-picture button near the top of the app floats a small, resizable, always-on-top window with your focus timer. Choose what shows in it. Chromium browsers only (Chrome, Edge, Arc, Dia).
+          </p>
+          <button className="btn-secondary py-1.5 text-xs" onClick={() => setFloatingWidgetCustomizeOpen(true)}>
+            Customize
+          </button>
         </section>
         <section className="card p-5">
           <h2 className="mb-4 flex items-center gap-1 text-lg font-semibold">
@@ -200,6 +211,13 @@ export default function SettingsPage() {
           </p>
         </section>
       </div>
+      {floatingWidgetCustomizeOpen ? (
+        <FloatingWidgetCustomizeDialog
+          settings={settings}
+          onChange={(itemIds) => updateSettings({ floatingWidgetItems: itemIds })}
+          onClose={() => setFloatingWidgetCustomizeOpen(false)}
+        />
+      ) : null}
     </>
   );
 }

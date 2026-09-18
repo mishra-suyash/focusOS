@@ -68,7 +68,7 @@ export function EveningRollupCard({ date, rollup }: { date: string; rollup?: Eve
 
   return (
     <section className="card mt-6 max-w-3xl p-5">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">Suggestions for tomorrow</h2>
         <button className="btn-secondary py-1 text-xs" onClick={generate} disabled={loading}>
           <Sparkles className="h-3.5 w-3.5" />

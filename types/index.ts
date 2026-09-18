@@ -743,6 +743,8 @@ export interface UserSettings {
   /** 'HH:mm' — used to shift built-in/day templates via shiftTemplateSlots. */
   dayStartTime?: string;
   dashboardWidgets?: string[];
+  /** Rows shown in the floating focus widget (Document Picture-in-Picture) — see `lib/floating-widget.ts`. Same "absent = defaults, explicit list always wins" convention as `dashboardWidgets`. */
+  floatingWidgetItems?: string[];
   /** Nudge keys (plan §11.1) that have been shown and dismissed — never shown again. */
   dismissedHints?: string[];
   /** The contextual nudge currently "locked in" for `shownDate` (plan §11.1: "one new per day") —

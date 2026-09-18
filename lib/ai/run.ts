@@ -133,19 +133,28 @@ export async function runAiTask(uid: string, taskId: AiTaskId, payload: unknown)
   // return a hallucinated-but-schema-valid response as if it had read the PDF.
   if (task.requiresAnthropicFile) cloudProviders = cloudProviders.filter((provider) => provider === "claude");
 
+  // A schema miss is often just one bad roll — the same prompt against the same paper can
+  // validate cleanly on the very next call (verified live: a real "schema validation failed"
+  // failure reproduced against the identical paper/prompt passed on the next attempt). Retrying
+  // once per provider recovers most of these far more cheaply than failing a no-fallback task
+  // outright over a single unlucky generation.
+  const SCHEMA_RETRY_ATTEMPTS = 2;
   let lastFailureDetail: string | undefined;
   for (const provider of cloudProviders) {
-    const result = await attemptProvider(uid, task, provider, promptInput);
-    if (!result.ok) {
-      lastFailureDetail = result.error;
-      continue;
+    for (let attempt = 1; attempt <= SCHEMA_RETRY_ATTEMPTS; attempt++) {
+      const result = await attemptProvider(uid, task, provider, promptInput);
+      if (!result.ok) {
+        lastFailureDetail = result.error;
+        break; // a real call failure (auth, network, truncation) won't fix itself on an identical retry
+      }
+      const parsed = task.schema.safeParse(safeJsonParse(result.text));
+      if (parsed.success) return { output: parsed.data, meta: { provider, model: result.model, degraded: false } };
+      // Unparsable structured output is that provider's failure, not something to render raw.
+      recordFailure(provider);
+      const issues = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
+      lastFailureDetail = `schema validation failed: ${issues || "no issues reported"}`;
+      await logAiRun(uid, { task: taskId, provider, model: result.model, latencyMs: 0, ok: false, error: lastFailureDetail });
     }
-    const parsed = task.schema.safeParse(safeJsonParse(result.text));
-    if (parsed.success) return { output: parsed.data, meta: { provider, model: result.model, degraded: false } };
-    // Unparsable structured output is that provider's failure, not something to render raw.
-    recordFailure(provider);
-    lastFailureDetail = "schema validation failed";
-    await logAiRun(uid, { task: taskId, provider, model: result.model, latencyMs: 0, ok: false, error: "schema validation failed" });
   }
 
   return runFallback("no_provider_available", lastFailureDetail);

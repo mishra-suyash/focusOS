@@ -43,7 +43,7 @@ export default function TasksPage() {
       <SectionHeader title="Tasks" eyebrow="Capture, clarify, complete" />
       <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
         <section id="task-quick-add" className="card p-5">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-lg font-semibold">Quick add</h2>
             <button className="btn-secondary py-1.5 text-xs" onClick={() => setPackDialogOpen(true)}>Add from checklist</button>
           </div>
@@ -51,7 +51,7 @@ export default function TasksPage() {
         </section>
         <section>
           <div className="card mb-4 p-4">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <select className="input" value={view} onChange={(e) => setView(e.target.value)}>
                 <option value="inbox">Inbox</option>
                 <option value="today">Today</option>

@@ -10,6 +10,7 @@ import { AlertsBanner } from "@/components/alerts-banner";
 import { NudgeBanner } from "@/components/nudge-banner";
 import { DailyScheduleWidget } from "@/components/daily-schedule-widget";
 import { DashboardCustomizeDialog } from "@/components/dashboard-customize";
+import { useFocusSession } from "@/components/focus-session-provider";
 import { GettingStartedChecklist } from "@/components/getting-started-checklist";
 import { LoadIndexWidget } from "@/components/load-index-widget";
 import { MorningBriefCard } from "@/components/morning-brief-card";
@@ -95,21 +96,20 @@ function DashboardContent() {
     enabledModules
   });
 
+  const { startFocus } = useFocusSession();
+
   // DP5 S4 "Start focus session from a block" — `BlockInspector` links here with
-  // `?startFocus=1&label=...&category=...&slotId=...`; `useSearchParams()` is stable per URL, so
-  // this only recomputes (and only re-triggers PomodoroTimer's consume effect) when the query
-  // string actually changes, not on every dashboard re-render.
-  const initialFocus = useMemo(() => {
-    if (searchParams.get("startFocus") !== "1") return null;
+  // `?startFocus=1&label=...&category=...&slotId=...`. `FocusSessionProvider` now owns the timer
+  // (it survives navigation, so `PomodoroTimer` no longer needs a "consume once" prop dance) —
+  // this effect just starts the session and clears the query string when the URL carries the param.
+  useEffect(() => {
+    if (searchParams.get("startFocus") !== "1") return;
     const label = searchParams.get("label");
     const category = searchParams.get("category") as Task["category"] | null;
-    if (!label || !category) return null;
-    return { label, category, slotId: searchParams.get("slotId") ?? undefined };
-  }, [searchParams]);
-
-  function clearFocusParams() {
+    if (!label || !category) return;
+    startFocus({ label, category, slotId: searchParams.get("slotId") ?? undefined });
     router.replace("/dashboard", { scroll: false });
-  }
+  }, [searchParams]);
 
   /** S5 "Schedule it" on the Up next card — places it in the next free gap after now and opens Plan — Day. */
   async function scheduleAction() {
@@ -235,9 +235,9 @@ function DashboardContent() {
       */}
       <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)_340px]">
         <div className="space-y-4">
-          <PomodoroTimer sessions={todaysSessions} tasks={tasks} compact initialFocus={initialFocus} onInitialFocusConsumed={clearFocusParams} />
+          <PomodoroTimer sessions={todaysSessions} tasks={tasks} compact />
           <section className="card p-4">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-base font-semibold">Today&apos;s tasks</h2>
               <Link href="/tasks" className="text-xs font-medium text-moss-700 dark:text-moss-400">Manage</Link>
             </div>
@@ -286,7 +286,7 @@ function DashboardContent() {
           <ReadingNowCard papers={papers} onBreak={isBreakMode(terms, today)} />
           {widgets.has("scratchpad") ? (
             <section className="card p-4">
-              <div className="mb-3 flex items-center justify-between">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="text-base font-semibold">Scratchpad</h2>
                 <button className="btn-secondary py-1.5 text-xs" onClick={() => user && saveDayFields(user.uid, today, { scratchpad: note })}>Save</button>
               </div>
