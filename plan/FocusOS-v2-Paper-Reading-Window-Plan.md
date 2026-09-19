@@ -1,0 +1,145 @@
+# FocusOS v2 — a dedicated, full-screen paper reading window
+
+**Status:** Draft for review, not yet implemented · **Routes touched (new):** `app/read/[paperId]` (outside the `(app)` route group, on purpose — see §5) · **Companion to:** `FocusOS-v2-Plan.md` §8.6/§8.7 (Layered Notes, highlighting), the existing `components/paper-annotation-viewer.tsx` this replaces
+**Principle carried over:** additive and non-destructive. Every existing `Paper`/`Annotation`/`PaperNote` field keeps its current meaning; the reading window is a new way to look at the same data, not a new store of truth.
+**Evidence basis:** every current-state claim is grounded in source (direct file reads this session). Every claim about how Zotero, Mozilla's pdf.js viewer, Readwise Reader, and Hypothesis design their reading experience was checked against their own documentation/source, not recalled — sources are listed in §2.
+
+---
+
+## 0. TL;DR
+
+Today, reading a paper's PDF happens inside `PaperAnnotationViewer`, a card embedded partway down the normal `/papers/[id]` detail page — sidebar nav and topbar still visible, one page rendered at a time on a fixed zoom, no thumbnails, no outline, no search, no keyboard shortcuts, and the annotation sidebar only shows the current page's highlights. The ask: pull this out into its own full-screen reading window with real tools, designed the way established reading tools actually design theirs — not reinvented from scratch.
+
+The design in one paragraph: a new top-level route (`/read/[paperId]`, outside the app shell entirely, the same way `/login` already is) that fills the viewport with the PDF, a persistent toolbar (page nav, zoom presets, search, annotation tools with one-key-per-category shortcuts — FocusOS's existing 6 highlight categories map onto this almost too cleanly), and a collapsible tabbed sidebar (Outline, Thumbnails, Annotations, Notes) — reusing `extractPdfOutline`, which already exists in this codebase and is currently only fed to an AI prompt, never shown to a person. Phase 1 ships this around the existing single-page-at-a-time renderer; continuous scroll — the biggest real engineering lift here — is Phase 2.
+
+---
+
+## 1. Goals and non-goals
+
+**Goals**
+- A genuine full-screen reading mode: no sidebar nav, no topbar, no `max-w-7xl` detail-page chrome around it.
+- A toolbar and sidebar with the tools every serious reading tool converges on (§2's synthesis), scoped to what a solo academic reader actually needs — not a feature-for-feature pdf.js clone.
+- Reuse what already exists rather than rebuild it: `extractPdfOutline`, the 6-category `Annotation` model with its color coding, `PaperNote`'s already-defined-but-unused `anchorPage`/`anchorQuote` fields, `generateHighlightCandidates`.
+- Keep the surrounding `/papers/[id]` detail page's job (Skim/Read/Deep-dive pass tracking, Layered Notes, "why am I reading this," tags) unchanged — the reading window is where you look at the PDF and annotate it, not a replacement for the whole detail page.
+
+**Non-goals (this pass)**
+- Continuous-scroll, multi-page virtualized rendering — Phase 2 (§8). Phase 1 keeps today's single-page-at-a-time model, just inside the new full-screen shell.
+- Split view (a second PDF, or PDF + notes side by side) — Zotero's one true differentiator per §2, genuinely useful, but a bigger lift than this pass needs. Noted in §9 as a real future option, not built now.
+- Presentation/slideshow mode, page rotation, spread (odd/even) layouts — pdf.js has these because it's a general-purpose viewer for any PDF; a single-author academic paper essentially never needs them.
+- OCR for scanned PDFs — already explicitly out of scope in the current viewer (`hasTextLayer` check), unchanged here.
+- Reading-appearance theming (font family/size, line width) — that's Readwise's pattern for prose/EPUB content; this is a PDF canvas, not reflowable text, so it doesn't apply the same way. Dark-mode-friendly PDF inversion is noted as an open question (§9) instead.
+
+---
+
+## 2. Survey: how established tools design this (with receipts)
+
+Checked directly against source/docs, not recalled:
+
+- **Mozilla's pdf.js default viewer** ([viewer.html](https://github.com/mozilla/pdf.js/blob/master/web/viewer.html)) — directly relevant since this app already depends on `pdfjs-dist` as a library. Toolbar: sidebar toggle, find toggle, page nav (prev/next + page-number input + total), zoom out/in plus a scale dropdown (Auto/Actual size/Fit page/Fit width/50–400% presets), annotation editor tools, print, download. A secondary overflow menu carries Presentation mode, rotate, cursor tool (select vs. hand/pan), scroll mode, spread mode, document properties. Sidebar has Thumbnails/Outline/Attachments/Layers tabs. Find bar has prev/next, highlight-all, match-case, whole-word, and a live result count. Presentation mode (`Ctrl+Alt+P`) hides all chrome; Space/Enter pages forward, Shift+Space/Enter back.
+- **Zotero's built-in PDF reader** ([keyboard shortcuts](https://www.zotero.org/support/kb/keyboard_shortcuts), [PDF reader docs](https://www.zotero.org/support/pdf_reader)) — the academic-reading reference point. Each annotation tool has its own hotkey (`Alt/Option+1` Highlight, `+2` Underline, `+3` Note, `+4` Text, `+5` Area, `+6` Ink, `+7` Eraser; `S` select, `H` hand/pan). 8 highlight colors; every highlight auto-appears in a searchable sidebar list. Split view (horizontal or vertical) for two documents, or a document plus notes. Navigation: Space/Shift+Space or PgUp/PgDn, Home/End, `Ctrl/Cmd+Alt+G` go-to-page, `Ctrl/Cmd +/−/0` zoom, `Ctrl/Cmd+F` find.
+- **Readwise Reader** ([appearance docs](https://docs.readwise.io/reader/docs/faqs/appearance), [Ghostreader](https://docs.readwise.io/reader/guides/ghostreader)) — a modern read-later tool's take. A "long-form reading view" hides the action toolbar and foregrounds reading progress plus live, in-view appearance controls (theme light/dark/auto, font family including accessibility fonts, size, line spacing, content width) — settings surfaced in the reading view itself, not buried in a settings page. **Ghostreader**: an inline AI panel summoned from the reading view to ask questions or simplify a passage — the UI pattern for something FocusOS already has server-side (AI highlight generation, layered notes) but currently only reachable from outside the reader.
+- **Hypothesis** ([annotation basics](https://web.hypothes.is/help/annotation-basics/), [a UX critique](https://tomcritchlow.com/2019/02/12/annotations/)) — a weaker reference, useful mainly as a negative example: one highlight color only, no underline, limited note formatting, criticized for exactly that. FocusOS's existing 6-category color-coded `Annotation` model already beats this.
+
+**Patterns that show up across 3+ tools — treat these as close to mandatory for this spec:**
+1. Zoom with presets *and* fit-width/fit-page, not a single fixed scale.
+2. Page navigation with both a jump-to-page input and keyboard paging.
+3. A sidebar that does more than show the current page — thumbnails/outline for navigation, plus a live, document-wide annotation list.
+4. One hotkey per annotation tool, not a picker every time.
+5. In-document search with prev/next and a result count.
+6. A true full-screen/distraction mode that hides chrome, triggered and exited without a full page reload feel.
+7. Rotate + a select/hand cursor-tool toggle — cheap, expected, currently entirely absent.
+
+**Single-tool differentiators — real, but explicitly deferred (§1, §9):** split view (Zotero only), an in-reader AI panel (Readwise's pattern — FocusOS has the AI already, just not surfaced this way yet), scroll/spread mode variety (pdf.js only, likely over-engineered for a single-paper reader).
+
+---
+
+## 3. What exists today, with receipts
+
+- **`components/paper-annotation-viewer.tsx`** (353 lines) is the entire current PDF experience: one `<canvas>`, fixed `scale: 1.4`, prev/next-only page navigation (no jump-to-page, no thumbnails), rendered inside a `card` on `/papers/[id]` — meaning the app's sidebar nav and topbar (`AppShell`, `max-w-7xl` container) are still on screen around it. No zoom control, no search, no full-screen mode, no keyboard shortcuts of any kind.
+- **The annotation sidebar only shows the current page's highlights** (`pageAnnotations = annotations.filter(a => a.matched && a.page === pageNum)`) plus a separate "unmatched AI quotes" list — there's no document-wide annotation view to scan everything you've highlighted across the whole paper.
+- **`extractPdfOutline`** (`lib/pdf-outline.ts:12`) already parses a PDF's outline/bookmarks — but it's called from exactly one place, `components/paper-pass-section.tsx:458`, purely to feed AI context for the Skim pass, and today returns only `Promise<string[]>` (titles, with `item.dest`/nesting discarded — see §7's correction). It has never been rendered as a navigable outline for a person, and doing so needs a small additive extension to carry page destinations. Even with that gap, it's still the clearest "reuse, don't rebuild" opportunity in this whole spec — the outline parsing itself, the expensive part, already exists and works.
+- **`Annotation`** (`types/index.ts:562`) already has a 6-category model (`claim`/`method`/`result`/`limitation`/`definition`/`weakness`) with its own color per category (`CATEGORY_COLORS` in the viewer) — already ahead of Hypothesis's single-color limitation (§2). This maps almost exactly onto Zotero's "one hotkey per tool" pattern: 6 categories, 6 number keys.
+- **`PaperNote`** (`types/index.ts:578`) has `anchorPage?: number` and `anchorQuote?: string` fields — but `components/paper-notes-panel.tsx` never sets them. Every note today is anchor-less freeform text, even though the type was clearly designed to support "this note is about page 4" or "this note is about this specific quote." A dead field, not a missing one.
+- **`components/paper-pass-section.tsx`** (549 lines) is the Skim/Read/Deep-dive structured checklist and timer (`PassTimer`) — a separate concern from the PDF view itself, and explicitly out of scope for what moves into the reading window (§1).
+- **`generateHighlightCandidates`** (called from the viewer's "Generate highlights" button) already exists as a working AI feature — server-side capability the reading window can surface more prominently, not something new to build.
+- **Route structure**: `app/login/page.tsx` and `app/privacy-policy/page.tsx` already sit outside the `app/(app)/` route group and therefore render with none of `AppShell`'s chrome, while still having full access to `AuthProvider`/`ThemeProvider` (both wrap the *root* layout, not just `(app)`). This is the exact mechanism §5 uses for the reading window's route.
+
+---
+
+## 4. Scope: what moves into the reading window, what stays put
+
+| Stays on `/papers/[id]` (unchanged) | Moves into `/read/[paperId]` (new) |
+|---|---|
+| Status/progress/link summary cards | The PDF itself |
+| Skim/Read/Deep-dive pass sections + timer | Zoom, page nav, search |
+| Layered Notes card | Annotation tools (create, list, jump-to) |
+| "Why am I reading this?" | Outline/Thumbnails navigation |
+| PDF attach/replace control | Notes — surfaced *and* now anchorable to a page/quote (closing the dead-field gap in §3) |
+| Tags | An AI panel (Readwise's pattern) for "Generate highlights" and asking about the current page |
+
+A small **active pass-timer badge** in the reading window's toolbar is the one piece of pass-section state that does cross over — entering full-screen shouldn't silently stop a running Skim/Read/Deep-dive timer from being visible, even though the full checklist stays on the detail page (§9 has this as an open question on exact placement).
+
+---
+
+## 5. Route and layout
+
+**`app/read/[paperId]/page.tsx`** — a new top-level route, deliberately *outside* `app/(app)/`, for the same reason `/login` and `/privacy-policy` already are: a page nested inside `(app)/` inherits `ProtectedLayout` → `AppShell` no matter what CSS is thrown at it, since Next.js route groups only affect URL shape, not layout nesting. The only way to get a page with zero app-shell chrome is to place it outside that tree. `AuthProvider`/`ThemeProvider` still wrap it (they're in the *root* layout), so auth and dark mode both work identically to every other page.
+
+This route gets its own minimal `app/read/[paperId]/layout.tsx` (or none at all — a plain full-viewport `<main>` in the page itself is enough, matching how `/login` doesn't need a dedicated layout file either): no sidebar, no topbar, background locked to `bg-ink-950`/`bg-white` full-bleed, `overflow: hidden` on the body while mounted (the same trick `AppShell`'s mobile nav drawer already uses — `document.body.style.overflow = "hidden"`, `components/app-shell.tsx:169`) so the toolbar/sidebar chrome feels truly fixed rather than scrolling away.
+
+**What this route also escapes, not just `AppShell`:** `app/(app)/layout.tsx` wraps children in `WorkdaySessionProvider` → `FocusSessionProvider` → `AppShell` → `OnboardingGate`/`VocabularyRenameGate`. Sitting outside `(app)/` means the reading window gets none of these — no onboarding/rename gate (fine, they're app-shell-adjacent UI, not data), and no `FocusSessionProvider`/`WorkdaySessionProvider` context. Checked specifically for the §4/§6 pass-timer badge: `components/pass-timer.tsx`'s `PassTimer` is self-contained (`startedAt`/`seedMinutes` props, its own `useEffect`/`useState`, no `useFocusSession` import) — so the badge is *not* blocked by this route escape. Any future feature that *does* reach for `useFocusSession`/`useWorkdaySession` from inside `/read/[paperId]` would be, though — worth keeping in mind before Phase 3's AI panel or anything else pulls in app-shell-scoped state.
+
+**Opening it:** the "Highlights & annotation" section on `/papers/[id]` (currently an inline card) becomes a single "Open reading window" button/card that navigates to `/read/[paperId]`. **Closing it:** an explicit close control in the toolbar (§6) navigates back to `/papers/[id]` — plain `router.back()`-style navigation, a real URL change, not a client-side overlay toggle. §9 has the alternative (an in-place full-screen overlay instead of a route) as an explicit open question, since it's a legitimate different trade-off, not an oversight.
+
+---
+
+## 6. Toolbar
+
+One persistent bar, three zones, directly following §2's "patterns repeated across 3+ tools":
+
+- **Left:** Close (back to `/papers/[id]`), paper title (truncated), the active-pass-timer badge if a Skim/Read/Deep-dive pass is running (§4).
+- **Center:** page navigation — prev/next *and* a jump-to-page number input (pdf.js and Zotero both have this; today's viewer only has prev/next) — plus a zoom control: a dropdown with Fit width / Fit page / 75% / 100% / 125% / 150% / 200%, replacing the current hardcoded `scale: 1.4`.
+- **Right:** find-in-document (input + prev/next + live match count, mirroring pdf.js's find bar), the 6 annotation-category tool buttons (one per existing `HighlightCategory`, each showing its `CATEGORY_COLORS` swatch), "Generate highlights" (AI, already exists), "Export annotated PDF" (already exists), sidebar toggle.
+
+**Keyboard shortcuts**, synthesizing Zotero + pdf.js's overlapping set rather than inventing new conventions:
+
+| Key | Action |
+|---|---|
+| `Space` / `Shift+Space`, or `PgDn`/`PgUp` | Next / previous page |
+| `Home` / `End` | First / last page |
+| `Ctrl/Cmd+F` or `/` | Focus find |
+| `Ctrl/Cmd +` / `-` / `0` | Zoom in / out / reset |
+| `1`–`6` | Select annotation category (mirrors Zotero's `Alt+1..7` per-tool hotkeys — plain number keys since FocusOS has no competing single-key shortcuts on this route) |
+| `S` / `H` | Select tool / hand-pan tool |
+| `Esc` | Exit reading window |
+
+All single-key shortcuts (`1`–`6`, `S`/`H`, `Space`, etc.) must be gated on the event target — skip handling when focus is inside the find input (or any other text field), the same way pdf.js and Zotero suppress paging/tool shortcuts while their find bars are focused. Without this, typing "3" while searching for a page number silently reassigns the active annotation category instead of typing a digit.
+
+---
+
+## 7. Sidebar
+
+Collapsible, tabbed — the "does more than show the current page" pattern from §2:
+
+- **Outline** — renders a clickable, jump-to-page outline. **Correction to an earlier draft of this spec:** `extractPdfOutline` (`lib/pdf-outline.ts:12`) today returns `Promise<string[]>` — `outline.map((item) => item.title)` only, discarding `item.dest`/`item.items` (pdf.js's outline nodes carry a page destination and nested children; both are thrown away). A flat array of titles has no page number to jump to and no nesting to render as a tree, so this tab is *not* zero new work as first written: `extractPdfOutline` needs a small, additive extension — return `{title, dest, items}[]` (or resolve `dest` to a page number via `doc.getPageIndex`) alongside the existing `string[]` call sites (`paper-pass-section.tsx:458` keeps working unchanged if the new return type is a superset, e.g. add a second export or an options flag rather than changing the existing signature). Once that's in place, rendering it as a clickable tree is genuinely trivial — the correction is scoped to the data layer, not the UI.
+- **Thumbnails** — small page-preview grid for fast visual navigation. New rendering work (low-res canvas per page), the one genuinely new PDF capability this spec needs beyond wiring up existing pieces.
+- **Annotations** — today's per-page-only list becomes a document-wide list, grouped by page, with the same "unmatched AI quotes" section preserved. Click one to jump to its page.
+- **Notes** — `PaperNotesPanel`, embedded here instead of only living on the detail page, with a real fix to §3's dead-field gap: a note added from inside the reading window can now set `anchorPage` (always, since you're on a page) and `anchorQuote` (when there's an active text selection) — the two fields the type has always had and the UI never used. Each note in this list is then clickable to jump back to its anchor, the same way an annotation is.
+
+---
+
+## 8. Phasing
+
+- **Phase 1 — the shell.** The new route (§5), toolbar (§6) built around the *existing* single-page-at-a-time renderer (zoom and jump-to-page are real new work; the underlying "render one page to a canvas" mechanism is unchanged), and the sidebar (§7) — outline and document-wide annotations first (near-zero new PDF work), thumbnails and anchored notes as the phase's remaining lift.
+- **Phase 2 — continuous scroll.** Replaces single-page canvas rendering with a virtualized, continuously-scrollable multi-page view (render pages as they approach the viewport, unmount ones that scroll far away) — by far the largest engineering cost in this spec, which is why it's sequenced after the shell proves out on the simpler model. Page-number tracking, the outline's "jump to page," and thumbnail clicks all need to target a scroll position instead of a page-swap once this lands.
+- **Phase 3 — stretch.** The in-reader AI panel (Ghostreader's pattern, §2/§4 — FocusOS already has the AI calls, this is purely surfacing them in-context), split view (Zotero's differentiator, §1), dark-mode-friendly PDF rendering (§9).
+
+---
+
+## 9. Open questions (real product decisions, not mine to make unilaterally)
+
+1. **Route vs. overlay.** §5 recommends a real route (`/read/[paperId]`) for a shareable URL and clean Next.js layout escape. The alternative — a client-side full-screen overlay toggled from the detail page, no navigation — keeps the underlying page's scroll position/state alive underneath and avoids a page-load feel, at the cost of no bookmarkable "reading" URL and needing manual back-button handling (History API) to make `Esc`/browser-back feel consistent. Both are legitimate; §5's choice should be confirmed, not assumed.
+2. **Active-pass-timer badge** (§4/§6): exact placement and whether it should be interactive (pause/complete the pass from inside the reading window) or purely a status readout.
+3. **Dark-mode PDF rendering.** A canvas-rendered PDF page is just pixels — FocusOS's dark theme doesn't touch it, so a paper reads as a bright white rectangle even in dark mode. A CSS `filter: invert()`-style trick (what several PDF readers use) is the cheap option; true rendering-time recoloring is much more work. Worth a decision before Phase 1 ships, since it's the first thing a dark-mode user will notice.
+4. **Thumbnails' rendering cost** for a long paper (30+ pages) — generate all thumbnails eagerly on open, or lazily as the sidebar scrolls? Affects how "instant" opening the reading window feels.
+5. **Mobile.** Zotero/pdf.js's toolbar assumes a mouse and a wide screen. This spec doesn't yet say what the toolbar collapses to on a phone-width viewport — worth a pass before Phase 1 ships, not an afterthought.
