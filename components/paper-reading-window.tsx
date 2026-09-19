@@ -186,8 +186,8 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
   );
 
   useEffect(() => {
-    if (textLayerOk) renderPage(pageNum);
-  }, [pageNum, textLayerOk, renderPage]);
+    renderPage(pageNum);
+  }, [pageNum, renderPage]);
 
   useEffect(() => {
     if (zoom !== "fit-width" && zoom !== "fit-page") return;
@@ -670,15 +670,15 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
       ) : null}
 
       {error ? <p className="border-b border-ink-200 bg-red-50 px-3 py-1.5 text-xs text-red-700 dark:border-ink-800 dark:bg-red-950 dark:text-red-200">{error}</p> : null}
+      {textLayerOk === false ? (
+        <p className="border-b border-ink-200 bg-ink-50 px-3 py-1.5 text-xs text-ink-500 dark:border-ink-800 dark:bg-ink-900">
+          This PDF has no extractable text layer (it looks scanned) — you can still read and navigate it, but selecting text to highlight won&apos;t work.
+        </p>
+      ) : null}
 
-      {/* Body */}
+      {/* Body — the PDF itself always renders; only text-selection-based highlighting depends on a text layer. */}
       <div className="flex min-h-0 flex-1">
-        {textLayerOk === null ? (
-          <p className="p-6 text-sm text-ink-500">Checking PDF for extractable text...</p>
-        ) : !textLayerOk ? (
-          <p className="p-6 text-sm text-ink-500">This PDF has no extractable text layer (it looks scanned) — highlighting isn&apos;t available for it.</p>
-        ) : (
-          <>
+        <>
             <div
               ref={scrollRef}
               className={`relative min-h-0 flex-1 overflow-auto p-4 ${tool === "hand" ? "cursor-grab active:cursor-grabbing" : ""}`}
@@ -897,8 +897,7 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
                 </div>
               </aside>
             ) : null}
-          </>
-        )}
+        </>
       </div>
     </div>
   );
