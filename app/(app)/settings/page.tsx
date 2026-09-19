@@ -6,12 +6,14 @@ import { useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { FloatingWidgetCustomizeDialog } from "@/components/floating-widget-customize-dialog";
+import { GoogleCalendarSettings } from "@/components/google-calendar-settings";
 import { InfoHint } from "@/components/info-hint";
 import { useTheme } from "@/components/theme-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { useWorkdaySession } from "@/components/workday-session-provider";
 import { downloadFullExportJson, downloadPomodoroCsv } from "@/lib/export";
+import { DEFAULT_TIMEZONE } from "@/lib/google-calendar";
 import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, DEFAULT_LADDER } from "@/lib/revision";
 import { useUserTier } from "@/lib/tiers";
 import type { DayTemplate } from "@/types";
@@ -75,14 +77,22 @@ export default function SettingsPage() {
         </section>
         <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Preferences</h2>
-          <div className="flex items-center justify-between rounded-md bg-ink-50 p-3 dark:bg-ink-800">
-            <div>
-              <p className="text-sm font-medium">Dark mode</p>
-              <p className="text-xs text-ink-500">Current theme: {theme}</p>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between rounded-md bg-ink-50 p-3 dark:bg-ink-800">
+              <div>
+                <p className="text-sm font-medium">Dark mode</p>
+                <p className="text-xs text-ink-500">Current theme: {theme}</p>
+              </div>
+              <button className="btn-secondary" onClick={toggleTheme}>Toggle</button>
             </div>
-            <button className="btn-secondary" onClick={toggleTheme}>Toggle</button>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>Timezone</span>
+              <TimezoneSelect value={settings.timezone ?? DEFAULT_TIMEZONE} onChange={(timezone) => updateSettings({ timezone })} />
+            </label>
+            <p className="text-xs text-ink-500">Used for anything with a real clock time, including Google Calendar sync.</p>
           </div>
         </section>
+        <GoogleCalendarSettings />
         <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Reminders</h2>
           <div className="space-y-3">
@@ -219,5 +229,24 @@ export default function SettingsPage() {
         />
       ) : null}
     </>
+  );
+}
+
+/** `Intl.supportedValuesOf` is widely supported in evergreen browsers but not guaranteed — falls
+ * back to a plain text input (still just an IANA string, same validity requirement) if it's
+ * missing, rather than blocking the whole timezone field on one API's availability. */
+function TimezoneSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  const zones = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : null;
+  if (!zones) {
+    return <input className="input w-48" value={value} onChange={(e) => onChange(e.target.value)} placeholder="e.g. Asia/Kolkata" />;
+  }
+  return (
+    <select className="input w-48" value={value} onChange={(e) => onChange(e.target.value)}>
+      {zones.map((zone) => (
+        <option key={zone} value={zone}>
+          {zone}
+        </option>
+      ))}
+    </select>
   );
 }

@@ -2,7 +2,7 @@ export type TaskStatus = "todo" | "in_progress" | "done";
 export type Priority = "low" | "medium" | "high";
 export type Category = "research" | "coding" | "reading" | "writing" | "admin" | "personal";
 export type TimerMode = "work" | "short_break" | "long_break";
-export type ScheduleSlotType = "deep_work" | "reading" | "meal" | "free" | "admin" | "break" | "commute" | "sleep" | "gym" | "class" | "custom";
+export type ScheduleSlotType = "deep_work" | "reading" | "meal" | "free" | "admin" | "break" | "commute" | "sleep" | "gym" | "class" | "custom" | "external";
 export type ScheduleSlotStatus = "upcoming" | "active" | "completed" | "skipped";
 export type CourseStatus = "active" | "completed" | "dropped";
 export type TermKind = "semester" | "break" | "none";
@@ -200,6 +200,11 @@ export interface ScheduleSlot {
   color?: string;
   /** Set on a class block or a materialized routine block (see `RoutineBlock`) — undraggable, unresizable, and undeletable in the timeline editor. Never set by hand; `type === "class"` alone already implies this for class blocks (`isLockedSlot`, lib/schedule.ts), so this field only actually needs to be `true` for routine-derived slots. */
   locked?: boolean;
+  /** plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.4/§7 — set only on a slot imported from an
+   * external Google Calendar event (`type` is then always `"external"`, also always locked): that
+   * event's id, so a later sync finds-and-updates or removes this exact slot instead of creating a
+   * duplicate. Absent on every FocusOS-authored slot. */
+  sourceGoogleEventId?: string;
 }
 
 /**
@@ -320,6 +325,8 @@ export interface RecurringTaskTemplate {
   /** Bounds, resolved and copied in at creation time from the linked course's own startDate/endDate (the same "copy the term's dates in" pattern `CourseForm`'s submit handler already uses). Left unset for an unlinked template, which then runs indefinitely until paused. */
   startDate?: string;
   endDate?: string;
+  /** Set only for the one template `lib/recurring-tasks.ts`'s `planRevisionTemplateSync` creates and keeps in sync with a course's `targetMinutesPerWeek` — lets that sync find "the" auto revision template for a course without guessing from its title, and lets the UI treat it differently from a hand-added commitment (e.g. hide its delete button in favor of "clear the hours to stop it"). Unset on every manually-created template. */
+  generatedFrom?: "courseRevisionTarget";
   createdAt: string;
   updatedAt: string;
 }
@@ -803,6 +810,11 @@ export interface UserSettings {
   vocabularyRenameSeen?: boolean;
   /** Absent = `DEFAULT_ROUTINE_BLOCKS` (lib/routine.ts) — nothing is written here until the user actually edits something on `/settings/routine`, matching every other settings default in this interface. */
   routineBlocks?: RoutineBlock[];
+  /** IANA name (e.g. "Asia/Kolkata"). Absent = `DEFAULT_TIMEZONE` (lib/google-calendar.ts) — makes
+   * the app's long-standing implicit single-timezone assumption (vercel.json's IST-offset cron
+   * schedules) an explicit, overridable setting, since every timed Google Calendar event needs a
+   * real IANA timezone (plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.1). */
+  timezone?: string;
   updatedAt: string;
 }
 
@@ -905,5 +917,56 @@ export interface AdminJob {
   deletedCollections: string[];
   error?: string;
   createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.2 — the non-secret half of the connection.
+ * Lives at users/{uid}/integrations/googleCalendar (one doc), read/written by the client SDK
+ * exactly like `UserSettings`. The refresh token itself is never in here — see
+ * `lib/google-calendar-admin.ts`'s server-only token doc, stored outside `users/{uid}/**` entirely.
+ *
+ * Every field but `connected` and `updatedAt` is optional: the OAuth callback writes this doc once,
+ * as its last step, with only what it already knows at connect time (`connected`, the email, the
+ * calendar id) — `pushEnabled`/`importCalendarIds` are only ever set later by a Settings toggle.
+ * Every read merges defaults first (`DEFAULT_PUSH_ENABLED` in lib/google-calendar.ts), the same
+ * "absent means the default" convention `useUserSettings` already uses — never dereferenced as
+ * `connection.pushEnabled.courseSessions` directly.
+ */
+export interface GoogleCalendarConnection {
+  connected: boolean;
+  googleAccountEmail?: string;
+  /** The "FocusOS" secondary calendar's Google id, created once on first connect. */
+  focusOsCalendarId?: string;
+  /** Which of the user's own calendars to pull from. Absent = not yet chosen. Phase 1 (push-only)
+   * never reads this — reserved for Phase 2's pull direction. */
+  importCalendarIds?: string[];
+  pushEnabled?: { courseSessions: boolean; checkpoints: boolean; timedCommitments: boolean; tasksWithDueDate: boolean };
+  /** Reserved for Phase 2 — Phase 1 has no pull direction to enable/disable. */
+  pullEnabled?: boolean;
+  /** Per importCalendarIds entry — Google's incremental-sync cursor. Reserved for Phase 2. */
+  syncTokens?: Record<string, string>;
+  lastPushAt?: string;
+  lastPullAt?: string;
+  /** Set when a sync hits a real failure (e.g. the user revoked access from their Google Account
+   * page) — surfaced in Settings so the user knows to reconnect. */
+  lastError?: string;
+  updatedAt: string;
+}
+
+/**
+ * plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.5 — maps one FocusOS record to the Google event
+ * pushed for it. Lives at users/{uid}/googleCalendarLinks/{refKey}, `refKey` a deterministic
+ * composite string (`lib/google-calendar.ts`'s `checkpointRefKey`/`recurringTemplateRefKey`/
+ * `courseSessionRefKey`/`taskRefKey`), never a random id, so the push diff (§6.3) can always find
+ * "the Google event for this record" without a query. A dedicated collection rather than a
+ * `googleEventId` field bolted onto `Course`/`Checkpoint`/`RecurringTaskTemplate` directly, so this
+ * whole feature can be deleted later without touching those interfaces.
+ */
+export interface GoogleCalendarLink {
+  googleEventId: string;
+  /** A fingerprint of the last-pushed content (`lib/google-calendar.ts`'s `hashEventDraft`) — lets
+   * the push diff skip a no-op `events.update` call when nothing about the record actually changed. */
+  contentHash?: string;
   updatedAt: string;
 }

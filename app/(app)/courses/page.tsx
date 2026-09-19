@@ -12,14 +12,16 @@ import { EmptyState, focusSection } from "@/components/empty-state";
 import { InfoHint } from "@/components/info-hint";
 import { ModuleGate } from "@/components/module-gate";
 import { RecurringCommitmentForm } from "@/components/recurring-commitment-form";
+import { RecurringCommitmentRow } from "@/components/recurring-commitment-row";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
+import { useUserSettings } from "@/hooks/use-user-settings";
 import { callAiTask } from "@/lib/ai/client";
 import type { PrepPlanOutput } from "@/lib/ai/schemas";
 import { saveClassLogEntry } from "@/lib/classlog";
-import { dayOfWeekLabels, effectiveCourseStatus, resyncFutureClassSlots } from "@/lib/courses";
+import { dayOfWeekLabels, effectiveCourseStatus, resyncFutureClassSlots, syncRevisionTemplate } from "@/lib/courses";
 import { todayKey } from "@/lib/dates";
 import { computeCourseCoverage } from "@/lib/loadindex";
 import {
@@ -29,7 +31,6 @@ import {
   createTerm,
   deleteCheckpoint,
   deleteCourse,
-  deleteRecurringTaskTemplate,
   deleteTerm,
   subscribeCourseClassLogs,
   subscribeCourseTopics,
@@ -45,7 +46,7 @@ import type {
   Course,
   CourseSession,
   Goal,
-  NewRecurringTaskTemplate,
+  NewCourse,
   NewTerm,
   Paper,
   RecurringTaskTemplate,
@@ -61,6 +62,8 @@ const CHECKPOINT_STATUSES: CheckpointStatus[] = ["upcoming", "prepping", "submit
 function CoursesPageContent() {
   const { user } = useAuth();
   const today = todayKey();
+  const { settings } = useUserSettings();
+  const workMinutes = settings.workMinutes ?? 25;
   const { items: terms } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: revisionItems } = useUserCollection<RevisionItem>("revisionItems", useMemo(() => [], []));
@@ -73,6 +76,21 @@ function CoursesPageContent() {
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
 
+  /** A new course's revision hours (if set at creation) get their auto "Revise" template the same
+   * turn it's created — `createCourse` returns the new id specifically so this doesn't need a
+   * second round-trip to look it up. */
+  async function handleCreateCourse(course: NewCourse) {
+    const id = await createCourse(user!.uid, course);
+    if (course.targetMinutesPerWeek) {
+      await syncRevisionTemplate(
+        user!.uid,
+        { id, name: course.name, targetMinutesPerWeek: course.targetMinutesPerWeek, startDate: course.startDate, endDate: course.endDate },
+        [],
+        workMinutes
+      );
+    }
+  }
+
   return (
     <>
       <SectionHeader title="Courses" eyebrow="Terms, coursework, and class schedule" />
@@ -80,7 +98,7 @@ function CoursesPageContent() {
       <div className="mt-6 grid gap-6 xl:grid-cols-[380px_1fr]">
         <section id="course-add" className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Add a course</h2>
-          <CourseForm terms={terms} onCreate={(course) => createCourse(user!.uid, course)} />
+          <CourseForm terms={terms} onCreate={handleCreateCourse} />
         </section>
         <section className="space-y-4">
           {courses.length === 0 ? (
@@ -95,6 +113,7 @@ function CoursesPageContent() {
                 course={course}
                 terms={terms}
                 today={today}
+                workMinutes={workMinutes}
                 checkpoints={checkpointsByCourse[course.id] ?? []}
                 revisionItems={revisionItems}
                 recurringTemplates={recurringTemplates.filter((item) => item.courseId === course.id)}
@@ -161,6 +180,7 @@ function CourseCard({
   course,
   terms,
   today,
+  workMinutes,
   checkpoints,
   revisionItems,
   recurringTemplates,
@@ -171,6 +191,7 @@ function CourseCard({
   course: Course;
   terms: Term[];
   today: string;
+  workMinutes: number;
   checkpoints: Checkpoint[];
   revisionItems: RevisionItem[];
   recurringTemplates: RecurringTaskTemplate[];
@@ -184,6 +205,8 @@ function CourseCard({
   const [topics, setTopics] = useState<Topic[]>([]);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState("");
+  const [revisionHours, setRevisionHours] = useState(course.targetMinutesPerWeek ? String(course.targetMinutesPerWeek / 60) : "");
+  const [savingRevisionHours, setSavingRevisionHours] = useState(false);
   const status = effectiveCourseStatus(course, today);
   const term = terms.find((item) => item.id === course.termId);
   const coverage = computeCourseCoverage(topics, revisionItems, course.id);
@@ -217,6 +240,23 @@ function CourseCard({
     await Promise.all(
       recurringTemplates.filter((template) => template.active).map((template) => updateRecurringTaskTemplate(user.uid, template.id, { active: false }))
     );
+  }
+
+  /** "number of hours can be set by user in the course" — stores 0 rather than `undefined` when
+   * cleared, since `updateCourse`'s patch runs through `withoutUndefined` and an `undefined` value
+   * would just get silently dropped instead of clearing the field in Firestore. */
+  async function saveRevisionHours() {
+    if (!user) return;
+    setSavingRevisionHours(true);
+    const targetMinutesPerWeek = revisionHours ? Math.round(Number(revisionHours) * 60) : 0;
+    await updateCourse(user.uid, course.id, { targetMinutesPerWeek });
+    await syncRevisionTemplate(
+      user.uid,
+      { id: course.id, name: course.name, targetMinutesPerWeek, startDate: course.startDate, endDate: course.endDate },
+      recurringTemplates,
+      workMinutes
+    );
+    setSavingRevisionHours(false);
   }
 
   async function generateNow() {
@@ -280,6 +320,24 @@ function CourseCard({
       {editingSessions ? (
         <CourseSessionsEditor initialSessions={course.sessions} onSave={saveSessions} onCancel={() => setEditingSessions(false)} />
       ) : null}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-2 text-xs text-ink-500">
+          Revision hours/week
+          <input
+            className="input w-20 py-1"
+            type="number"
+            min={0}
+            step={0.5}
+            value={revisionHours}
+            onChange={(e) => setRevisionHours(e.target.value)}
+          />
+        </label>
+        <button className="btn-secondary py-1 text-xs" onClick={saveRevisionHours} disabled={savingRevisionHours}>
+          {savingRevisionHours ? "Saving..." : "Save"}
+        </button>
+        <InfoHint term="revisionHoursPerWeek" />
+      </div>
 
       <div className="mt-4">
         <p className="label mb-2 flex items-center gap-1">
@@ -406,62 +464,6 @@ function CourseCard({
         </div>
       </div>
     </article>
-  );
-}
-
-/** plan/FocusOS-v2-Connected-Flow-Plan.md §4.5 — editing title/category/priority only reshapes
- * future generations (there's nothing here to edit those in place); "Active"/"Paused" and delete
- * are the only controls a template needs, mirroring CheckpointRow's shape for the same course card. */
-function RecurringCommitmentRow({ uid, template }: { uid: string; template: RecurringTaskTemplate }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const days = template.daysOfWeek.map((day) => dayOfWeekLabels[day].slice(0, 3)).join(", ");
-
-  async function toggleActive() {
-    setBusy(true);
-    setError("");
-    try {
-      await updateRecurringTaskTemplate(uid, template.id, { active: !template.active });
-    } catch {
-      setError("Couldn't save that change — try again.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove() {
-    setBusy(true);
-    setError("");
-    try {
-      await deleteRecurringTaskTemplate(uid, template.id);
-    } catch {
-      setError("Couldn't delete this — try again.");
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="rounded-md border border-ink-200 p-2 text-sm dark:border-ink-800">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <span className={template.active ? "" : "text-ink-400 line-through"}>{template.title}</span>
-          <p className="text-xs text-ink-500">
-            {days} · {template.cadence === "biweekly" ? "every 2 weeks" : "every week"}
-            {template.time ? ` · ${template.time.startTime}–${template.time.endTime}` : ""}
-            {template.time?.location ? ` · ${template.time.location}` : ""}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button className="btn-secondary py-1 text-xs" onClick={toggleActive} disabled={busy}>
-            {template.active ? "Pause" : "Resume"}
-          </button>
-          <button className="text-ink-400 hover:text-red-600 disabled:opacity-50" onClick={remove} disabled={busy} aria-label="Delete recurring commitment">
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
-      {error ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p> : null}
-    </div>
   );
 }
 

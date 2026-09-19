@@ -1,7 +1,8 @@
 import { getDay, parseISO } from "date-fns";
-import { fetchCollection, saveDailySchedule } from "@/lib/firestore";
+import { fetchCollection, saveDailySchedule, setRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/firestore";
+import { planRevisionTemplateSync } from "@/lib/recurring-tasks";
 import { sortedSlots } from "@/lib/schedule";
-import type { Course, CourseStatus, DailySchedule, ScheduleSlot } from "@/types";
+import type { Course, CourseStatus, DailySchedule, RecurringTaskTemplate, ScheduleSlot } from "@/types";
 
 /** `status` as stored can go stale (nobody flips it when a course's end date passes) — derive the real one. */
 export function effectiveCourseStatus(course: Course, dateKey: string): CourseStatus {
@@ -55,3 +56,24 @@ export async function resyncFutureClassSlots(uid: string, course: Course, todayK
 }
 
 export const dayOfWeekLabels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/**
+ * The I/O half of `planRevisionTemplateSync` (lib/recurring-tasks.ts) — call after creating a
+ * course or after its `targetMinutesPerWeek` changes, passing the templates already fetched for
+ * that course (no extra query, same "fetch once, filter client-side" convention as everywhere
+ * else) so it can find "the" auto revision template by `generatedFrom`, not by guessing from title.
+ */
+export async function syncRevisionTemplate(
+  uid: string,
+  course: Pick<Course, "id" | "name" | "targetMinutesPerWeek" | "startDate" | "endDate">,
+  courseTemplates: RecurringTaskTemplate[],
+  workMinutes: number
+) {
+  const existing = courseTemplates.find((template) => template.generatedFrom === "courseRevisionTarget");
+  const plan = planRevisionTemplateSync(course, existing, workMinutes);
+  // "create" goes through setRecurringTaskTemplate's deterministic id, not createRecurringTaskTemplate's
+  // addDoc — see revisionTemplateId's comment: two overlapping "Save" clicks must land on one document.
+  if (plan.action === "create") await setRecurringTaskTemplate(uid, plan.templateId, plan.template);
+  else if (plan.action === "update") await updateRecurringTaskTemplate(uid, plan.templateId, plan.patch);
+  else if (plan.action === "pause") await updateRecurringTaskTemplate(uid, plan.templateId, { active: false });
+}

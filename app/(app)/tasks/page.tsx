@@ -1,8 +1,11 @@
 "use client";
 
 import { orderBy } from "firebase/firestore";
+import { RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { EmptyState, focusSection } from "@/components/empty-state";
+import { RecurringCommitmentForm } from "@/components/recurring-commitment-form";
+import { RecurringCommitmentRow } from "@/components/recurring-commitment-row";
 import { SectionHeader } from "@/components/section-header";
 import { TaskForm } from "@/components/task-form";
 import { TaskList } from "@/components/task-list";
@@ -10,15 +13,16 @@ import { TaskPackDialog } from "@/components/task-pack-dialog";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { categories, priorities, statuses } from "@/lib/options";
-import { createTask, deleteTask, updateTask } from "@/lib/firestore";
+import { createRecurringTaskTemplate, createTask, deleteTask, updateTask } from "@/lib/firestore";
 import { computeStatusPatch } from "@/lib/tasks";
 import { todayKey, weekDates, weekStartKey } from "@/lib/dates";
-import type { Category, Course, Priority, Task, TaskStatus } from "@/types";
+import type { Category, Course, Priority, RecurringTaskTemplate, Task, TaskStatus } from "@/types";
 
 export default function TasksPage() {
   const { user } = useAuth();
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: recurringTemplates } = useUserCollection<RecurringTaskTemplate>("recurringTaskTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   const [view, setView] = useState("inbox");
   const [category, setCategory] = useState<Category | "all">("all");
   const [priority, setPriority] = useState<Priority | "all">("all");
@@ -50,13 +54,16 @@ export default function TasksPage() {
     <>
       <SectionHeader title="Tasks" eyebrow="Capture, clarify, complete" />
       <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
-        <section id="task-quick-add" className="card p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold">Quick add</h2>
-            <button className="btn-secondary py-1.5 text-xs" onClick={() => setPackDialogOpen(true)}>Add from checklist</button>
-          </div>
-          <TaskForm onCreate={(task) => createTask(user!.uid, task)} courses={courses} />
-        </section>
+        <div className="space-y-6">
+          <section id="task-quick-add" className="card p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold">Quick add</h2>
+              <button className="btn-secondary py-1.5 text-xs" onClick={() => setPackDialogOpen(true)}>Add from checklist</button>
+            </div>
+            <TaskForm onCreate={(task) => createTask(user!.uid, task)} courses={courses} />
+          </section>
+          <RecurringCommitmentsPanel courses={courses} templates={recurringTemplates} />
+        </div>
         <section>
           <div className="card mb-4 p-4">
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -109,5 +116,63 @@ export default function TasksPage() {
       </div>
       {packDialogOpen ? <TaskPackDialog uid={user!.uid} onClose={() => setPackDialogOpen(false)} /> : null}
     </>
+  );
+}
+
+/**
+ * A recurring task no longer has to be added through a course card — "TA meets etc can be added
+ * directly from tasks". Course-linking here is optional (the `courses` prop passed to
+ * `RecurringCommitmentForm` renders its own picker); leaving it unset makes a template that's a
+ * personal routine, not tied to any course. Lists every template the user has, not just the
+ * course-linked ones, so this doubles as the one place to see all of them at a glance.
+ */
+function RecurringCommitmentsPanel({ courses, templates }: { courses: Course[]; templates: RecurringTaskTemplate[] }) {
+  const { user } = useAuth();
+  const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState("");
+
+  async function generateNow() {
+    if (!user) return;
+    setGenerating(true);
+    setGenerateError("");
+    try {
+      const token = await user.getIdToken();
+      const response = await fetch("/api/daily-loop/recurring-tasks", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to generate recurring tasks.");
+      }
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : "Failed to generate recurring tasks.");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <section className="card p-5">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-semibold">Recurring commitments</h2>
+        <button
+          className="btn-secondary py-1 text-xs"
+          onClick={generateNow}
+          disabled={generating || !user}
+          title="Generates due tasks for every recurring commitment — the daily cron does this automatically."
+        >
+          <RefreshCw className={generating ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
+          {generating ? "Generating..." : "Generate now"}
+        </button>
+      </div>
+      {generateError ? <p className="mb-2 text-xs text-red-600 dark:text-red-400">{generateError}</p> : null}
+      <div className="mb-3 space-y-2">
+        {templates.map((tmpl) => (
+          <RecurringCommitmentRow key={tmpl.id} uid={user!.uid} template={tmpl} courseName={courses.find((c) => c.id === tmpl.courseId)?.name} />
+        ))}
+        {templates.length === 0 ? (
+          <p className="text-sm text-ink-500">No recurring commitments yet — a TA meeting, office hours, or a problem set due every week.</p>
+        ) : null}
+      </div>
+      <RecurringCommitmentForm courses={courses} onCreate={(tmpl) => createRecurringTaskTemplate(user!.uid, tmpl)} />
+    </section>
   );
 }

@@ -22,7 +22,8 @@
     "verify:timeline": "tsx scripts/verify-timeline.ts",
     "verify:undo-stack": "tsx scripts/verify-undo-stack.ts",
     "verify:routine": "tsx scripts/verify-routine.ts",
-    "verify:recurring-tasks": "tsx scripts/verify-recurring-tasks.ts"
+    "verify:recurring-tasks": "tsx scripts/verify-recurring-tasks.ts",
+    "verify:google-calendar": "tsx scripts/verify-google-calendar.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
@@ -33,6 +34,7 @@
     "date-fns": "^3.6.0",
     "firebase": "^10.14.1",
     "firebase-admin": "^14.3.0",
+    "googleapis": "^181.0.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
     "lucide-react": "^0.468.0",

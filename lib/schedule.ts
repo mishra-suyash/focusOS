@@ -1,7 +1,20 @@
-import { Book, Briefcase, Brain, Car, Coffee, Dumbbell, GraduationCap, Moon, Sparkles, Utensils, type LucideIcon } from "lucide-react";
+import { Book, Briefcase, Brain, CalendarClock, Car, Coffee, Dumbbell, GraduationCap, Moon, Sparkles, Utensils, type LucideIcon } from "lucide-react";
 import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotStatus, ScheduleSlotType, Task } from "@/types";
 
-export const slotTypes: ScheduleSlotType[] = ["deep_work", "reading", "meal", "free", "admin", "break", "commute", "sleep", "gym", "class", "custom"];
+export const slotTypes: ScheduleSlotType[] = [
+  "deep_work",
+  "reading",
+  "meal",
+  "free",
+  "admin",
+  "break",
+  "commute",
+  "sleep",
+  "gym",
+  "class",
+  "custom",
+  "external"
+];
 
 export const slotTypeLabels: Record<ScheduleSlotType, string> = {
   deep_work: "Deep work",
@@ -14,7 +27,8 @@ export const slotTypeLabels: Record<ScheduleSlotType, string> = {
   sleep: "Sleep",
   gym: "Gym",
   class: "Class",
-  custom: "Custom"
+  custom: "Custom",
+  external: "Google Calendar"
 };
 
 export const slotTypeStyles: Record<ScheduleSlotType, string> = {
@@ -28,7 +42,8 @@ export const slotTypeStyles: Record<ScheduleSlotType, string> = {
   sleep: "border-indigo-500 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300",
   gym: "border-rose-500 bg-rose-500/10 text-rose-700 dark:text-rose-300",
   class: "border-fuchsia-500 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300",
-  custom: "border-ink-400 bg-white text-ink-700 dark:bg-ink-900 dark:text-ink-200"
+  custom: "border-ink-400 bg-white text-ink-700 dark:bg-ink-900 dark:text-ink-200",
+  external: "border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300"
 };
 
 /** §9 "colour not the only signal" — a type icon on every block/strip segment, DP4. */
@@ -43,7 +58,8 @@ export const slotTypeIcons: Record<ScheduleSlotType, LucideIcon> = {
   sleep: Moon,
   gym: Dumbbell,
   class: GraduationCap,
-  custom: Sparkles
+  custom: Sparkles,
+  external: CalendarClock
 };
 
 export function minutesFromTime(time: string) {
@@ -78,9 +94,11 @@ export function sortedSlots(slots: ScheduleSlot[]) {
 /** plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.1 — a class block (`type === "class"`)
  * or a materialized routine block (`locked: true`) can't be dragged, resized, or deleted in the
  * timeline editor. Deliberately absolute ("never remove a course/routine slot, at any cost"): no
- * per-day exception exists, by design — see that spec's D5. */
+ * per-day exception exists, by design — see that spec's D5. An imported Google Calendar event
+ * (`type === "external"`, plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.4/§7) gets the same
+ * treatment for the same reason: FocusOS didn't create it and has no business silently reshaping it. */
 export function isLockedSlot(slot: ScheduleSlot): boolean {
-  return slot.type === "class" || slot.locked === true;
+  return slot.type === "class" || slot.type === "external" || slot.locked === true;
 }
 
 /** Appends any `wanted` slot whose `id` isn't already present in `existing`, leaving every other

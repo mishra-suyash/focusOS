@@ -29,6 +29,10 @@ export const copy = {
   revisionSchedule: { label: "Revision schedule" },
   todaysRevision: { label: "Today's revision" },
   revisePage: { label: "Revise" },
+  revisionHoursPerWeek: {
+    label: "Revision hours/week",
+    hint: "Auto-creates a weekly \"Revise\" task sized to this many hours — clear it to stop. Also counts toward this course's share of your daily workload."
+  },
   skim: { label: "Skim", hint: "Read a paper in stages (Keshav's three-pass method); stop whenever you have enough" },
   read: { label: "Read" },
   deepDive: { label: "Deep dive" },

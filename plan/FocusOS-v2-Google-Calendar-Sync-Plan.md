@@ -1,0 +1,329 @@
+# FocusOS v2 — Google Calendar two-way sync
+
+**Status:** Phase 1 (push) implemented, not yet connected to a real Google account · **Routes touched (new):** `/api/integrations/google-calendar/connect`, `/api/integrations/google-calendar/callback`, `/api/integrations/google-calendar/disconnect`, `/api/integrations/google-calendar/sync-now`, `/api/cron/google-calendar-sync` (Phase 2, not yet added), `Settings` (new "Google Calendar" section) · **Companion to:** `FocusOS-v2-Connected-Flow-Plan.md` (the recurring-task engine this reuses), `FocusOS-v2-Routine-Blocks-and-AI-Templates.md` (the `ScheduleSlot`/day-timeline model this extends)
+**Principle carried over:** additive and non-destructive. Every new field is optional, no migration, and disconnecting Google Calendar leaves every FocusOS record exactly as it was.
+**Evidence basis:** every current-state claim below is grounded in source (`grep`, direct file reads) done in this working session. Every Google API/OAuth-policy claim was checked against Google's own current documentation (see the "External sources" note at the end of §3) rather than asserted from memory, since third-party policy specifics like this change and a stale claim here would misdirect implementation.
+
+---
+
+## Implementation status
+
+**Phase 1 (§12) is implemented in full:** OAuth connect/disconnect, the "FocusOS" secondary calendar, and push for course sessions, checkpoints, timed recurring commitments, and (going beyond this doc's original Phase 1 scope, since the pure logic was trivial to add once the other three existed) opt-in hand-created tasks with a due date. Phase 2 (pull) and Phase 3 are **not started** — no cron route, no import-calendar picker, no `external` slots actually appearing on the day timeline from real data yet (the type/style/lock-behavior groundwork for them is in, per §4.4/§9.2, but nothing populates it).
+
+- **§3 scopes** — four, not three: the calendar table's three plus `userinfo.email` for the "Connected as {email}" display, added during implementation once it became clear the email needed *some* scope to fetch (§3's table now reflects this; it did not in the original draft).
+- **§4 data model** — `UserSettings.timezone`, `GoogleCalendarConnection`, `GoogleCalendarLink` (with an added `contentHash` field beyond the original draft — see below), `ScheduleSlot.sourceGoogleEventId`, and `ScheduleSlotType`'s `"external"` member are all in `types/index.ts`, all optional/additive as planned.
+- **§6 push engine** — `lib/google-calendar.ts` (pure: ref keys, event-draft builders, the diff) and `lib/google-calendar-admin.ts` (OAuth, token storage, the Calendar API calls) split exactly along the "pure logic / thin I/O wrapper" line this app already uses elsewhere (`lib/recurring-tasks.ts` + `lib/courses.ts`'s `syncRevisionTemplate` is the precedent). §6.3's RRULE `UNTIL`-avoidance decision (rely on the diff to delete an ended course's event a cycle later, rather than fight timezone-aware UTC math for the bound) shipped as written.
+- **Two fixes made during implementation review, beyond the original spec:**
+  - **Idempotent creates.** The original draft trusted whatever event id Google's `events.insert` response returned. A caller-supplied deterministic id instead (`lib/google-calendar.ts`'s `googleEventIdForRefKey`, an FNV-1a hash of `refKey` transcoded into Google's required `[0-9a-v]` charset) means a sync that crashes between a successful insert and writing the `GoogleCalendarLink` doc doesn't silently duplicate the event on its next retry — the retried insert gets a `409 Conflict` on the id it already used, caught and treated as "already created." This is also why `GoogleCalendarLink` gained the `contentHash` field mentioned above: with a deterministic id, `googleEventId` almost doesn't need storing at all, but the content fingerprint still does, to avoid a spurious `events.update` every sync cycle.
+  - **Stale calendar recovery.** `ensureFocusOsCalendar` no longer blindly trusts a stored `focusOsCalendarId` — it confirms the calendar still exists (`calendars.get`) before reusing it, falling back to recreating it if the user deleted it by hand in Google. One extra API call, only on connect, never on every sync.
+- **§9.1 Settings UI** — connect/disconnect, per-category push checkboxes, "Sync now," and error/last-synced display are all in (`components/google-calendar-settings.tsx`). The import-calendar picker is Phase 2 and correctly absent.
+- **Verification performed:** `tsc --noEmit` and `eslint . --max-warnings=0` clean, a full production `npm run build` (all four new routes registered), curl smoke tests confirming correct 401s/redirects with no 500s, and a new `scripts/verify-google-calendar.ts` (25+ assertions covering ref-key stability, RRULE/DTSTART construction including the biweekly-parity anchor, all-day exclusive-end-date math, the content-hash diff's create/update/no-op/delete branches, and the deterministic event-id transform's charset guarantee). **Not verified, and this is the real gap:** the actual Google API path. No OAuth token exchange, no calendar creation, no event insert/update/delete has ever executed against a real Google account — none of this is possible without a live Google Cloud OAuth client (§3) plus working browser access, and the browser connector was unavailable for this entire implementation pass (same limitation noted throughout this working session). Treat "builds and lints clean, pure logic is unit-tested" as exactly that — not as evidence the OAuth flow or the Calendar API calls work end-to-end.
+- **What's needed before this can be used at all:** a Google Cloud project with the Calendar API enabled, an OAuth 2.0 Client (Web application) with the four scopes in §3's table, and `GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`/`GOOGLE_OAUTH_REDIRECT_URI` set in `.env.local` (see `.env.example`) — none of which this session could set up, since it requires the user's own Google Cloud Console access.
+
+---
+
+## 0. TL;DR
+
+The ask: *"i want to integrate google calendar with app... full 2 way setup."* That's a real, well-scoped feature — Google's Calendar API supports exactly this — but it's genuinely one of the larger things this app would take on: it needs a Google Cloud project, an OAuth consent flow, server-side token storage that the client must never be able to read, and two independent sync directions that have to avoid feeding each other in a loop.
+
+The design in one paragraph: FocusOS creates and owns one **secondary Google Calendar** ("FocusOS") and pushes its own calendar-shaped data into it — course class times, assessment due dates, and any recurring commitment that has a clock time (finally giving `RecurringTaskTemplate.time` the calendar presence `FocusOS-v2-Connected-Flow-Plan.md` §4.4 explicitly deferred). Separately, FocusOS **pulls** events from the user's own existing calendar(s) — the doctor's appointment, the flight, the birthday — and mirrors them onto the day timeline as read-only locked `ScheduleSlot`s, the same way a class block already can't be dragged or deleted. Two distinct calendars, one direction each, means the two directions almost never collide by construction, rather than needing a clever loop-detector to save them from each other. A periodic cron job (matching this app's existing "cron does it automatically, or click Sync now" pattern) runs both directions; nothing needs push-on-every-write plumbing threaded through a dozen existing call sites.
+
+---
+
+## 1. Goals and non-goals
+
+**Goals**
+- Push FocusOS's calendar-shaped data (class times, assessment due dates, timed recurring commitments) into Google Calendar, kept in sync as that data changes or is deleted.
+- Pull the user's existing Google Calendar events into FocusOS's day timeline, so "what does my day actually look like" accounts for commitments FocusOS never knew about.
+- Do this with the narrowest OAuth scopes the two directions actually need, storing the resulting refresh token somewhere the client SDK cannot read.
+- Reuse this app's existing patterns wherever one already exists: the "materialize a rule into concrete records" pattern (`RoutineBlock`, `CourseSession`, `RecurringTaskTemplate`), the "cron does it, or click a manual button" pattern (Morning brief, Evening rollup, Recurring tasks), and the CRON_SECRET/`cronEnabled`/per-uid-try-catch cron shape every existing cron route already uses.
+
+**Non-goals (this pass)**
+- Real-time push notification webhooks (Google's `events.watch`) — polling on a cron cadence is the v1 mechanism; webhooks are a Phase 3 stretch (§12).
+- True conflict resolution when the same event is edited on both sides between sync cycles — last-write-wins is the accepted v1 behavior (§11), not silently glossed over.
+- Syncing the day-by-day deep-work timeline itself (individual `ScheduleSlot`s a user drags around on `/plan/day`) — that's internal planning noise that changes constantly; only the three calendar-shaped sources named above push out (§6). Open for reconsideration in §13.
+- Multiple Google accounts per FocusOS account, or shared/organization calendars — one Google account, one connection, per FocusOS user.
+- Anything for Outlook/iCal/other calendar providers — Google Calendar only, per the request.
+
+---
+
+## 2. What this builds on, with receipts
+
+- **`ScheduleSlot`** (`types/index.ts:191`) already has `startTime`/`endTime`, a `type`, a `locked` flag, and lives inside a per-date `DailySchedule` (`types/index.ts:237`, doc id = `dateKey`) — this is the natural landing spot for a pulled Google event: a locked slot on the right day, styled distinctly, exactly like a class block already is (`lib/schedule.ts`'s `isLockedSlot`: `slot.type === "class" || slot.locked === true`).
+- **`RecurringTaskTemplate.time`** (`types/index.ts:318`) already captures an optional `{startTime, endTime, location}` on a recurring commitment (TA office hours, etc.) — added in `FocusOS-v2-Connected-Flow-Plan.md`, whose §4.4 explicitly deferred giving it a calendar presence ("a locked calendar block is a nice-to-have, not the core ask"). This plan is where that gets picked back up, except the destination is Google Calendar instead of an internal `ScheduleSlot`.
+- **The cron shape is already fully established.** `app/api/cron/morning-brief/route.ts` is the reference: `CRON_SECRET` bearer-auth check, `getAdminSettings().cronEnabled` global kill switch, `getActiveUids()` fan-out, a per-uid try/catch so one user's failure doesn't sink the run, and `recordCronRun(name, {...})` logging at the end. `vercel.json`'s `crons` array already lists four IST-offset schedules. The new `google-calendar-sync` cron is a fifth entry in that same shape.
+- **Firebase Admin is already wired for exactly this kind of server-side work** (`lib/firebase-admin.ts`'s `adminDb()`/`adminAuth()`), and `lib/api-auth.ts`'s `verifyActiveUser` is the existing pattern for a user-triggered route (e.g. a manual "Sync now" click) — no new auth primitive needed.
+- **What's missing, confirmed by grep:** zero occurrences of `google`, `GOOGLE_CLIENT_ID`, or `googleapis` anywhere in the repo or `package.json`. This is a from-scratch integration, not wiring up something half-started.
+- **No `firestore.rules` file exists anywhere in this repo.** Security rules are evidently managed outside source control (Firebase console, or elsewhere). This matters a lot for §4/§10 below — refresh tokens are real credentials, and I can't verify from source whether the current rules already grant a blanket "a signed-in user can read everything under `users/{uid}/**`" that a naively-placed token document would fall under. Treat the rules change in §10 as a hard precondition, not a nice-to-have, and verify it directly wherever rules actually live before shipping.
+- **No per-user timezone exists anywhere in `UserSettings`.** The app's cron schedules are hardcoded IST-offset UTC times (`vercel.json`: `"30 0 * * *"` ≈ 06:00 IST), implying a single assumed timezone today. Google Calendar events need an explicit IANA timezone on every timed event — §4 adds the missing setting.
+
+---
+
+## 3. Google Cloud / OAuth setup (operational, one-time)
+
+1. Create a Google Cloud project (or reuse one), enable the **Google Calendar API**.
+2. Configure the **OAuth consent screen** (External user type, since FocusOS users sign in with personal Google accounts, not a Workspace org this app owns).
+3. Create an **OAuth 2.0 Client ID** (Web application), with authorized redirect URIs for both environments:
+   - Production: `https://<app-domain>/api/integrations/google-calendar/callback`
+   - Local dev: `http://localhost:3000/api/integrations/google-calendar/callback`
+4. Request four scopes — the narrowest combination that covers both directions plus one small display need (confirmed against Google's own current scope reference, not guessed):
+
+   | Scope | Grants | Used for |
+   |---|---|---|
+   | `https://www.googleapis.com/auth/calendar.app.created` | "Make secondary Google calendars, and see, create, change, and delete events on them" — but *only* calendars this app itself created | Creating the one "FocusOS" secondary calendar on first connect, and all push-side event CRUD into it (§6) |
+   | `https://www.googleapis.com/auth/calendar.events.readonly` | View events on every calendar the user can access | Reading the user's *other* calendar(s) for the pull direction (§7) |
+   | `https://www.googleapis.com/auth/calendar.calendarlist.readonly` | See the list of the user's calendars | Populating the "import events from" picker in Settings (§9) — has to run before we know which calendar id to read from |
+   | `https://www.googleapis.com/auth/userinfo.email` | The account's primary email address, nothing else | Showing "Connected as {email}" in Settings (§9.1) — not in Google's Calendar API scope table at all, but it's in the exempt "name/email/profile" set point 5 below refers to, so it doesn't add to the Testing-mode refresh-token expiry either |
+
+   Deliberately **not** requesting the broad `calendar` scope ("see, edit, share, and permanently delete *all* calendars you can access") — that would let this app touch the user's personal primary calendar directly, which nothing here needs. `calendar.app.created` is the whole reason a dedicated secondary calendar is worth the extra setup: it confines every write this app ever makes to a calendar it created itself.
+
+5. **A real operational constraint to plan around, not an afterthought:** while the OAuth consent screen's publishing status is "Testing," Google issues refresh tokens that expire after exactly 7 days for any app requesting scopes beyond name/email/profile — which these three scopes all are. That means every connected user would be forced to reconnect weekly until the app's publishing status is moved to "In production." For a small number of known users, add them as test users to iterate quickly, but plan to move to "In production" (Google's review for these "sensitive" — not "restricted" — scopes is normally a lightweight self-certification, not a full security assessment) before this ships for real use, or the weekly-reconnect UX will look like a bug.
+6. New env vars, following this repo's existing `.env.example` grouping convention:
+
+   ```
+   # --- Server-side: Google Calendar integration (2-way sync) ---
+   # From Google Cloud Console → APIs & Services → Credentials → OAuth client (Web application).
+   GOOGLE_OAUTH_CLIENT_ID=
+   GOOGLE_OAUTH_CLIENT_SECRET=
+   # Must exactly match a redirect URI registered on that OAuth client.
+   GOOGLE_OAUTH_REDIRECT_URI=https://<app-domain>/api/integrations/google-calendar/callback
+   ```
+
+   `GOOGLE_OAUTH_REDIRECT_URI` is spelled out explicitly rather than derived from a request header, since a redirect URI mismatch is a hard OAuth failure and Vercel preview deployments have unstable URLs that would never match a registered one anyway — this integration is only expected to work from the fixed production domain (and `localhost:3000` in dev, via `.env.local` overriding it).
+
+**External sources checked for this section** (Google's own current documentation, fetched directly rather than recalled — see §3 point 4's table and point 5):
+- [Choose Google Calendar API scopes](https://developers.google.com/workspace/calendar/api/auth) — the full scope table, confirming `calendar.app.created` and its exact wording.
+- [Calendars: insert](https://developers.google.com/workspace/calendar/api/v3/reference/calendars/insert) — confirms `calendar.app.created` (or the broader `calendar`) is required to create a secondary calendar.
+- [Google OAuth Refresh Token: Expiration & Lifetime](https://www.unipile.com/google-oauth-refresh-token/) and Google's own [OAuth 2.0 docs](https://developers.google.com/identity/protocols/oauth2) — the 7-day Testing-mode refresh token expiry.
+- [Synchronize resources efficiently — Google Calendar](https://developers.google.com/workspace/calendar/api/guides/sync) — `syncToken`/`nextSyncToken` mechanics used in §7.
+
+---
+
+## 4. Data model changes
+
+All additive; nothing here changes the meaning of an existing field.
+
+### 4.1 `UserSettings` gains a timezone
+
+```ts
+/** IANA name (e.g. "Asia/Kolkata"). Absent = the app's long-standing implicit assumption, "Asia/Kolkata"
+ * (see vercel.json's IST-offset cron schedules) — this makes that assumption an explicit, overridable
+ * setting instead of a hardcoded one, since every timed Google Calendar event needs a real timezone. */
+timezone?: string;
+```
+
+### 4.2 A new non-secret connection-status doc: `users/{uid}/integrations/googleCalendar`
+
+Read/written by the client SDK exactly like `UserSettings` — it holds nothing sensitive, only status the Settings page needs to render.
+
+```ts
+export interface GoogleCalendarConnection {
+  connected: boolean;
+  googleAccountEmail?: string;
+  /** The "FocusOS" secondary calendar's Google id, created once on first connect. */
+  focusOsCalendarId?: string;
+  /** Which of the user's own calendars to pull from. Absent = not yet chosen, treated as ["primary"]. */
+  importCalendarIds?: string[];
+  /** Absent = every category defaults to on except tasksWithDueDate — same
+   * "absent means the default, explicit always wins" convention `UserSettings.dashboardWidgets`
+   * already uses. Every read merges `{...DEFAULT_PUSH_ENABLED, ...connection.pushEnabled}` first
+   * (mirroring `useUserSettings`'s own `DEFAULTS` merge) — never dereferenced as
+   * `connection.pushEnabled.courseSessions` directly. */
+  pushEnabled?: { courseSessions: boolean; checkpoints: boolean; timedCommitments: boolean; tasksWithDueDate: boolean };
+  /** Absent = on (pulling is the point of connecting; an explicit off is a deliberate user choice). */
+  pullEnabled?: boolean;
+  /** Per importCalendarIds entry — Google's incremental-sync cursor (§7). Absent entry = never synced, do a full initial sync. */
+  syncTokens?: Record<string, string>;
+  lastPushAt?: string;
+  lastPullAt?: string;
+  /** Set when the cron hits a real failure (e.g. the user revoked access from their Google Account
+   * page) — surfaced in Settings so the user knows to reconnect, and checked by the cron to skip
+   * further attempts for this user until they do. */
+  lastError?: string;
+  updatedAt: string;
+}
+```
+
+Every field but `connected` and `updatedAt` is optional, and for the same reason `useUserSettings` merges a `DEFAULTS` object onto whatever's actually in Firestore rather than trusting the doc to be fully populated: the OAuth callback (§9.1) does token storage and calendar creation as separate steps *before* this doc is written, so a callback that fails partway through must never leave behind a doc some other code path reads and dereferences straight into `.pushEnabled.courseSessions`. The callback writes this doc exactly once, as its last step, with every field it already knows (`connected: true`, the email, the calendar id) — `pushEnabled`/`importCalendarIds` are only ever set explicitly by the user changing a Settings toggle, never invented at connect time, which is also why they're optional rather than "required, defaulted to some value at connect."
+
+### 4.3 A new secret-only collection: `googleCalendarTokens/{uid}` (top-level, NOT under `users/{uid}`)
+
+```ts
+interface GoogleCalendarTokenDoc {
+  refreshToken: string;
+  updatedAt: string;
+}
+```
+
+Deliberately placed outside the `users/{uid}/**` tree rather than as another subcollection there, and deliberately never given a type export used anywhere client-side. See §10 for why, and for the exact Firestore rule this needs.
+
+### 4.4 `ScheduleSlot` gains a pull-side provenance field and a new type
+
+```ts
+export type ScheduleSlotType = "deep_work" | "reading" | "meal" | "free" | "admin" | "break" | "commute" | "sleep" | "gym" | "class" | "custom" | "external";
+
+/** Set only on a slot imported from an external Google Calendar event (§7) — that event's id, so a
+ * later sync finds-and-updates or removes this exact slot instead of creating a duplicate. Absent on
+ * every FocusOS-authored slot, which is every slot that existed before this plan. */
+sourceGoogleEventId?: string;
+```
+
+`lib/schedule.ts`'s `isLockedSlot` extends to `slot.type === "class" || slot.type === "external" || slot.locked === true` — an imported event is exactly as undraggable/unresizable/undeletable in the timeline editor as a class block, for the same reason: FocusOS didn't create it and has no business silently reshaping it.
+
+### 4.5 A new mapping collection for the push direction: `users/{uid}/googleCalendarLinks/{refKey}`
+
+```ts
+interface GoogleCalendarLink {
+  googleEventId: string;
+  updatedAt: string;
+}
+```
+
+`refKey` is a deterministic composite key, never a random id — `checkpoint:{checkpointId}`, `recurringTemplate:{templateId}`, or **`courseSession:{courseId}:{dayOfWeek}:{startTime}`** (deliberately *not* `{courseId}:{sessionId}` — see the callout in §6.1 for why `CourseSession.id` is the wrong thing to key on here) — so the push pass can always find "the Google event for this FocusOS record" (or know there isn't one yet) without a query, the same "deterministic id, no existence-check read" idea `RecurringTaskTemplate` generation already uses (`recurringTaskInstanceId`). A dedicated collection rather than a `googleEventId` field bolted onto `Course`/`Checkpoint`/`RecurringTaskTemplate` directly, so this entire feature — types included — can be deleted cleanly later without touching those three interfaces at all.
+
+---
+
+## 5. Architecture: two calendars, one direction each
+
+```
+ FocusOS data                    Google Calendar
+ ────────────                    ───────────────
+ Course sessions      ─────push────▶  "FocusOS" secondary calendar
+ Checkpoints          ─────push────▶  (created via calendar.app.created,
+ Timed recurring      ─────push────▶   owned and only ever touched by FocusOS)
+   commitments
+
+ Day timeline         ◀────pull─────  The user's own calendar(s)
+ (locked "external"                   (primary, or others they pick —
+   ScheduleSlots)                     read-only access, never written to)
+```
+
+This is the load-bearing decision in this whole plan: **push and pull never touch the same calendar.** Everything FocusOS writes lands in a calendar it owns and nothing else can write to; everything FocusOS reads for the pull direction comes from calendar(s) FocusOS never writes to. A sync loop — pulling back an event this app just pushed, as if it were new external information — is prevented by construction, not by a clever filter that has to be gotten right and kept right. (The `extendedProperties.private.focusOsRef` tag described in §6 is written anyway, purely as a debugging aid and a defensive backstop against a user picking the FocusOS calendar itself as an import source — the Settings picker in §9 excludes it from the selectable list for the same reason.)
+
+---
+
+## 6. Push engine: FocusOS → the "FocusOS" calendar
+
+### 6.1 What pushes, and as what kind of event
+
+| Source | Google event shape | Ref key | Default on? |
+|---|---|---|---|
+| `CourseSession` (a course's weekly class time) | Timed, recurring (`RRULE:FREQ=WEEKLY;BYDAY=<day>`), bounded by the course's effective start/end date | `courseSession:{courseId}:{dayOfWeek}:{startTime}` | Yes |
+| `Checkpoint` (an assessment's due date) | All-day, single (no recurrence) | `checkpoint:{checkpointId}` | Yes |
+| `RecurringTaskTemplate` with `.time` set | Timed, recurring (`RRULE:FREQ=WEEKLY` or `FREQ=WEEKLY;INTERVAL=2` for biweekly, anchored at `anchorDate`) | `recurringTemplate:{templateId}` | Yes |
+| `Task.dueDate` (ordinary, hand-created tasks only) | All-day, single | `task:{taskId}` | **No** — opt-in toggle |
+
+**Why the course-session ref key is `{courseId}:{dayOfWeek}:{startTime}` and not `{courseId}:{sessionId}`:** `CourseSession.id` is minted fresh (`crypto.randomUUID()`, `components/course-form.tsx`'s `newSession()`) every time a row is added in the sessions editor, and `saveSessions` (`courses/page.tsx`) writes the whole `sessions` array back wholesale on every save — so an edit that re-renders existing rows can hand a session a brand-new id with no change in when the class actually meets. Keying the Google-event link on that id would make §6.3's diff see the old key as "should no longer exist" and the new one as "should exist," deleting and recreating the user's calendar event — losing any manual edit they'd made to it in Google, resetting its notifications — on every unrelated sessions-editor save. Keying on the day/time instead means the link only churns when the class actually moves to a different day or time, which is the one case where deleting the old event and creating a new one is the semantically correct thing to do anyway. Every source above already has its own bounded lifecycle (a course ends, a checkpoint is deleted, a template gets paused) — §6.3 covers how the push pass keeps up with that.
+
+`Task` push explicitly **excludes** any task with `seriesId` set. A generated instance of a timed `RecurringTaskTemplate` would just be a redundant, date-specific echo of the recurring event that template's own row above already pushes; a generated instance of a non-timed template ("grade problem sets due every Friday") isn't calendar-shaped at all — it's due-dated work, not a meeting, and pushing every instance as an all-day event would flood the calendar with noise for no benefit. This is also why plain Task push defaults to *off*: even limited to hand-created tasks, a user with a long inbox may not want every task cluttering their calendar, so it's offered, not assumed.
+
+### 6.2 Event content
+
+- **Title:** the record's own title, prefixed for context where it isn't already obvious standalone — e.g. a checkpoint becomes `"{checkpointTypeLabel}: {course.name} — {title}"`, a course session becomes `"{course.code ?? course.name}"`.
+- **Timezone:** every timed event's `start`/`end` is `{dateTime, timeZone}` using `UserSettings.timezone` (§4.1), never a bare UTC instant — the whole point of storing it.
+- **`extendedProperties.private.focusOsRef`:** set to the same ref key used in `googleCalendarLinks` (§4.5). Never read back during the push pass (that's what the link collection is for) — purely a support/debugging aid, visible if anyone ever inspects the raw event.
+
+### 6.3 Keeping it in sync — an idempotent diff, not a queue
+
+No push-on-every-write plumbing threaded through `createCheckpoint`/`updateCourse`/`deleteRecurringTaskTemplate`/etc. Instead, on every cron tick (§8), for each push category the user has enabled:
+
+1. Compute "what should exist" from current FocusOS data (e.g., every non-dropped course's sessions within their active date range).
+2. Look up each one's `googleCalendarLinks` doc by its ref key.
+   - **No link doc, should exist** → `events.insert` into the FocusOS calendar, then write the link doc.
+   - **Link doc exists, should exist, content changed** (compare the fields that matter — time, title, date range) → `events.update`.
+   - **Link doc exists, should exist, unchanged** → no-op.
+   - **Link doc exists, should no longer exist** (course dropped, checkpoint deleted, template paused/deleted) → `events.delete`, then delete the link doc.
+3. This makes the whole pass safe to re-run every cycle regardless of what changed in between — the same idempotent-reconciliation idea `generateRecurringTaskInstances` already relies on, just diffed instead of `.create()`-and-ignore-`ALREADY_EXISTS`. A deleted course's session shows up in the calendar for at most one cron cycle's worth of lag before the next tick removes it — an accepted trade-off (§11) for not touching every existing delete call site.
+
+---
+
+## 7. Pull engine: the user's calendar(s) → the day timeline
+
+### 7.1 Incremental sync
+
+For each calendar id in `GoogleCalendarConnection.importCalendarIds`:
+
+1. If `syncTokens[calendarId]` exists, call `events.list({ calendarId, syncToken })` — returns only what changed since last time.
+2. If it's missing (first sync) or the call returns `410 GONE` (token expired — Google's documented behavior when a sync token goes stale), fall back to a bounded full sync: `events.list({ calendarId, timeMin: today - 30d, timeMax: today + 180d, showDeleted: true })`, paginating via `nextPageToken` until the final page's `nextSyncToken` appears, and store that as the new baseline. That's up to 210 days' worth of events, each landing in its own `DailySchedule` doc by `dateKey` (§7.2) — a real write burst on first connect or after a token expiry, not a handful of writes. Batch the resulting `DailySchedule` upserts (Firestore's `writeBatch`, ≤500 per batch, chunked) rather than one write per event, and consider narrowing the window (e.g. 14 days back / 60 forward) if 210 days of a typical calendar proves to be more than the day timeline actually needs.
+3. **`privateExtendedProperty` (a server-side filter) cannot be combined with `syncToken` on the same request** — confirmed against Google's own sync guide, and the reason this plan does *not* rely on a query-time filter for loop prevention. Any defensive filtering (skip an event that happens to carry `extendedProperties.private.focusOsRef`, or that belongs to the FocusOS calendar id) happens client-side, after the response comes back, checking each returned event's own fields — which works identically whether this call used a `syncToken` or a full resync.
+4. A cancelled/deleted source event arrives as an item with `status: "cancelled"`, not as an absence — the pull step deletes the matching `ScheduleSlot` (found via `sourceGoogleEventId`) when it sees one of these, rather than needing a separate "what disappeared" diff.
+
+### 7.2 Mapping an event to a `ScheduleSlot`
+
+- Resolve the event's `start`/`end` (`dateTime` for timed, `date` for all-day) to a `dateKey` and `startTime`/`endTime` in the app's local convention (`lib/dates.ts`'s parse/format round-trip, not `.toISOString()` — this app has been bitten by that exact class of bug before, see `FocusOS-v2-Connected-Flow-Plan.md`'s own implementation notes).
+- An all-day imported event gets a nominal `00:00`–`00:01` slot (or is simply excluded from the timed-timeline view and shown in a small "also today" list instead — an open question, §13, since a full-day block is a poor fit for a timeline built around hour-by-hour blocks).
+- Upsert into that date's `DailySchedule.slots`, matched by `sourceGoogleEventId`: update in place if a slot with that id already exists on some date (an event that moved days needs to be removed from its old date and added to its new one), insert a new locked `type: "external"` slot otherwise.
+- A **recurring Google event with a modified single instance** (the user moved just this Tuesday's meeting) arrives from Google as a separate "instance" event carrying its own id and a reference back to the recurring event's id — this needs its own real handling (map the instance as its own slot on its actual date, not the recurring pattern's original date) and is exactly the kind of edge case worth testing deliberately rather than assuming the simple "one event, one slot" model just works (§11).
+
+---
+
+## 8. Sync triggers and cadence
+
+Matches the established pattern (Morning brief / Evening rollup / Recurring tasks) exactly, on purpose — this app already has a house style for "background job with a manual override," and Google Calendar sync isn't a special enough case to invent a new one:
+
+- **`app/api/cron/google-calendar-sync/route.ts`** — `CRON_SECRET`-gated, respects `getAdminSettings().cronEnabled`, fans out over `getActiveUids()` filtered to `connected: true` connections, runs §6.3's push diff then §7's pull for each, try/catch per uid, `recordCronRun("google-calendar-sync", {...})` at the end. Every existing entry in `vercel.json`'s `crons` array runs once a day — this would be the first sub-daily one, and **Vercel's Hobby plan only allows daily-granularity cron schedules**; a `*/20 * * * *` entry needs a Pro plan or higher, or it's rejected at deploy time. Confirm the account's plan before committing to a sub-daily schedule; if it must stay Hobby-compatible, this cron runs once a day like every other one (with "Sync now" as the only way to get sooner-than-daily updates), rather than the 20-minute cadence this plan would otherwise prefer.
+- **`app/api/integrations/google-calendar/sync-now/route.ts`** — `verifyActiveUser`-gated manual trigger, runs the same push+pull for the calling user only. A "Sync now" button in Settings calls this, same UX as the Courses/Tasks pages' existing "Generate now" for recurring tasks. (Deliberately not under `app/api/daily-loop/**` — that namespace is specifically the brief/rollup/recurring-tasks daily cycle, and this route belongs with this feature's other `integrations/google-calendar/*` routes instead, matching this doc's own header line.)
+
+---
+
+## 9. UI changes
+
+### 9.1 Settings — new "Google Calendar" section
+
+- Disconnected state: a "Connect Google Calendar" button → `GET /api/integrations/google-calendar/connect` (redirects to Google's OAuth consent screen, `state` param carries a signed reference back to the FocusOS uid) → Google redirects to `/api/integrations/google-calendar/callback` → exchange the auth code for tokens, store the refresh token (§4.3), fetch the account email, create the "FocusOS" secondary calendar via `calendars.insert` if one doesn't already exist, write the connection doc (§4.2), redirect back to `/settings`.
+- Connected state:
+  - "Connected as {email}" + "Disconnect."
+  - Four checkboxes for `pushEnabled` (course sessions / checkpoints / timed commitments / tasks with a due date), matching §6.1's table.
+  - A multi-select for `importCalendarIds`, populated from `calendarList.list` (excludes the FocusOS-owned calendar id from the list — see §5).
+  - "Last synced {relative time}" (from `lastPushAt`/`lastPullAt`), and `lastError` surfaced plainly (e.g. "Google access was revoked — reconnect to resume syncing") rather than silently going stale.
+  - "Sync now" button (§8).
+- "Disconnect" calls a route that revokes the token with Google (`POST https://oauth2.googleapis.com/revoke`), deletes the `googleCalendarTokens/{uid}` doc, and sets `connected: false` on the connection doc. It deliberately does **not** delete the "FocusOS" Google calendar itself or its events — see §13, open question 5, for why that's left to the user rather than assumed.
+
+### 9.2 Day timeline (`/plan/day`)
+
+Imported events render as locked `type: "external"` slots — new color/icon in `lib/schedule.ts`'s `slotTypeStyles`/`slotTypeIcons` tables, undraggable/unresizable/undeletable exactly like a class block (§4.4).
+
+### 9.3 Nice-to-have, not required for v1
+
+A small calendar-icon badge on a Course card, a Checkpoint row, or a timed Recurring commitment row once it has a `googleCalendarLinks` entry — "this is on your Google Calendar." Deferred to Phase 3 (§12); the sync working correctly matters more than surfacing its own status everywhere.
+
+---
+
+## 10. Security
+
+- **The refresh token never reaches client code, ever.** It's read and used exclusively inside Admin-SDK-backed API/cron routes (§4.3, §6, §7, §8) — the client only ever sees the non-secret `GoogleCalendarConnection` status doc (§4.2).
+- **Required Firestore rules change, and a real precondition, not a formality:** since this repo has no `firestore.rules` in source control (§2), the exact current rule shape can't be verified from here. Before this ships, confirm — wherever rules actually live — that `googleCalendarTokens/{uid}` (note: **not** under `users/{uid}/**`) has an explicit `allow read, write: if false;` (or simply isn't matched by any existing wildcard grant). The Admin SDK bypasses security rules entirely, so server routes keep working regardless; this rule only has to stop the client SDK.
+- **Revocation the user does outside this app** (Google Account → Security → Third-party access → remove FocusOS) invalidates the refresh token immediately. The next sync attempt gets an `invalid_grant` error from Google's token endpoint; the cron's per-uid try/catch (already the established shape) catches it, sets `connected: false` and `lastError` on the connection doc, and stops attempting further syncs for that user until they reconnect — never a silent, repeating failure.
+- **The OAuth `state` parameter must be a signed/verifiable value tying the callback back to the right FocusOS uid**, not a bare uid in plaintext — standard CSRF protection for the OAuth redirect step, worth calling out explicitly since it's easy to skip in a first draft.
+- **Scope minimalism is itself a security property here**, not just tidiness — see §3's rationale for why `calendar.app.created` + `calendar.events.readonly` + `calendar.calendarlist.readonly` was chosen over the broad `calendar` scope. A user granting this app calendar access should never be granting it delete rights over their personal primary calendar.
+
+---
+
+## 11. Failure modes and edge cases (named, not hand-waved)
+
+- **Same event edited on both sides between sync cycles:** last-write-wins, accepted as a v1 limitation. Real conflict resolution (compare `updated` timestamps, offer a merge UI) is a Phase 3+ idea, not required to call this "full 2-way sync" — most calendar integrations people actually use make the same trade-off.
+- **A deleted FocusOS record's pushed event lags by up to one cron cycle** before §6.3's diff removes it (chose lazy reconciliation over touching every existing `deleteCourse`/`deleteCheckpoint`/`deleteRecurringTaskTemplate` call site — see §6.3's own note).
+- **`syncToken` goes stale (`410 GONE`):** documented Google behavior, not a bug to guard against defensively — §7.1 already specifies the required fallback (drop the token, bounded full resync, new baseline token).
+- **A single modified instance of a recurring Google event** needs its own mapping path (§7.2's last bullet) — flagged explicitly as real complexity worth dedicated test cases, not an edge case that "probably just works" with the simple one-event-one-slot model.
+- **All-day vs. timed mapping mismatch:** `Task`/`Checkpoint` have no time-of-day in this app's model at all, so they only ever become all-day Google events; nothing here invents a fake time for them.
+- **Google API quota / concurrency:** the existing cron fan-out pattern (`Promise.all` over every active uid) works fine for jobs that only touch this app's own Firestore, but the Calendar API has its own per-user and per-project quotas — the google-calendar-sync cron should process users with bounded concurrency (a small batch size, not one unbounded `Promise.all` over every connected user) rather than copying that part of the pattern verbatim.
+- **A Google Workspace org that disables third-party app access** for its users is outside this app's control entirely — worth a plain note in the Settings error state ("your organization may be blocking this — contact your Google Workspace admin") rather than a generic failure message, since there's nothing to retry.
+
+---
+
+## 12. Phasing
+
+- **Phase 1 — push only.** OAuth connect/disconnect, FocusOS secondary calendar creation, §6's push for course sessions + checkpoints + timed recurring commitments, manual "Sync now" only (no cron yet, to validate correctness by hand first). This alone already closes `FocusOS-v2-Connected-Flow-Plan.md` §4.4's deferred item.
+- **Phase 2 — pull, and the cron.** §7's pull direction (import calendar picker, incremental sync, locked `external` slots on the day timeline), plus the `google-calendar-sync` cron entry in `vercel.json` running both directions on a schedule.
+- **Phase 3 — stretch.** Optional `Task` push toggle, per-record "synced" UI badges (§9.3), Google push-notification webhooks (`events.watch`) instead of polling for near-real-time pull, conflict-aware merge instead of last-write-wins, and dedicated handling for recurring-event single-instance modifications if Phase 2's simple mapping proves too limiting in practice.
+
+---
+
+## 13. Open questions (real product decisions, not mine to make unilaterally)
+
+1. **Push destination:** a dedicated "FocusOS" secondary calendar (recommended throughout this plan, §5) vs. pushing directly into the user's primary calendar. The dedicated calendar is architecturally cleaner and needs a narrower scope; pushing to the primary calendar might feel more natural to a user who just wants "it all in one place" without a second calendar to look at. Confirm before Phase 1.
+2. **Default push categories:** this plan defaults course sessions, checkpoints, and timed commitments to *on* and plain tasks to *off* (§6.1). Confirm that matches expectations, or whether even the first three should start opt-in.
+3. **Import scope on first connect:** just the primary calendar, or should the picker (§9.1) be shown immediately rather than defaulting silently?
+4. **A stricter privacy option for pull:** `calendar.events.readonly` (this plan's choice) brings in full event titles and details. `calendar.freebusy`/`calendar.events.freebusy` would import only busy/free blocks with no details — worth offering as a toggle for a user who wants their day timeline to reflect "busy 3–4pm" without every personal appointment's title showing up in FocusOS.
+5. **On disconnect, what happens to the "FocusOS" Google calendar itself?** This plan's default (§9.1) is to leave it in the user's Google account untouched, letting them delete it manually if they want — a disconnect action silently bulk-deleting a calendar full of events felt like too destructive a default. Confirm, or decide the opposite is actually expected.
+6. **All-day event rendering on the day timeline** (§7.2): a nominal timed slot, or a separate "also today, no set time" list distinct from the hour-by-hour view? The current day-timeline UI (`/plan/day`) is built entirely around timed blocks, so an all-day import doesn't have an obvious natural home there yet.

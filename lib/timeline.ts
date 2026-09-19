@@ -339,6 +339,9 @@ const SLOT_TYPE_CATEGORY: Record<ScheduleSlotType, Category> = {
   reading: "reading",
   admin: "admin",
   class: "admin",
+  // A locked, externally-scheduled block, same reasoning as "class" above — starting a focus
+  // session from an imported Google Calendar event has no better category to default to.
+  external: "admin",
   custom: "personal",
   meal: "personal",
   free: "personal",

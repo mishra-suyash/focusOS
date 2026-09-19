@@ -10,7 +10,7 @@ function newSession(): CourseSession {
   return { id: crypto.randomUUID(), dayOfWeek: 1, startTime: "09:00", endTime: "10:30" };
 }
 
-/** Plan §9.5 — Name and weekly class times always visible; code, instructor, term, dates, weekly target behind "More options". */
+/** Plan §9.5 — Name and weekly class times always visible; code, instructor, term, dates, revision hours/week behind "More options". Revision hours/week (stored as `targetMinutesPerWeek`) also drives an auto-generated weekly "Revise" task — see `lib/recurring-tasks.ts`'s `planRevisionTemplateSync`. */
 export function CourseForm({ terms, onCreate }: { terms: Term[]; onCreate: (course: NewCourse) => Promise<void> }) {
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
@@ -18,7 +18,7 @@ export function CourseForm({ terms, onCreate }: { terms: Term[]; onCreate: (cour
   const [termId, setTermId] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [targetMinutesPerWeek, setTargetMinutesPerWeek] = useState("");
+  const [revisionHoursPerWeek, setRevisionHoursPerWeek] = useState("");
   const [sessions, setSessions] = useState<CourseSession[]>([newSession()]);
   const [saving, setSaving] = useState(false);
 
@@ -35,7 +35,7 @@ export function CourseForm({ terms, onCreate }: { terms: Term[]; onCreate: (cour
       status: "active",
       startDate: startDate || term?.startDate,
       endDate: endDate || term?.endDate,
-      targetMinutesPerWeek: targetMinutesPerWeek ? Number(targetMinutesPerWeek) : undefined,
+      targetMinutesPerWeek: revisionHoursPerWeek ? Math.round(Number(revisionHoursPerWeek) * 60) : undefined,
       sessions
     });
     setName("");
@@ -43,7 +43,7 @@ export function CourseForm({ terms, onCreate }: { terms: Term[]; onCreate: (cour
     setInstructor("");
     setStartDate("");
     setEndDate("");
-    setTargetMinutesPerWeek("");
+    setRevisionHoursPerWeek("");
     setSessions([newSession()]);
     setSaving(false);
   }
@@ -74,8 +74,16 @@ export function CourseForm({ terms, onCreate }: { terms: Term[]; onCreate: (cour
             <input className="input mt-1" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} placeholder="Defaults to term end" />
           </label>
           <label className="text-xs text-ink-500">
-            Target min/week
-            <input className="input mt-1" type="number" min={0} value={targetMinutesPerWeek} onChange={(e) => setTargetMinutesPerWeek(e.target.value)} />
+            Revision hours/week
+            <input
+              className="input mt-1"
+              type="number"
+              min={0}
+              step={0.5}
+              value={revisionHoursPerWeek}
+              onChange={(e) => setRevisionHoursPerWeek(e.target.value)}
+              placeholder="e.g. 2"
+            />
           </label>
         </div>
       </MoreOptions>

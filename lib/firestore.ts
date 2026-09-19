@@ -33,6 +33,7 @@ import type {
   DayTemplate,
   FileRef,
   Goal,
+  GoogleCalendarConnection,
   NewAnnotation,
   NewCheckpoint,
   NewClassLog,
@@ -362,6 +363,18 @@ export async function updateRecurringTaskTemplate(uid: string, id: string, patch
 }
 
 /**
+ * `setDoc` at a caller-chosen id instead of `addDoc`'s random one — used only for the one
+ * auto-managed revision template per course (`lib/recurring-tasks.ts`'s `revisionTemplateId`), so
+ * that two overlapping "create" writes for the same course (two racing "Save" clicks) land on the
+ * same document instead of producing duplicates.
+ */
+export async function setRecurringTaskTemplate(uid: string, id: string, template: NewRecurringTaskTemplate) {
+  const createdAt = now();
+  trackWrite();
+  await setDoc(doc(userCollection(uid, "recurringTaskTemplates"), id), withoutUndefined({ ...template, createdAt, updatedAt: createdAt }));
+}
+
+/**
  * Deleting a template also removes the task instances it already generated, so long as they're
  * still open — a deleted series shouldn't leave zombie tasks in the list pointing at a template
  * that no longer exists. Instances the user already completed are left alone; they're history.
@@ -418,10 +431,11 @@ export async function appendProposedSlotToSchedule(
   );
 }
 
-export async function createCourse(uid: string, course: NewCourse) {
+export async function createCourse(uid: string, course: NewCourse): Promise<string> {
   const createdAt = now();
   trackWrite();
-  await addDoc(userCollection(uid, "courses"), withoutUndefined({ ...course, createdAt, updatedAt: createdAt }));
+  const ref = await addDoc(userCollection(uid, "courses"), withoutUndefined({ ...course, createdAt, updatedAt: createdAt }));
+  return ref.id;
 }
 
 export async function updateCourse(uid: string, id: string, patch: Partial<Course>) {
@@ -740,6 +754,27 @@ export async function saveUserSettings(uid: string, patch: Partial<Omit<UserSett
 
 export function subscribeUserSettings(uid: string, callback: (settings: UserSettings | null) => void) {
   return subscribeDoc<UserSettings & { id: string }>(uid, "meta", SETTINGS_DOC_ID, callback);
+}
+
+const GOOGLE_CALENDAR_CONNECTION_DOC_ID = "googleCalendar";
+
+/** plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.2 — the non-secret connection-status doc, at
+ * users/{uid}/integrations/googleCalendar. The refresh token itself is never reachable through this
+ * file or any client-readable path — see lib/google-calendar-admin.ts. */
+export function subscribeGoogleCalendarConnection(uid: string, callback: (connection: (GoogleCalendarConnection & { id: string }) | null) => void) {
+  return subscribeDoc<GoogleCalendarConnection & { id: string }>(uid, "integrations", GOOGLE_CALENDAR_CONNECTION_DOC_ID, callback);
+}
+
+/** Client-settable preferences only — `connected`/`googleAccountEmail`/`focusOsCalendarId` are
+ * written exclusively by the server-side connect/disconnect routes (Admin SDK), never through here. */
+export async function saveGoogleCalendarConnectionPrefs(
+  uid: string,
+  patch: Partial<Pick<GoogleCalendarConnection, "pushEnabled" | "importCalendarIds" | "pullEnabled">>
+) {
+  trackWrite();
+  await setDoc(doc(userCollection(uid, "integrations"), GOOGLE_CALENDAR_CONNECTION_DOC_ID), withoutUndefined({ ...patch, updatedAt: now() }), {
+    merge: true
+  });
 }
 
 export async function resolveAlert(uid: string, id: string) {

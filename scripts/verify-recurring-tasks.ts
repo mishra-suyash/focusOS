@@ -4,8 +4,8 @@
  * (plan/FocusOS-v2-Connected-Flow-Plan.md §4.1/§4.3) — same pattern as scripts/verify-routine.ts,
  * since this repo has no test runner.
  */
-import { dateKeysInRange, isTemplateDueOn, recurringTaskInstanceId } from "../lib/recurring-tasks";
-import type { RecurringTaskTemplate } from "../types";
+import { dateKeysInRange, isTemplateDueOn, planRevisionTemplateSync, recurringTaskInstanceId } from "../lib/recurring-tasks";
+import type { Course, RecurringTaskTemplate } from "../types";
 
 const failures: string[] = [];
 
@@ -76,6 +76,74 @@ const SUNDAY = "2026-09-06";
   check("dateKeysInRange has the right count", keys.length === 4, `got ${keys.length}: ${keys.join(",")}`);
   const single = dateKeysInRange("2026-09-17", "2026-09-17");
   check("dateKeysInRange handles a single-day range", single.length === 1 && single[0] === "2026-09-17");
+}
+
+function course(partial: Partial<Course> & Pick<Course, "id" | "name">): Pick<Course, "id" | "name" | "targetMinutesPerWeek" | "startDate" | "endDate"> {
+  return { targetMinutesPerWeek: undefined, startDate: undefined, endDate: undefined, ...partial };
+}
+
+{
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201" }), undefined, 25);
+  check("no hours, no existing template: nothing to do", plan.action === "none");
+}
+
+{
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 90 }), undefined, 25);
+  check("hours set, nothing exists yet: creates a weekly template", plan.action === "create");
+  if (plan.action === "create") {
+    check("created template is linked to the course", plan.template.courseId === "c1");
+    check("created template is marked auto-generated", plan.template.generatedFrom === "courseRevisionTarget");
+    check("90min / 25min-per-pomodoro rounds to 4 pomodoros", plan.template.estimatedPomodoros === 4, `got ${plan.template.estimatedPomodoros}`);
+    check("created template defaults to Sunday", plan.template.daysOfWeek.length === 1 && plan.template.daysOfWeek[0] === 0);
+    // The whole reason "create" carries a deterministic templateId (revisionTemplateId) rather
+    // than letting addDoc hand out a random one: two racing "Save" clicks that both see no
+    // `existing` template must still land on the SAME document instead of creating a duplicate.
+    check("create carries the course's deterministic template id", plan.templateId === "revision-c1", `got ${plan.templateId}`);
+    const secondClick = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 90 }), undefined, 25);
+    check(
+      "a second concurrent create (still no existing template) targets the same id, not a new one",
+      secondClick.action === "create" && secondClick.templateId === plan.templateId
+    );
+  }
+}
+
+{
+  const minimalMinutes = course({ id: "c1", name: "CS201", targetMinutesPerWeek: 5 });
+  const plan = planRevisionTemplateSync(minimalMinutes, undefined, 25);
+  check("a small target never rounds down to 0 pomodoros", plan.action === "create" && plan.template.estimatedPomodoros === 1);
+}
+
+{
+  const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", estimatedPomodoros: 2, generatedFrom: "courseRevisionTarget" });
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 150 }), existing, 25);
+  check("hours raised on an existing template: resizes it", plan.action === "update");
+  if (plan.action === "update") check("resize targets the existing template's id", plan.templateId === "auto1");
+}
+
+{
+  const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", estimatedPomodoros: 4, generatedFrom: "courseRevisionTarget" });
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 100 }), existing, 25);
+  check("same pomodoro count after rounding: no-op, not a spurious write", plan.action === "none");
+}
+
+{
+  const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", active: true, generatedFrom: "courseRevisionTarget" });
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 0 }), existing, 25);
+  check("hours cleared on an active template: pauses it", plan.action === "pause");
+}
+
+{
+  const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", active: false, generatedFrom: "courseRevisionTarget" });
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 0 }), existing, 25);
+  check("hours cleared on an already-paused template: nothing left to do", plan.action === "none");
+}
+
+{
+  // The user paused it by hand from the course card; raising the hours again must not silently flip it back on.
+  const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", active: false, estimatedPomodoros: 1, generatedFrom: "courseRevisionTarget" });
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 120 }), existing, 25);
+  check("a manual pause is never force-reactivated by an hours edit", plan.action !== "pause");
+  if (plan.action === "update") check("...only resized, active untouched", !("active" in plan.patch));
 }
 
 if (failures.length > 0) {

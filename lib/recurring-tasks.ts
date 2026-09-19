@@ -1,6 +1,6 @@
 import { differenceInCalendarWeeks, getDay, parseISO } from "date-fns";
 import { addDaysToKey } from "@/lib/dates";
-import type { RecurringTaskTemplate } from "@/types";
+import type { Course, NewRecurringTaskTemplate, RecurringTaskTemplate } from "@/types";
 
 /**
  * plan/FocusOS-v2-Connected-Flow-Plan.md §4.1 — mirrors lib/routine.ts's routineSlotsForDate and
@@ -46,4 +46,81 @@ export function dateKeysInRange(fromDateKey: string, toDateKey: string): string[
     cursor = addDaysToKey(cursor, 1);
   }
   return keys;
+}
+
+export type RevisionTemplateSyncPlan =
+  | { action: "none" }
+  | { action: "create"; templateId: string; template: NewRecurringTaskTemplate }
+  | { action: "update"; templateId: string; patch: Partial<RecurringTaskTemplate> }
+  | { action: "pause"; templateId: string };
+
+/**
+ * A course's auto revision template always lives at this id rather than one `addDoc` would hand
+ * out. Without it, two "Save" clicks close enough together that the second fires before the
+ * template list has refreshed would each see no `existing` template and each create one —
+ * two duplicate "Revise <course>" templates generating tasks every week, neither ever found again
+ * by `find(t => t.generatedFrom === ...)` reliably. A deterministic id makes the create a `setDoc`
+ * upsert instead of an `addDoc` insert — same idempotency rationale as `recurringTaskInstanceId`.
+ */
+export function revisionTemplateId(courseId: string): string {
+  return `revision-${courseId}`;
+}
+
+/**
+ * The user asked for revision time to be "scheduled as tasks automatically every week, hours set
+ * on the course" — this decides what (if anything) needs to change about a course's one
+ * auto-managed weekly "Revise <course>" template so that its size always matches
+ * `course.targetMinutesPerWeek`, without the user ever touching the recurring-commitments UI
+ * themselves. Pure, so the actual read-existing/write-the-change I/O (`lib/courses.ts`'s
+ * `syncRevisionTemplate`) can stay a thin wrapper and this logic can be unit-tested directly.
+ *
+ * Deliberately asymmetric: clearing the hours to 0 always pauses the template (mirrors
+ * `changeStatus`'s "course ended → pause its templates" rule on the course card), but raising the
+ * hours again never force-reactivates a template the user paused by hand from the course card's
+ * "Pause" button — only resizes it. Otherwise nudging the hours field would silently undo a
+ * deliberate pause, which is worse than leaving the user to hit "Resume" themselves.
+ */
+export function planRevisionTemplateSync(
+  course: Pick<Course, "id" | "name" | "targetMinutesPerWeek" | "startDate" | "endDate">,
+  existing: RecurringTaskTemplate | undefined,
+  workMinutes: number
+): RevisionTemplateSyncPlan {
+  const minutesPerWeek = course.targetMinutesPerWeek ?? 0;
+  if (minutesPerWeek <= 0) {
+    return existing?.active ? { action: "pause", templateId: existing.id } : { action: "none" };
+  }
+
+  // Matches lib/timeline.ts's taskBlockMinutes inverse: a task's real duration is
+  // estimatedPomodoros * workMinutes, floored at one pomodoro so a small hours target never
+  // rounds down to a task with nothing to actually do.
+  const estimatedPomodoros = Math.max(1, Math.round(minutesPerWeek / workMinutes));
+
+  if (!existing) {
+    return {
+      action: "create",
+      templateId: revisionTemplateId(course.id),
+      template: {
+        title: `Revise ${course.name}`,
+        courseId: course.id,
+        category: "reading",
+        priority: "medium",
+        estimatedPomodoros,
+        cadence: "weekly",
+        // Sunday — a fixed, predictable catch-up slot the user never has to choose, since the
+        // whole point is this needs no setup beyond the hours number.
+        daysOfWeek: [0],
+        active: true,
+        startDate: course.startDate,
+        endDate: course.endDate,
+        generatedFrom: "courseRevisionTarget"
+      }
+    };
+  }
+
+  const patch: Partial<RecurringTaskTemplate> = {};
+  if (existing.estimatedPomodoros !== estimatedPomodoros) patch.estimatedPomodoros = estimatedPomodoros;
+  if (existing.startDate !== course.startDate) patch.startDate = course.startDate;
+  if (existing.endDate !== course.endDate) patch.endDate = course.endDate;
+  if (Object.keys(patch).length === 0) return { action: "none" };
+  return { action: "update", templateId: existing.id, patch };
 }

@@ -6,24 +6,32 @@ import { dayOfWeekLabels } from "@/lib/courses";
 import { todayKey } from "@/lib/dates";
 import { categories, priorities } from "@/lib/options";
 import { clsx } from "clsx";
-import type { Category, NewRecurringTaskTemplate, Priority, RecurrenceCadence } from "@/types";
+import type { Category, Course, NewRecurringTaskTemplate, Priority, RecurrenceCadence } from "@/types";
 
 /**
  * plan/FocusOS-v2-Connected-Flow-Plan.md §5.1 — a TA meeting, office hours, or "grade problem
  * sets due every Friday", configured once on the course. Title + day(s) + cadence always visible
  * (the minimum to describe "when"); everything else behind "More options", same split TaskForm
  * and PaperForm already use.
+ *
+ * `courseStartDate`/`courseEndDate` are how the course card's own usage (always scoped to one
+ * course) supplies bounds. Pass `courses` instead for a course-agnostic usage (the Tasks page) —
+ * it renders its own optional course picker and derives startDate/endDate/courseId from whichever
+ * course gets picked there, falling back to the two date props when none is selected.
  */
 export function RecurringCommitmentForm({
   courseStartDate,
   courseEndDate,
+  courses,
   onCreate
 }: {
   courseStartDate?: string;
   courseEndDate?: string;
+  courses?: Course[];
   onCreate: (template: NewRecurringTaskTemplate) => Promise<unknown>;
 }) {
   const [title, setTitle] = useState("");
+  const [courseId, setCourseId] = useState("");
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>([]);
   const [cadence, setCadence] = useState<RecurrenceCadence>("weekly");
   const [startTime, setStartTime] = useState("");
@@ -43,6 +51,7 @@ export function RecurringCommitmentForm({
     event.preventDefault();
     if (!title.trim() || daysOfWeek.length === 0) return;
     setSaving(true);
+    const selectedCourse = courses?.find((item) => item.id === courseId);
     await onCreate({
       title: title.trim(),
       description: description.trim() || undefined,
@@ -55,10 +64,12 @@ export function RecurringCommitmentForm({
       anchorDate: cadence === "biweekly" ? todayKey() : undefined,
       time: startTime && endTime ? { startTime, endTime, location: location.trim() || undefined } : undefined,
       active: true,
-      startDate: courseStartDate,
-      endDate: courseEndDate
+      courseId: courses ? selectedCourse?.id : undefined,
+      startDate: selectedCourse?.startDate ?? courseStartDate,
+      endDate: selectedCourse?.endDate ?? courseEndDate
     });
     setTitle("");
+    setCourseId("");
     setDaysOfWeek([]);
     setStartTime("");
     setEndTime("");
@@ -93,6 +104,16 @@ export function RecurringCommitmentForm({
         ))}
       </div>
       <MoreOptions>
+        {courses ? (
+          <select className="input" value={courseId} onChange={(e) => setCourseId(e.target.value)}>
+            <option value="">No course</option>
+            {courses.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.code ? `${item.code} · ${item.name}` : item.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
         <div className="grid gap-2 sm:grid-cols-3">
           <input className="input" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} aria-label="Start time (optional)" />
           <input className="input" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} aria-label="End time (optional)" />
