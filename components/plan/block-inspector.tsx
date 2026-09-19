@@ -10,7 +10,7 @@ import { categoryForSlotType, rangeOverlapsSlots } from "@/lib/timeline";
 import type { ScheduleSlot, ScheduleSlotType, Task } from "@/types";
 
 /**
- * plan/FocusOS-v2-Plan-Day-Timeline.md §4.3 — opens for whichever block is selected in TimeGrid.
+ * plan/05.FocusOS-v2-Plan-Day-Timeline.md §4.3 — opens for whichever block is selected in TimeGrid.
  * Deliberately "reusing current field components" per DP1's own scope line: the same fields the
  * old stacked SlotEditor had (type select, note, status, tasks), not yet the chip-row /
  * collapsed-note / auto-status redesign §4.3's "New" column describes for a later phase once the

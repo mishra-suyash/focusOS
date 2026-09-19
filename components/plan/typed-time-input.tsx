@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { parseTypedTime } from "@/lib/timeline";
 
 /**
- * plan/FocusOS-v2-Plan-Day-Timeline.md §4.3 — "Typeable HH:mm fields (accept '9', '930',
+ * plan/05.FocusOS-v2-Plan-Day-Timeline.md §4.3 — "Typeable HH:mm fields (accept '9', '930',
  * '9:30pm')", replacing the native `<input type="time">` (A5's clipping, slow 15-minute
  * adjustments). Free text while focused; parsed and committed on blur/Enter via
  * `lib/timeline.ts`'s `parseTypedTime`.

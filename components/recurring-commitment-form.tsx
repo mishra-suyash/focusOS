@@ -9,7 +9,7 @@ import { clsx } from "clsx";
 import type { Category, Course, NewRecurringTaskTemplate, Priority, RecurrenceCadence } from "@/types";
 
 /**
- * plan/FocusOS-v2-Connected-Flow-Plan.md §5.1 — a TA meeting, office hours, or "grade problem
+ * plan/10.FocusOS-v2-Connected-Flow-Plan.md §5.1 — a TA meeting, office hours, or "grade problem
  * sets due every Friday", configured once on the course. Title + day(s) + cadence always visible
  * (the minimum to describe "when"); everything else behind "More options", same split TaskForm
  * and PaperForm already use.

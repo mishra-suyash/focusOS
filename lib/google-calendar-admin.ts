@@ -19,7 +19,7 @@ import {
 import type { Checkpoint, Course, GoogleCalendarConnection, GoogleCalendarLink, RecurringTaskTemplate, Task } from "@/types";
 
 /**
- * plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §3 — the narrowest scope set that covers Phase 1
+ * plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §3 — the narrowest scope set that covers Phase 1
  * (push) plus the account email shown in Settings. `email` alone (not `profile`/`openid`) is the
  * minimal scope for that display purpose, and — per the plan's own §3.5 finding — adding it doesn't
  * worsen the Testing-mode 7-day refresh-token expiry, since that's already triggered by the

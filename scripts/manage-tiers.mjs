@@ -2,7 +2,7 @@
 /**
  * Pre-admin-panel tier management. Tiers (`tiers/{tierId}`) are a top-level,
  * admin-managed collection — dynamic, not a hardcoded enum, per the design in
- * plan/FocusOS-v2-Admin-Panel.md's Tiers section. Firestore rules make the
+ * plan/03.FocusOS-v2-Admin-Panel.md's Tiers section. Firestore rules make the
  * collection write-only via the Admin SDK, so until the real `/admin/tiers`
  * screen exists (Phase 4.5), this script IS the admin UI.
  *

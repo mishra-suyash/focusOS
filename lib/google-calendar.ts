@@ -3,7 +3,7 @@ import { todayKey } from "@/lib/dates";
 import type { GoogleCalendarConnection } from "@/types";
 
 /**
- * plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.1 — the app's long-standing implicit
+ * plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.1 — the app's long-standing implicit
  * single-timezone assumption (vercel.json's IST-offset cron schedules), made explicit here as the
  * fallback when `UserSettings.timezone` is unset, rather than left as an unstated assumption spread
  * across cron config comments.

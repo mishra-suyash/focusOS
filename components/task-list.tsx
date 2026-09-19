@@ -17,7 +17,7 @@ export function TaskList({
   onStatus: (task: Task, status: TaskStatus) => Promise<void>;
   onDelete?: (task: Task) => Promise<void>;
   empty?: string;
-  /** plan/FocusOS-v2-Connected-Flow-Plan.md §5.3 — resolves Task.courseId to a name/color chip. Absent tasks just show no chip, same as before this prop existed. */
+  /** plan/10.FocusOS-v2-Connected-Flow-Plan.md §5.3 — resolves Task.courseId to a name/color chip. Absent tasks just show no chip, same as before this prop existed. */
   courses?: Course[];
 }) {
   if (tasks.length === 0) {

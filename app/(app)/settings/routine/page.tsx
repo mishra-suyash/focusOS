@@ -17,7 +17,7 @@ const BUILTIN_IDS = new Set(DEFAULT_ROUTINE_BLOCKS.map((block) => block.id));
 const ROUTINE_SLOT_TYPES = slotTypes.filter((type) => type !== "class");
 
 /**
- * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.6 — Sleep/meals/Gym/custom recurring
+ * plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.6 — Sleep/meals/Gym/custom recurring
  * anchors, configured once here instead of re-typed into every template. Whichever are enabled
  * show up locked on every matching day (`lib/routine.ts`'s `routineSlotsForDate`, wired into
  * `/plan/day` and `WorkdaySessionProvider.start()`).

@@ -91,11 +91,11 @@ export function sortedSlots(slots: ScheduleSlot[]) {
   return [...slots].sort((a, b) => minutesFromTime(a.startTime) - minutesFromTime(b.startTime));
 }
 
-/** plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.1 — a class block (`type === "class"`)
+/** plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.1 — a class block (`type === "class"`)
  * or a materialized routine block (`locked: true`) can't be dragged, resized, or deleted in the
  * timeline editor. Deliberately absolute ("never remove a course/routine slot, at any cost"): no
  * per-day exception exists, by design — see that spec's D5. An imported Google Calendar event
- * (`type === "external"`, plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.4/§7) gets the same
+ * (`type === "external"`, plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.4/§7) gets the same
  * treatment for the same reason: FocusOS didn't create it and has no business silently reshaping it. */
 export function isLockedSlot(slot: ScheduleSlot): boolean {
   return slot.type === "class" || slot.type === "external" || slot.locked === true;
@@ -105,7 +105,7 @@ export function isLockedSlot(slot: ScheduleSlot): boolean {
  * slot — locked or not — exactly as it was. Used to make sure this date's class/routine blocks
  * are on the grid the moment it's opened, whether or not a schedule was ever saved for it (see
  * the Routine-Blocks spec §2.4 for why this supersedes the narrower "only when nothing is saved
- * yet" scope `FocusOS-v2-Plan-Day-Auto-Class-Blocks.md` originally described). Safe to run
+ * yet" scope `06.FocusOS-v2-Plan-Day-Auto-Class-Blocks.md` originally described). Safe to run
  * unconditionally because locked slots are never deletable (`isLockedSlot`) — there is no
  * deliberate removal this could ever resurrect. */
 export function mergeMissingLockedSlots(existing: ScheduleSlot[], wanted: ScheduleSlot[]): ScheduleSlot[] {

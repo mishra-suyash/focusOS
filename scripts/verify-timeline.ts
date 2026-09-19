@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Unit-test stand-in for lib/timeline.ts (plan/FocusOS-v2-Plan-Day-Timeline.md DP0 exit
+ * Unit-test stand-in for lib/timeline.ts (plan/05.FocusOS-v2-Plan-Day-Timeline.md DP0 exit
  * criterion "timeline tests green") — same pattern as scripts/verify-templates.ts, since this
  * repo has no test runner.
  */

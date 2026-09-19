@@ -16,7 +16,7 @@ export function TaskForm({
 }: {
   onCreate: (task: NewTask) => Promise<unknown>;
   compact?: boolean;
-  /** plan/FocusOS-v2-Connected-Flow-Plan.md §5.2 — the course picker only renders when there's at least one course to pick, matching how the whole Courses module is already optional. */
+  /** plan/10.FocusOS-v2-Connected-Flow-Plan.md §5.2 — the course picker only renders when there's at least one course to pick, matching how the whole Courses module is already optional. */
   courses?: Course[];
 }) {
   const [title, setTitle] = useState("");

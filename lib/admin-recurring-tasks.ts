@@ -26,7 +26,7 @@ function taskFromTemplate(template: RecurringTaskTemplate, dateKey: string): New
 }
 
 /**
- * plan/FocusOS-v2-Connected-Flow-Plan.md §4.2/§4.3 — generates real `Task` docs for every active
+ * plan/10.FocusOS-v2-Connected-Flow-Plan.md §4.2/§4.3 — generates real `Task` docs for every active
  * template's due dates in `[fromDateKey, toDateKey]`. Runs entirely server-side through the Admin
  * SDK (same as `lib/admin-dailyloop.ts`'s cron generators), which is what makes `DocumentReference
  * .create()` available: it's atomic and throws ALREADY_EXISTS instead of silently overwriting a

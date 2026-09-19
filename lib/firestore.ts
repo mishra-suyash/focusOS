@@ -445,7 +445,7 @@ export async function updateCourse(uid: string, id: string, patch: Partial<Cours
 
 /**
  * Deletes a course and cascades to its nested checkpoints/classLogs (topics are kept — they
- * outlive the course) plus its recurringTaskTemplates (plan `FocusOS-v2-Connected-Flow-Plan.md`
+ * outlive the course) plus its recurringTaskTemplates (plan `10.FocusOS-v2-Connected-Flow-Plan.md`
  * §7's "flip templates off with their course" — those aren't a subcollection, so they need their
  * own query, not just a subcollection delete), plus any still-open task instances those templates
  * already generated — same "don't leave zombie tasks behind" rule as deleteRecurringTaskTemplate.
@@ -758,7 +758,7 @@ export function subscribeUserSettings(uid: string, callback: (settings: UserSett
 
 const GOOGLE_CALENDAR_CONNECTION_DOC_ID = "googleCalendar";
 
-/** plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.2 — the non-secret connection-status doc, at
+/** plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.2 — the non-secret connection-status doc, at
  * users/{uid}/integrations/googleCalendar. The refresh token itself is never reachable through this
  * file or any client-readable path — see lib/google-calendar-admin.ts. */
 export function subscribeGoogleCalendarConnection(uid: string, callback: (connection: (GoogleCalendarConnection & { id: string }) | null) => void) {

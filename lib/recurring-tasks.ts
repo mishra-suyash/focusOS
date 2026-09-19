@@ -3,7 +3,7 @@ import { addDaysToKey } from "@/lib/dates";
 import type { Course, NewRecurringTaskTemplate, RecurringTaskTemplate } from "@/types";
 
 /**
- * plan/FocusOS-v2-Connected-Flow-Plan.md §4.1 — mirrors lib/routine.ts's routineSlotsForDate and
+ * plan/10.FocusOS-v2-Connected-Flow-Plan.md §4.1 — mirrors lib/routine.ts's routineSlotsForDate and
  * lib/courses.ts's courseSlotsForDate in shape: a pure function of plain data, no Firestore
  * import, safe to reuse from a cron route, an API route, or a test.
  */

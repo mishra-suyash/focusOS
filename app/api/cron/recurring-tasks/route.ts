@@ -5,7 +5,7 @@ import { recordCronRun } from "@/lib/admin-cron-log";
 import { getActiveUids } from "@/lib/admin-users";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 
-/** Daily — plan `FocusOS-v2-Connected-Flow-Plan.md` §4.2. Rolling 14-day window (today through
+/** Daily — plan `10.FocusOS-v2-Connected-Flow-Plan.md` §4.2. Rolling 14-day window (today through
  * today+13) per active user, so a recurring commitment shows up in Tasks' "This week"/"Upcoming"
  * ahead of the morning it's actually due, not just on the day itself. */
 export async function GET(request: Request) {

@@ -134,7 +134,7 @@ export const highlightCandidatesSchema = z.object({
 export type HighlightCandidatesOutput = z.infer<typeof highlightCandidatesSchema>;
 
 /**
- * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.1 — reuses `templateSlotSchema`
+ * plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.1 — reuses `templateSlotSchema`
  * (lib/templates/schema.ts) so an AI-generated template and a hand-built one are validated
  * identically.
  */

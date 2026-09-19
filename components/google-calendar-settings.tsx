@@ -16,7 +16,7 @@ const PUSH_CATEGORY_LABELS: Record<keyof NonNullable<GoogleCalendarConnection["p
 };
 
 /**
- * plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §9.1 — Phase 1 (push only): connect/disconnect,
+ * plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §9.1 — Phase 1 (push only): connect/disconnect,
  * per-category push toggles, and a manual "Sync now." The import-calendar picker and pull-related
  * fields are reserved for Phase 2 and intentionally don't appear here yet.
  */

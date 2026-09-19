@@ -11,7 +11,7 @@ export function PaperForm({
   courses = []
 }: {
   onCreate: (paper: NewPaper) => Promise<void>;
-  /** plan/FocusOS-v2-Connected-Flow-Plan.md §5.4 — wires up Paper.relatedCourseId, which existed in the type with no way to ever set it before this. */
+  /** plan/10.FocusOS-v2-Connected-Flow-Plan.md §5.4 — wires up Paper.relatedCourseId, which existed in the type with no way to ever set it before this. */
   courses?: Course[];
 }) {
   const [title, setTitle] = useState("");

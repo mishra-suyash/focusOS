@@ -1,5 +1,5 @@
 /**
- * plan/FocusOS-v2-Plan-Day-Timeline.md §5, DP2 — "Undo / redo ... Session-local stack, 50 steps."
+ * plan/05.FocusOS-v2-Plan-Day-Timeline.md §5, DP2 — "Undo / redo ... Session-local stack, 50 steps."
  * Generic and pure (no React) so it's testable the same way as `lib/timeline.ts`'s helpers; the
  * thin `hooks/use-undo-stack.ts` wrapper is the only React-aware part.
  */

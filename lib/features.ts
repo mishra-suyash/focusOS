@@ -76,7 +76,7 @@ export const FEATURE_MODULES: Record<ModuleId, FeatureModule> = {
   analytics: { id: "analytics", label: "Analytics", description: "Trends across tasks, focus sessions, and load." },
   insights: { id: "insights", label: "Insights", description: "AI-generated daily insight summaries." },
   /**
-   * plan/FocusOS-v2-Plan-Day-Timeline.md §7.3 registered this as a `hidden` rollout flag through
+   * plan/05.FocusOS-v2-Plan-Day-Timeline.md §7.3 registered this as a `hidden` rollout flag through
    * DP0–DP5 while the new editor was being built. DP5 shipped it; the user has since chosen to
    * keep both editors permanently rather than sunset the old one, so this is now `optIn` instead
    * of `hidden` — a normal toggle in `/settings/features`, just never turned on for anyone by

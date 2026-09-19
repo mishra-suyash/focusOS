@@ -3,7 +3,7 @@ import type { Category, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
 
 /**
  * Pure geometry/parsing helpers for the Plan — Day drag-and-drop timeline
- * (plan/FocusOS-v2-Plan-Day-Timeline.md §7.2, DP0). `lib/schedule.ts` stays the single source of
+ * (plan/05.FocusOS-v2-Plan-Day-Timeline.md §7.2, DP0). `lib/schedule.ts` stays the single source of
  * truth for "is this array of slots valid" (`validateSlots`, used by Save day) — these functions
  * are new capability for the grid (gap-finding, ripple, lane layout) that validateSlots never
  * needed, not a re-implementation of it.

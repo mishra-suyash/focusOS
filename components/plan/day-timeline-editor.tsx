@@ -30,7 +30,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * plan/FocusOS-v2-Plan-Day-Timeline.md DP2 — "off" (everyone, since `planDayTimeline` is hidden)
+ * plan/05.FocusOS-v2-Plan-Day-Timeline.md DP2 — "off" (everyone, since `planDayTimeline` is hidden)
  * keeps the old stacked-forms editor in `app/(app)/plan/day/page.tsx` untouched; this is "on".
  *
  * This component now owns the save model end to end (§6): it takes the live `schedule` doc
@@ -58,7 +58,7 @@ export function DayTimelineEditor({
   dateKey: string;
   schedule: DailySchedule | null;
   /**
-   * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.4 — this date's class + enabled routine
+   * plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.4 — this date's class + enabled routine
    * blocks, computed fresh from `courses`/`UserSettings.routineBlocks` regardless of whether a
    * schedule doc exists yet. `mergeMissingLockedSlots` (lib/schedule.ts) appends whichever of
    * these aren't already present (by id) in `schedule?.slots`, both in the initial `useUndoStack`

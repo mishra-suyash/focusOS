@@ -4,7 +4,7 @@ import { rangeOverlapsSlots } from "@/lib/timeline";
 import type { RoutineBlock, ScheduleSlot } from "@/types";
 
 /**
- * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.2 — ships as the fallback whenever a
+ * plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.2 — ships as the fallback whenever a
  * user's own `UserSettings.routineBlocks` is unset, exactly like `hooks/use-user-settings.ts`'s
  * own `DEFAULTS` constant: nothing gets written to Firestore just because a default exists.
  * Gym defaults off (something to opt into); the rest default on (things everyone already does).

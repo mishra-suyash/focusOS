@@ -8,7 +8,22 @@ import type { PaperNote, PaperNoteKind } from "@/types";
 
 const NOTE_KINDS: PaperNoteKind[] = ["quote", "idea", "question", "critique", "todo"];
 
-export function PaperNotesPanel({ paperId }: { paperId: string }) {
+/**
+ * `anchor` is supplied only when this panel is embedded in the reading window
+ * (plan/12.FocusOS-v2-Paper-Reading-Window-Plan.md §7) — it sets `anchorPage`/
+ * `anchorQuote` on notes created from there, closing the gap where those fields
+ * existed on `PaperNote` but nothing ever set them. `onJump` makes an already-
+ * anchored note clickable to jump back to its page, the same way an annotation is.
+ */
+export function PaperNotesPanel({
+  paperId,
+  anchor,
+  onJump
+}: {
+  paperId: string;
+  anchor?: { page: number; quote?: string };
+  onJump?: (page: number) => void;
+}) {
   const { user } = useAuth();
   const [notes, setNotes] = useState<PaperNote[]>([]);
   const [body, setBody] = useState("");
@@ -22,7 +37,13 @@ export function PaperNotesPanel({ paperId }: { paperId: string }) {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (!user || !body.trim()) return;
-    await createPaperNote(user.uid, paperId, { paperId, kind, body: body.trim() });
+    await createPaperNote(user.uid, paperId, {
+      paperId,
+      kind,
+      body: body.trim(),
+      anchorPage: anchor?.page,
+      anchorQuote: anchor?.quote
+    });
     setBody("");
   }
 
@@ -34,7 +55,13 @@ export function PaperNotesPanel({ paperId }: { paperId: string }) {
 
   return (
     <div>
-      <form onSubmit={submit} className="mb-3 grid grid-cols-[120px_1fr_auto] gap-2">
+      {anchor ? (
+        <p className="mb-2 text-xs text-ink-500">
+          New notes anchor to page {anchor.page}
+          {anchor.quote ? <> and the selected quote</> : null}.
+        </p>
+      ) : null}
+      <form onSubmit={submit} className="mb-3 grid gap-2 sm:grid-cols-[120px_1fr_auto]">
         <select className="input" value={kind} onChange={(e) => setKind(e.target.value as PaperNoteKind)}>
           {NOTE_KINDS.map((item) => (
             <option key={item} value={item}>
@@ -48,11 +75,20 @@ export function PaperNotesPanel({ paperId }: { paperId: string }) {
       <div className="space-y-2">
         {notes.map((note) => (
           <div key={note.id} className="flex items-start justify-between gap-2 rounded-md border border-ink-200 p-2 text-sm dark:border-ink-800">
-            <div>
+            <div className="min-w-0 break-words">
               <span className="mr-2 rounded bg-ink-50 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-ink-600 dark:bg-ink-800 dark:text-ink-300">
                 {note.kind}
               </span>
               {note.body}
+              {note.anchorPage ? (
+                <button
+                  className="ml-2 text-xs text-moss-700 hover:underline disabled:no-underline disabled:text-ink-400 dark:text-moss-400"
+                  onClick={() => onJump?.(note.anchorPage!)}
+                  disabled={!onJump}
+                >
+                  p.{note.anchorPage}
+                </button>
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {note.kind === "todo" ? (

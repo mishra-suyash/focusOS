@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * Unit-test stand-in for lib/google-calendar.ts
- * (plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.5/§6/§6.3) — same pattern as
+ * (plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.5/§6/§6.3) — same pattern as
  * scripts/verify-recurring-tasks.ts, since this repo has no test runner.
  */
 import {

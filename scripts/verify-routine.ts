@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Unit-test stand-in for lib/routine.ts (plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2) —
+ * Unit-test stand-in for lib/routine.ts (plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2) —
  * same pattern as scripts/verify-timeline.ts, since this repo has no test runner.
  */
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "../lib/routine";

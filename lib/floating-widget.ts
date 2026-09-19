@@ -1,5 +1,5 @@
 /**
- * plan/FocusOS-v2-Floating-Widget-Plan.md §4 — rows shown in the floating focus widget (the
+ * plan/08.FocusOS-v2-Floating-Widget-Plan.md §4 — rows shown in the floating focus widget (the
  * Document Picture-in-Picture window). Deliberately not a generic "pin anything" framework: this
  * is a fixed, small list, each item picked because it's glanceable (a number/progress bar, not
  * prose) and single-tap actionable — see the plan doc §2–3 for why a "quotes" or generic

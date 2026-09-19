@@ -1,13 +1,12 @@
 "use client";
 
-import { ArrowLeft, Sparkles } from "lucide-react";
+import { ArrowLeft, BookOpen, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { InfoHint } from "@/components/info-hint";
 import { LayeredNotesCard } from "@/components/layered-notes-card";
 import { MoreOptions } from "@/components/more-options";
-import { PaperAnnotationViewer } from "@/components/paper-annotation-viewer";
 import { PaperFileAttach } from "@/components/paper-file-attach";
 import { PaperNotesPanel } from "@/components/paper-notes-panel";
 import { PaperPassSection } from "@/components/paper-pass-section";
@@ -120,9 +119,15 @@ export default function PaperDetailPage() {
             <PaperNotesPanel paperId={paper.id} />
           </section>
           {file && isEnabled("paperTools") ? (
-            <section className="card p-5">
-              <h2 className="mb-3 text-lg font-semibold">Highlights &amp; annotation</h2>
-              <PaperAnnotationViewer paperId={paper.id} title={paper.title} pdfUrl={file.url} />
+            <section className="card flex flex-wrap items-center justify-between gap-3 p-5">
+              <div>
+                <h2 className="text-lg font-semibold">Highlights &amp; annotation</h2>
+                <p className="text-sm text-ink-500 dark:text-ink-400">Read, highlight, and annotate the PDF in a full-screen reading window.</p>
+              </div>
+              <Link href={`/read/${paper.id}`} className="btn-primary">
+                <BookOpen className="h-3.5 w-3.5" />
+                Open reading window
+              </Link>
             </section>
           ) : null}
         </div>

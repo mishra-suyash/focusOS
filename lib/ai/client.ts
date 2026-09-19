@@ -63,7 +63,7 @@ export async function generateHighlightCandidates(user: { getIdToken: () => Prom
 }
 
 /**
- * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.2 — no dedicated route: unlike
+ * plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.2 — no dedicated route: unlike
  * layeredNotes/highlightCandidates, this task never touches a file, so the generic
  * `callAiTask`/`/api/ai/run` already covers it.
  */

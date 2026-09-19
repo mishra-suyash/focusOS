@@ -310,7 +310,7 @@ const insightDailyTask: AiTaskDef<InsightDailyPayload, InsightDailyOutput> = {
 };
 
 // --- plan.generateDayTemplate ----------------------------------------------
-// plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.1 — "Create a template with AI". No
+// plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.1 — "Create a template with AI". No
 // dedicated route (unlike paper.layeredNotes/highlightCandidates): this never touches a file, so
 // the generic /api/ai/run already fits. No Firestore import anywhere in this task or its fallback
 // — `AI_TASKS` is loaded by a server route (app/api/ai/run/route.ts), so everything it touches

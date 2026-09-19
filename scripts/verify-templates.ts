@@ -2,7 +2,7 @@
 /**
  * Runs the entire built-in template catalog through the shared zod schemas
  * and `lib/schedule.ts`'s overlap/ordering validation (U1 acceptance
- * criteria in plan/FocusOS-v2-Essentials-and-Templates-Plan.md §6.5), plus a
+ * criteria in plan/04.FocusOS-v2-Essentials-and-Templates-Plan.md §6.5), plus a
  * few pure-function checks for `shiftTemplateSlots`. The repo has no test
  * runner, so this stands in for "unit tests" on template data — run it in
  * CI or before publishing a new built-in template.

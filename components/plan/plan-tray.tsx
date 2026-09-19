@@ -65,7 +65,7 @@ type TrayGesture =
   | { pointerId: number; kind: "template"; template: TemplateSource };
 
 /**
- * plan/FocusOS-v2-Plan-Day-Timeline.md §4.4, DP3 — the inspector's other face when nothing is
+ * plan/05.FocusOS-v2-Plan-Day-Timeline.md §4.4, DP3 — the inspector's other face when nothing is
  * selected: tasks, quick blocks, and templates, all draggable onto `TimeGrid` via the same
  * best-effort Pointer Events approach as DP2 (no `@dnd-kit/core` — see DP2's own note on why;
  * cross-container drag here works by capturing the pointer on the tray item itself and asking the
@@ -267,7 +267,7 @@ export function PlanTray({
     setTemplateDrop(null);
   }
 
-  /** plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.3 — feeds the AI the user's free-text
+  /** plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §3.3 — feeds the AI the user's free-text
    * prompt plus routine blocks (as blackout windows the model is told not to overlap), open tasks,
    * and active goals as grounding context. The result is fed into the exact same `templateDrop`
    * confirm-bar/preview-ghost flow a dragged template already uses (`confirmFillGaps` above), so it

@@ -9,7 +9,7 @@ export type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error";
 const DEBOUNCE_MS = 1000;
 
 /**
- * plan/FocusOS-v2-Plan-Day-Timeline.md §6, DP2 — option B (autosave per committed gesture,
+ * plan/05.FocusOS-v2-Plan-Day-Timeline.md §6, DP2 — option B (autosave per committed gesture,
  * debounced) + option C (flush on tab-hide/unmount) + the two-tab `updatedAt` guard. Deliberately
  * has no opinion about drag, undo, or which component owns `slots` — it only owns the save
  * mechanics, so it's the one DP2 piece verifiable by reading rather than by dragging something:

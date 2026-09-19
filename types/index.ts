@@ -163,7 +163,7 @@ export interface Task {
   reminderLeadDays?: number[];
   /** Plan §11.2 F5 — the status a task had right before it was last marked "done", so unchecking can restore it instead of always landing on "todo". */
   previousStatus?: TaskStatus;
-  /** Which course this task belongs to (plan `FocusOS-v2-Connected-Flow-Plan.md` §3.1). Only meaningful when the "courses" module is on; absent = unlinked, same as every task before this field existed. */
+  /** Which course this task belongs to (plan `10.FocusOS-v2-Connected-Flow-Plan.md` §3.1). Only meaningful when the "courses" module is on; absent = unlinked, same as every task before this field existed. */
   courseId?: string;
   /** Set only on a task materialized from a RecurringTaskTemplate (§4) — points back at it. Absent = an ordinary, hand-created task, the common case, unchanged. A generated instance is immutable-after-creation (§4.3): editing it is always just editing that one task by hand. */
   seriesId?: string;
@@ -200,7 +200,7 @@ export interface ScheduleSlot {
   color?: string;
   /** Set on a class block or a materialized routine block (see `RoutineBlock`) — undraggable, unresizable, and undeletable in the timeline editor. Never set by hand; `type === "class"` alone already implies this for class blocks (`isLockedSlot`, lib/schedule.ts), so this field only actually needs to be `true` for routine-derived slots. */
   locked?: boolean;
-  /** plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.4/§7 — set only on a slot imported from an
+  /** plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.4/§7 — set only on a slot imported from an
    * external Google Calendar event (`type` is then always `"external"`, also always locked): that
    * event's id, so a later sync finds-and-updates or removes this exact slot instead of creating a
    * duplicate. Absent on every FocusOS-authored slot. */
@@ -208,7 +208,7 @@ export interface ScheduleSlot {
 }
 
 /**
- * plan/FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2 — a recurring personal-time anchor
+ * plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2 — a recurring personal-time anchor
  * (Sleep, a meal, Gym, or a custom one) configured once in Settings rather than re-typed into
  * every template. `lib/routine.ts`'s `routineSlotsForDate` turns the enabled ones into locked
  * `ScheduleSlot`s for a given date.
@@ -299,7 +299,7 @@ export interface Course {
 export type RecurrenceCadence = "weekly" | "biweekly";
 
 /**
- * A weekly/biweekly commitment (plan `FocusOS-v2-Connected-Flow-Plan.md` §3.2/§4) — a TA meeting,
+ * A weekly/biweekly commitment (plan `10.FocusOS-v2-Connected-Flow-Plan.md` §3.2/§4) — a TA meeting,
  * office hours, or a problem set due every Friday — configured once and materialized into ordinary
  * `Task` docs (`Task.seriesId` pointing back here) on a rolling window, the same "compute a rule
  * into concrete records" pattern `RoutineBlock`/`CourseSession` already use for `ScheduleSlot`s.
@@ -736,7 +736,7 @@ export interface Goal {
   definitionOfDone: string;
   milestones: GoalMilestone[];
   linked: {
-    /** The one relationship actually surfaced in the UI (`/goals`'s course-link checkboxes) and read back (the course card's "Linked goals" list — plan `FocusOS-v2-Connected-Flow-Plan.md` §5.1). */
+    /** The one relationship actually surfaced in the UI (`/goals`'s course-link checkboxes) and read back (the course card's "Linked goals" list — plan `10.FocusOS-v2-Connected-Flow-Plan.md` §5.1). */
     courseIds: string[];
     /** @deprecated Never had UI, never read anywhere. Once Task/Paper carry `courseId`/`relatedCourseId`, "papers/tasks for this goal" is already answerable transitively via the goal's linked courses — a second direct link would just be two sources of truth to keep in sync by hand. Left in the type only so existing empty-array documents don't need a migration; do not add UI for this. */
     paperIds: string[];
@@ -813,7 +813,7 @@ export interface UserSettings {
   /** IANA name (e.g. "Asia/Kolkata"). Absent = `DEFAULT_TIMEZONE` (lib/google-calendar.ts) — makes
    * the app's long-standing implicit single-timezone assumption (vercel.json's IST-offset cron
    * schedules) an explicit, overridable setting, since every timed Google Calendar event needs a
-   * real IANA timezone (plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.1). */
+   * real IANA timezone (plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.1). */
   timezone?: string;
   updatedAt: string;
 }
@@ -921,7 +921,7 @@ export interface AdminJob {
 }
 
 /**
- * plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.2 — the non-secret half of the connection.
+ * plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.2 — the non-secret half of the connection.
  * Lives at users/{uid}/integrations/googleCalendar (one doc), read/written by the client SDK
  * exactly like `UserSettings`. The refresh token itself is never in here — see
  * `lib/google-calendar-admin.ts`'s server-only token doc, stored outside `users/{uid}/**` entirely.
@@ -955,7 +955,7 @@ export interface GoogleCalendarConnection {
 }
 
 /**
- * plan/FocusOS-v2-Google-Calendar-Sync-Plan.md §4.5 — maps one FocusOS record to the Google event
+ * plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.5 — maps one FocusOS record to the Google event
  * pushed for it. Lives at users/{uid}/googleCalendarLinks/{refKey}, `refKey` a deterministic
  * composite string (`lib/google-calendar.ts`'s `checkpointRefKey`/`recurringTemplateRefKey`/
  * `courseSessionRefKey`/`taskRefKey`), never a random id, so the push diff (§6.3) can always find

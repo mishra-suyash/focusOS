@@ -29,7 +29,7 @@ export type DayStripProps =
 const HOUR_LABELS = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 
 /**
- * plan/FocusOS-v2-Plan-Day-Timeline.md §4.1 — "one `<DayStrip variant="full" | "mini">` powers
+ * plan/05.FocusOS-v2-Plan-Day-Timeline.md §4.1 — "one `<DayStrip variant="full" | "mini">` powers
  * this strip, the template preview bars in Browse templates, the dashboard's full-day schedule
  * widget, and later the calendar week view." DP0 extracted `"mini"` verbatim from the template
  * gallery (unchanged rendering — proportional bar, no absolute time axis). DP1 adds `"full"`: an

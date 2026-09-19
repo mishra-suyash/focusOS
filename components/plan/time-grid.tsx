@@ -62,7 +62,7 @@ type DragPreview = {
 };
 
 /**
- * plan/FocusOS-v2-Plan-Day-Timeline.md §4.2/§5, DP2 — create/move/resize by drag, snap (15min) +
+ * plan/05.FocusOS-v2-Plan-Day-Timeline.md §4.2/§5, DP2 — create/move/resize by drag, snap (15min) +
  * edge magnetism, overlap policy A (refuse: invalid drops just don't commit, no state ever
  * changes to reflect them — "snapping back" is really "never having moved"). Legacy overlaps
  * still lane-lay-out via `lib/timeline.ts`'s `laneLayout` (DP1, unchanged).

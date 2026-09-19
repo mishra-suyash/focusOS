@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Unit-test stand-in for lib/undo-stack.ts (plan/FocusOS-v2-Plan-Day-Timeline.md DP2's undo/redo
+ * Unit-test stand-in for lib/undo-stack.ts (plan/05.FocusOS-v2-Plan-Day-Timeline.md DP2's undo/redo
  * requirement) — same pattern as scripts/verify-timeline.ts.
  */
 import { createUndoState, pushUndoState, redoState, resetUndoState, undoState, type UndoState } from "../lib/undo-stack";

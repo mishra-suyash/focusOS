@@ -7,7 +7,7 @@ import { deleteRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/
 import type { RecurringTaskTemplate } from "@/types";
 
 /**
- * plan/FocusOS-v2-Connected-Flow-Plan.md §4.5 — editing title/category/priority only reshapes
+ * plan/10.FocusOS-v2-Connected-Flow-Plan.md §4.5 — editing title/category/priority only reshapes
  * future generations (there's nothing here to edit those in place); "Active"/"Paused" and delete
  * are the only controls a hand-added template needs. Shared between the course card's own
  * "Recurring commitments" list and the Tasks page's page-wide one, since a template no longer has

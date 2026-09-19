@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * Unit-test stand-in for lib/recurring-tasks.ts
- * (plan/FocusOS-v2-Connected-Flow-Plan.md §4.1/§4.3) — same pattern as scripts/verify-routine.ts,
+ * (plan/10.FocusOS-v2-Connected-Flow-Plan.md §4.1/§4.3) — same pattern as scripts/verify-routine.ts,
  * since this repo has no test runner.
  */
 import { dateKeysInRange, isTemplateDueOn, planRevisionTemplateSync, recurringTaskInstanceId } from "../lib/recurring-tasks";
