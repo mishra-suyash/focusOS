@@ -92,17 +92,35 @@ export async function extractPdfOutlineTree(url: string): Promise<OutlineNode[]>
   }
 }
 
-/** True when the PDF has no extractable text layer at all — used to disable annotation-dependent features with an explicit message rather than producing garbage. */
-export async function hasTextLayer(url: string): Promise<boolean> {
+/**
+ * True when the PDF has extractable text — used to decide whether highlighting
+ * (which needs selectable text) should be offered, with an explicit message
+ * rather than silently producing garbage when it can't be.
+ *
+ * Checks up to the first few pages, not just page 1: a LaTeX title page is
+ * usually text-heavy, but can occasionally be image-only (a full-bleed cover
+ * graphic) or otherwise sparse, which would wrongly fail a page-1-only check
+ * on a paper that has a real text layer everywhere else. It also requires at
+ * least one item with actual non-whitespace content, not just a non-empty
+ * `items` array — pdf.js can return items with blank `str` values for some
+ * font-encoding edge cases, which a bare `.length > 0` check would still (and
+ * shouldn't) count as "has text."
+ */
+export async function hasTextLayer(url: string, pagesToCheck = 3): Promise<boolean> {
   const pdfjsLib = await import("pdfjs-dist");
   pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
 
   const loadingTask = pdfjsLib.getDocument({ url });
   try {
     const doc = await loadingTask.promise;
-    const page = await doc.getPage(1);
-    const content = await page.getTextContent();
-    return content.items.length > 0;
+    const lastPage = Math.min(pagesToCheck, doc.numPages);
+    for (let pageNum = 1; pageNum <= lastPage; pageNum += 1) {
+      const page = await doc.getPage(pageNum);
+      const content = await page.getTextContent();
+      const hasRealText = content.items.some((item) => "str" in item && (item as { str: string }).str.trim().length > 0);
+      if (hasRealText) return true;
+    }
+    return false;
   } finally {
     await loadingTask.destroy();
   }
