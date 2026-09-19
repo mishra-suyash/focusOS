@@ -97,7 +97,7 @@ export default function PapersPage() {
               {filtered.map((paper) => (
                 <article key={paper.id} className="card p-4">
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0">
+                    <div className="min-w-0 break-words">
                       <Link href={`/papers/${paper.id}`} className="font-semibold hover:underline">
                         {paper.title}
                       </Link>
