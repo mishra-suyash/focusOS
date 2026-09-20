@@ -34,6 +34,13 @@ async function fetchRevisionsCompletedCount(uid: string, dateKey: string): Promi
   return snapshot.size;
 }
 
+/** users/{uid}/meta/settings — same doc the Review page reads its own maxRevisionsPerDay/maxRevisionMinutesPerDay/workMinutes from (app/(app)/review/page.tsx), so a proposed revision block is sized against this user's actual caps, not the app-wide defaults. */
+async function fetchRevisionSizingSettings(uid: string): Promise<{ maxItems?: number; maxMinutes?: number; workMinutes?: number }> {
+  const doc = await adminDb().collection("users").doc(uid).collection("meta").doc("settings").get();
+  const data = doc.data() as { maxRevisionsPerDay?: number; maxRevisionMinutesPerDay?: number; workMinutes?: number } | undefined;
+  return { maxItems: data?.maxRevisionsPerDay, maxMinutes: data?.maxRevisionMinutesPerDay, workMinutes: data?.workMinutes };
+}
+
 async function fetchUnresolvedCriticalAlertCount(uid: string): Promise<number> {
   const snapshot = await adminDb()
     .collection("users")
@@ -103,11 +110,12 @@ export async function generateEveningRollup(uid: string): Promise<EveningRollup>
   const today = todayKey();
   const yesterday = todayKey(new Date(Date.now() - 86_400_000));
 
-  const [{ checkpoints, tasks, sessions, courses, goals, terms }, dueRevisionCount, dayDoc, schedule] = await Promise.all([
+  const [{ checkpoints, tasks, sessions, courses, goals, terms }, dueRevisionCount, dayDoc, schedule, revisionSizing] = await Promise.all([
     fetchInsightData(uid),
     fetchDueRevisionCount(uid, today),
     adminDb().collection("users").doc(uid).collection("days").doc(today).get(),
-    fetchDailySchedule(uid, today)
+    fetchDailySchedule(uid, today),
+    fetchRevisionSizingSettings(uid)
   ]);
 
   const checkpointsNeedingPrep = checkpoints.filter((c) => {
@@ -117,8 +125,16 @@ export async function generateEveningRollup(uid: string): Promise<EveningRollup>
   });
   const dueTasks = tasks.filter((t) => t.status !== "done" && t.dueDate && t.dueDate <= today);
 
-  const proposedTasks = buildProposedTasks({ todayKey: today, dueTasks, checkpointsNeedingPrep, dueRevisionCount });
-  const proposedSlots = buildProposedSlots({ checkpointsNeedingPrep, dueRevisionCount });
+  const reviewLimits = { maxItems: revisionSizing.maxItems, maxMinutes: revisionSizing.maxMinutes };
+  const proposedTasks = buildProposedTasks({
+    todayKey: today,
+    dueTasks,
+    checkpointsNeedingPrep,
+    dueRevisionCount,
+    reviewLimits,
+    workMinutes: revisionSizing.workMinutes
+  });
+  const proposedSlots = buildProposedSlots({ checkpointsNeedingPrep, dueRevisionCount, reviewLimits, workMinutes: revisionSizing.workMinutes });
 
   const todayStats = dayMetrics(tasks, sessions, today);
   const yesterdayStats = dayMetrics(tasks, sessions, yesterday);

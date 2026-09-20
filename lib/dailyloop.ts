@@ -1,5 +1,22 @@
 import { upcomingMilestones } from "@/lib/goals";
+import { DEFAULT_MAX_REVISION_MINUTES_PER_DAY, DEFAULT_MAX_REVISIONS_PER_DAY, MINUTES_PER_REVISION, estimatedReviewMinutes } from "@/lib/revision";
 import type { Checkpoint, Goal, MorningBrief, Paper, ProposedSlot, ProposedTask, Task } from "@/types";
+
+const DEFAULT_WORK_MINUTES = 25;
+
+/** Same caps the Review page itself builds its queue with (lib/revision.ts's `buildReviewQueue`) — callers pass the user's own settings when they have them, so a proposal never promises a block bigger than what "Review" will actually run. */
+export interface RevisionSizingInputs {
+  reviewLimits?: { maxItems?: number; maxMinutes?: number; minutesPerItem?: number };
+  workMinutes?: number;
+}
+
+function revisionBlockMinutes(dueRevisionCount: number, sizing?: RevisionSizingInputs): number {
+  return estimatedReviewMinutes(dueRevisionCount, {
+    maxItems: sizing?.reviewLimits?.maxItems ?? DEFAULT_MAX_REVISIONS_PER_DAY,
+    maxMinutes: sizing?.reviewLimits?.maxMinutes ?? DEFAULT_MAX_REVISION_MINUTES_PER_DAY,
+    minutesPerItem: sizing?.reviewLimits?.minutesPerItem ?? MINUTES_PER_REVISION
+  });
+}
 
 /**
  * Pure builders for the daily loop (plan §10.1). The morning brief is
@@ -70,7 +87,7 @@ export function buildMorningBrief(inputs: MorningBriefInputs): MorningBrief {
   };
 }
 
-export interface ProposedTasksInputs {
+export interface ProposedTasksInputs extends RevisionSizingInputs {
   todayKey: string;
   dueTasks: Task[];
   checkpointsNeedingPrep: Checkpoint[];
@@ -106,10 +123,15 @@ export function buildProposedTasks(inputs: ProposedTasksInputs): ProposedTask[] 
   }
 
   if (inputs.dueRevisionCount > 0) {
+    // n items x MINUTES_PER_REVISION each (capped the same way the Review queue itself caps),
+    // converted to pomodoros the same way planRevisionTemplateSync sizes a course's revision
+    // template — not a flat guess at "how long review will take".
+    const workMinutes = inputs.workMinutes ?? DEFAULT_WORK_MINUTES;
+    const estimatePomodoros = Math.max(1, Math.round(revisionBlockMinutes(inputs.dueRevisionCount, inputs) / workMinutes));
     proposals.push({
       title: `Review ${inputs.dueRevisionCount} due revision item${inputs.dueRevisionCount === 1 ? "" : "s"}`,
       category: "research",
-      estimatePomodoros: Math.max(1, Math.ceil(inputs.dueRevisionCount / 8)),
+      estimatePomodoros,
       severity: "general"
     });
   }
@@ -117,13 +139,18 @@ export function buildProposedTasks(inputs: ProposedTasksInputs): ProposedTask[] 
   return proposals.slice(0, 8);
 }
 
-export interface ProposedSlotsInputs {
+export interface ProposedSlotsInputs extends RevisionSizingInputs {
   checkpointsNeedingPrep: Checkpoint[];
   dueRevisionCount: number;
 }
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
+}
+
+function addMinutesToHourStart(hour: number, minutes: number): string {
+  const total = hour * 60 + minutes;
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
 }
 
 /**
@@ -151,11 +178,14 @@ export function buildProposedSlots(inputs: ProposedSlotsInputs): ProposedSlot[] 
   }
 
   if (inputs.dueRevisionCount > 0) {
+    // Same n x m sizing as buildProposedTasks's revision proposal, so the slot the day view shows
+    // actually matches how long that many items will take — not a fixed 30 minutes regardless of count.
+    const minutes = Math.max(15, revisionBlockMinutes(inputs.dueRevisionCount, inputs));
     slots.push({
       title: "Review revisions",
       type: "deep_work",
       startTime: `${pad(hour)}:00`,
-      endTime: `${pad(hour)}:30`,
+      endTime: addMinutesToHourStart(hour, minutes),
       refType: "revision"
     });
   }

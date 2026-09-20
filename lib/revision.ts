@@ -102,6 +102,25 @@ export function buildReviewQueue(dueItems: RevisionItem[], checkpoints: Checkpoi
   return result;
 }
 
+/**
+ * How many minutes a review session of `dueCount` items will actually take, under the same caps
+ * `buildReviewQueue` enforces — the number of items included follows the identical "always take at
+ * least one, then stop before crossing maxMinutes" rule, just without needing the actual item list.
+ * Lets callers that only have a *count* (the daily-loop proposals, which run before the queue is
+ * built) size a revision block from real n×m data instead of a flat guess.
+ */
+export function estimatedReviewMinutes(dueCount: number, limits: QueueLimits): number {
+  if (dueCount <= 0) return 0;
+  const minutesPerItem = limits.minutesPerItem ?? MINUTES_PER_REVISION;
+  const itemCount = Math.min(dueCount, limits.maxItems);
+  let minutes = 0;
+  for (let i = 0; i < itemCount; i += 1) {
+    if (i > 0 && minutes + minutesPerItem > limits.maxMinutes) break;
+    minutes += minutesPerItem;
+  }
+  return minutes;
+}
+
 /** A no-model, no-input retrieval prompt — the fallback the plan specifies when there's no authored or AI-generated question. */
 export function fallbackRecallPrompt(title: string): string {
   return `Explain "${title}" in two sentences, without looking anything up.`;
