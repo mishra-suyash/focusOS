@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { PomodoroSurveyModal } from "@/components/pomodoro-survey-modal";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { savePomodoro } from "@/lib/firestore";
+import { incrementTaskCompletedPomodoros, savePomodoro } from "@/lib/firestore";
 import type { Category, TimerMode, TimerPresetId } from "@/types";
 
 const MODE_LABELS: Record<TimerMode, string> = {
@@ -205,6 +205,9 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       productivityRating: survey?.productivityRating,
       comment: survey?.comment || undefined
     });
+    if (data.mode === "work" && data.taskId) {
+      await incrementTaskCompletedPomodoros(user!.uid, data.taskId);
+    }
     const nextMode: TimerMode = data.mode === "work" ? (data.cycle % 4 === 0 ? "long_break" : "short_break") : "work";
     if (data.mode === "work") setCycle((current) => current + 1);
     setMode(nextMode);

@@ -13,9 +13,17 @@ import { useFeatures } from "@/hooks/use-features";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { createPaper, deletePaper, subscribeBlobUsage } from "@/lib/firestore";
 import { formatBytes, isNearSoftCap, isOverSoftCap } from "@/lib/files";
-import { pass1DropRate, paperStatusLabels } from "@/lib/papers";
+import { pass1DropRate, paperStatusLabels, totalReadingMinutes } from "@/lib/papers";
 import { useUserTier } from "@/lib/tiers";
-import type { Course, Paper, PaperStatus } from "@/types";
+import type { Course, Paper, PaperStatus, PomodoroSession } from "@/types";
+
+function formatReadingMinutes(minutes: number): string {
+  if (minutes <= 0) return "";
+  if (minutes < 60) return `${minutes}m reading time`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return `${hours}h${rest ? ` ${rest}m` : ""} reading time`;
+}
 
 const statusOrder: PaperStatus[] = ["to_read", "reading", "read", "archived"];
 
@@ -24,6 +32,7 @@ export default function PapersPage() {
   const { isEnabled } = useFeatures();
   const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [], []));
   const [statusFilter, setStatusFilter] = useState<PaperStatus | "all">("all");
   const [tagFilter, setTagFilter] = useState("all");
   const [blobBytes, setBlobBytes] = useState(0);
@@ -122,6 +131,9 @@ export default function PapersPage() {
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
                     <div className="h-full bg-moss-600" style={{ width: `${paper.progress ?? 0}%` }} />
                   </div>
+                  {totalReadingMinutes(sessions, paper.id) > 0 ? (
+                    <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{formatReadingMinutes(totalReadingMinutes(sessions, paper.id))}</p>
+                  ) : null}
                   {paper.tags.length > 0 ? (
                     <div className="mt-2 flex flex-wrap gap-1">
                       {paper.tags.map((tag) => (

@@ -21,9 +21,19 @@ import { useUserSettings } from "@/hooks/use-user-settings";
 import { callAiTask } from "@/lib/ai/client";
 import type { PrepPlanOutput } from "@/lib/ai/schemas";
 import { saveClassLogEntry } from "@/lib/classlog";
-import { dayOfWeekLabels, effectiveCourseStatus, resyncFutureClassSlots, syncRevisionTemplate } from "@/lib/courses";
+import {
+  bucketWeeklyTarget,
+  completedMinutesThisWeek,
+  currentWeekDateKeys,
+  dayOfWeekLabels,
+  effectiveCourseStatus,
+  resyncFutureClassSlots,
+  scheduledMinutesThisWeek,
+  syncRevisionTemplate
+} from "@/lib/courses";
 import { todayKey } from "@/lib/dates";
-import { computeCourseCoverage } from "@/lib/loadindex";
+import { computeCourseCoverage, loadIndexBand, loadIndexBandStyles } from "@/lib/loadindex";
+import { taskBucketLabels, taskBuckets } from "@/lib/options";
 import {
   createCheckpoint,
   createCourse,
@@ -118,6 +128,7 @@ function CoursesPageContent() {
                 revisionItems={revisionItems}
                 recurringTemplates={recurringTemplates.filter((item) => item.courseId === course.id)}
                 papers={papers.filter((item) => item.relatedCourseId === course.id)}
+                courseTasks={tasks.filter((item) => item.courseId === course.id)}
                 openTasks={tasks.filter((item) => item.courseId === course.id && item.status !== "done")}
                 linkedGoals={goals.filter((item) => item.linked.courseIds.includes(course.id))}
               />
@@ -185,6 +196,7 @@ function CourseCard({
   revisionItems,
   recurringTemplates,
   papers,
+  courseTasks,
   openTasks,
   linkedGoals
 }: {
@@ -196,6 +208,8 @@ function CourseCard({
   revisionItems: RevisionItem[];
   recurringTemplates: RecurringTaskTemplate[];
   papers: Paper[];
+  /** Every task on this course regardless of status — the weekly buckets panel's "scheduled"/"done" totals need done tasks too, unlike `openTasks` below. */
+  courseTasks: Task[];
   openTasks: Task[];
   linkedGoals: Goal[];
 }) {
@@ -207,6 +221,9 @@ function CourseCard({
   const [generateError, setGenerateError] = useState("");
   const [revisionHours, setRevisionHours] = useState(course.targetMinutesPerWeek ? String(course.targetMinutesPerWeek / 60) : "");
   const [savingRevisionHours, setSavingRevisionHours] = useState(false);
+  const [assignmentHours, setAssignmentHours] = useState(course.weeklyTargets?.assignment ? String(course.weeklyTargets.assignment / 60) : "");
+  const [backlogHours, setBacklogHours] = useState(course.weeklyTargets?.backlog ? String(course.weeklyTargets.backlog / 60) : "");
+  const [savingBucket, setSavingBucket] = useState<"assignment" | "backlog" | null>(null);
   const status = effectiveCourseStatus(course, today);
   const term = terms.find((item) => item.id === course.termId);
   const coverage = computeCourseCoverage(topics, revisionItems, course.id);
@@ -257,6 +274,15 @@ function CourseCard({
       workMinutes
     );
     setSavingRevisionHours(false);
+  }
+
+  /** Same "0 rather than undefined on clear" reasoning as `saveRevisionHours` above — `weeklyTargets` is patched wholesale so clearing one bucket never resurrects the other from a stale merge. */
+  async function saveBucketTarget(bucket: "assignment" | "backlog", hours: string) {
+    if (!user) return;
+    setSavingBucket(bucket);
+    const minutes = hours ? Math.round(Number(hours) * 60) : 0;
+    await updateCourse(user.uid, course.id, { weeklyTargets: { ...course.weeklyTargets, [bucket]: minutes } });
+    setSavingBucket(null);
   }
 
   async function generateNow() {
@@ -321,22 +347,49 @@ function CourseCard({
         <CourseSessionsEditor initialSessions={course.sessions} onSave={saveSessions} onCancel={() => setEditingSessions(false)} />
       ) : null}
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-2 text-xs text-ink-500">
-          Revision hours/week
-          <input
-            className="input w-20 py-1"
-            type="number"
-            min={0}
-            step={0.5}
-            value={revisionHours}
-            onChange={(e) => setRevisionHours(e.target.value)}
-          />
-        </label>
-        <button className="btn-secondary py-1 text-xs" onClick={saveRevisionHours} disabled={savingRevisionHours}>
-          {savingRevisionHours ? "Saving..." : "Save"}
-        </button>
-        <InfoHint term="revisionHoursPerWeek" />
+      <div className="mt-3 space-y-1.5">
+        <p className="label mb-1 flex items-center gap-1">
+          This week&apos;s buckets
+          <InfoHint term="revisionHoursPerWeek" />
+        </p>
+        {taskBuckets.map((bucket) => {
+          const target = bucketWeeklyTarget(course, bucket, linkedGoals);
+          const scheduled = scheduledMinutesThisWeek(courseTasks, course.id, bucket, workMinutes);
+          const done = completedMinutesThisWeek(courseTasks, course.id, bucket, workMinutes);
+          if (bucket === "goal") {
+            return <BucketRow key={bucket} label={taskBucketLabels[bucket]} target={target} scheduled={scheduled} done={done} />;
+          }
+          if (bucket === "revision") {
+            return (
+              <BucketRow
+                key={bucket}
+                label={taskBucketLabels[bucket]}
+                target={target}
+                scheduled={scheduled}
+                done={done}
+                editableHours={revisionHours}
+                onEditableHoursChange={setRevisionHours}
+                onSave={saveRevisionHours}
+                saving={savingRevisionHours}
+              />
+            );
+          }
+          const hours = bucket === "assignment" ? assignmentHours : backlogHours;
+          const setHours = bucket === "assignment" ? setAssignmentHours : setBacklogHours;
+          return (
+            <BucketRow
+              key={bucket}
+              label={taskBucketLabels[bucket]}
+              target={target}
+              scheduled={scheduled}
+              done={done}
+              editableHours={hours}
+              onEditableHoursChange={setHours}
+              onSave={() => saveBucketTarget(bucket, hours)}
+              saving={savingBucket === bucket}
+            />
+          );
+        })}
       </div>
 
       <div className="mt-4">
@@ -464,6 +517,66 @@ function CourseCard({
         </div>
       </div>
     </article>
+  );
+}
+
+function formatHours(minutes: number): string {
+  const hours = minutes / 60;
+  return `${hours % 1 === 0 ? hours : hours.toFixed(1)}h`;
+}
+
+/**
+ * One row of a course's weekly-buckets panel: the target (editable for assignment/backlog/revision,
+ * read-only/derived for goal — no `onSave` passed), and `done · scheduled · target` for the current
+ * week. The `scheduled` vs `target` ratio reuses `loadIndexBand`/`loadIndexBandStyles`
+ * (lib/loadindex.ts) — the same "behind/on track/ahead/overrun" language already used for the
+ * daily Load Index — rather than inventing a second color scale for the same idea.
+ */
+function BucketRow({
+  label,
+  target,
+  scheduled,
+  done,
+  editableHours,
+  onEditableHoursChange,
+  onSave,
+  saving
+}: {
+  label: string;
+  target: number;
+  scheduled: number;
+  done: number;
+  editableHours?: string;
+  onEditableHoursChange?: (value: string) => void;
+  onSave?: () => void;
+  saving?: boolean;
+}) {
+  const band = target > 0 ? loadIndexBand(scheduled / target) : null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-md bg-ink-50 px-2 py-1.5 text-xs dark:bg-ink-800">
+      <span className="w-20 shrink-0 font-medium">{label}</span>
+      {onEditableHoursChange && onSave ? (
+        <>
+          <input
+            className="input w-16 py-1"
+            type="number"
+            min={0}
+            step={0.5}
+            value={editableHours}
+            onChange={(e) => onEditableHoursChange(e.target.value)}
+            aria-label={`${label} hours/week`}
+          />
+          <button className="btn-secondary py-1 text-xs" onClick={onSave} disabled={saving}>
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </>
+      ) : (
+        <span className="text-ink-500">{target > 0 ? `${formatHours(target)}/week (from linked goals)` : "No linked goals"}</span>
+      )}
+      <span className={`ml-auto rounded px-1.5 py-0.5 font-medium ${band ? loadIndexBandStyles[band] : "text-ink-500"}`}>
+        {formatHours(done)} done · {formatHours(scheduled)} scheduled{target > 0 ? ` · ${formatHours(target)} target` : ""}
+      </span>
+    </div>
   );
 }
 

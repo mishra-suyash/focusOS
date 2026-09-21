@@ -1,6 +1,17 @@
-import type { Pass2Output, Paper, PaperStatus, Pass1Output } from "@/types";
+import type { Pass2Output, Paper, PaperStatus, Pass1Output, PomodoroSession } from "@/types";
 
 export const PASS_SEED_MINUTES: Record<1 | 2 | 3, number> = { 1: 7, 2: 60, 3: 90 };
+
+/**
+ * Total minutes ever spent reading this paper — derived from `PomodoroSession.paperId` rather than
+ * stored on the Paper doc, so it never drifts out of sync with the sessions it's summing. Counts
+ * both formal pass timers (`components/paper-pass-section.tsx`'s `finishPass`, which already sets
+ * `passNo`) and free reading in the full-screen window (`components/paper-reading-window.tsx`,
+ * which omits `passNo`) — every session with this `paperId` was time spent on this paper either way.
+ */
+export function totalReadingMinutes(sessions: Pick<PomodoroSession, "paperId" | "mode" | "minutes">[], paperId: string): number {
+  return sessions.filter((session) => session.paperId === paperId && session.mode === "work").reduce((sum, session) => sum + session.minutes, 0);
+}
 
 /** A paper cannot start Pass 1 without a reading goal — the single highest-leverage field in the subsystem. */
 export function canStartReading(paper: Pick<Paper, "goal" | "goalKind">): boolean {

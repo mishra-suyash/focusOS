@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { MoreOptions } from "@/components/more-options";
 import { addDaysToKey, todayKey } from "@/lib/dates";
-import { categories, priorities } from "@/lib/options";
-import type { Category, Course, NewTask, Priority } from "@/types";
+import { categories, priorities, taskBuckets, taskBucketLabels } from "@/lib/options";
+import type { Category, Course, NewTask, Priority, TaskBucket } from "@/types";
 
 const DEFAULT_EXTERNAL_LEAD_DAYS = [7, 2, 0];
 
@@ -27,6 +27,7 @@ export function TaskForm({
   const [estimatedPomodoros, setEstimatedPomodoros] = useState(1);
   const [external, setExternal] = useState(false);
   const [courseId, setCourseId] = useState("");
+  const [bucket, setBucket] = useState<TaskBucket | "">("");
   const [saving, setSaving] = useState(false);
 
   const today = todayKey();
@@ -47,7 +48,8 @@ export function TaskForm({
       estimatedPomodoros,
       kind: external ? "external" : undefined,
       reminderLeadDays: external ? DEFAULT_EXTERNAL_LEAD_DAYS : undefined,
-      courseId: courseId || undefined
+      courseId: courseId || undefined,
+      bucket: courseId && bucket ? bucket : undefined
     });
     setTitle("");
     setDescription("");
@@ -55,6 +57,7 @@ export function TaskForm({
     setEstimatedPomodoros(1);
     setExternal(false);
     setCourseId("");
+    setBucket("");
     setSaving(false);
   }
 
@@ -104,11 +107,31 @@ export function TaskForm({
             Hard deadline (visa renewal, a form, a submission portal — excluded from Workload&apos;s planned target)
           </label>
           {courses.length > 0 ? (
-            <select className="input" value={courseId} onChange={(e) => setCourseId(e.target.value)} aria-label="Course">
+            <select
+              className="input"
+              value={courseId}
+              onChange={(e) => {
+                const nextCourseId = e.target.value;
+                setCourseId(nextCourseId);
+                // Defaults to the most common case (ordinary coursework) the moment a course is
+                // picked, rather than leaving the new weekly-bucket field silently unset.
+                setBucket(nextCourseId ? "assignment" : "");
+              }}
+              aria-label="Course"
+            >
               <option value="">— No course —</option>
               {courses.map((course) => (
                 <option key={course.id} value={course.id}>
                   {course.code ? `${course.code} · ${course.name}` : course.name}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {courseId ? (
+            <select className="input" value={bucket} onChange={(e) => setBucket(e.target.value as TaskBucket)} aria-label="Weekly bucket">
+              {taskBuckets.map((item) => (
+                <option key={item} value={item}>
+                  {taskBucketLabels[item]}
                 </option>
               ))}
             </select>

@@ -77,7 +77,8 @@ export function TaskList({
                   {task.estimatedPomodoros ? (
                     <span className="inline-flex items-center gap-1">
                       <Clock className="h-3 w-3" />
-                      {task.estimatedPomodoros} focus session{task.estimatedPomodoros === 1 ? "" : "s"}
+                      {task.completedPomodoros ?? 0} of {task.estimatedPomodoros} focus session{task.estimatedPomodoros === 1 ? "" : "s"}
+                      {task.status !== "done" ? ` · ${Math.max(0, task.estimatedPomodoros - (task.completedPomodoros ?? 0))} left` : ""}
                     </span>
                   ) : null}
                   <button className="hover:text-moss-700" onClick={() => onStatus(task, "in_progress")}>

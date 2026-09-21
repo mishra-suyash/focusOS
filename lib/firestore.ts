@@ -226,6 +226,12 @@ export async function updateTask(uid: string, id: string, patch: Partial<Task>) 
   await updateDoc(doc(userCollection(uid, "tasks"), id), payload);
 }
 
+/** Called on every completed work-mode focus session linked to a task (components/focus-session-provider.tsx's `finalizeSession`) — an atomic `increment` rather than a read-then-write patch, so two sessions finishing close together can't clobber each other's count. */
+export async function incrementTaskCompletedPomodoros(uid: string, id: string) {
+  trackWrite();
+  await updateDoc(doc(userCollection(uid, "tasks"), id), { completedPomodoros: increment(1), updatedAt: now() });
+}
+
 export async function deleteTask(uid: string, id: string) {
   trackWrite();
   await deleteDoc(doc(userCollection(uid, "tasks"), id));

@@ -1,8 +1,9 @@
 import { getDay, parseISO } from "date-fns";
+import { weekDates, weekStartKey } from "@/lib/dates";
 import { fetchCollection, saveDailySchedule, setRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/firestore";
 import { planRevisionTemplateSync } from "@/lib/recurring-tasks";
 import { sortedSlots } from "@/lib/schedule";
-import type { Course, CourseStatus, DailySchedule, RecurringTaskTemplate, ScheduleSlot } from "@/types";
+import type { Course, CourseStatus, DailySchedule, Goal, RecurringTaskTemplate, ScheduleSlot, Task, TaskBucket } from "@/types";
 
 /** `status` as stored can go stale (nobody flips it when a course's end date passes) — derive the real one. */
 export function effectiveCourseStatus(course: Course, dateKey: string): CourseStatus {
@@ -76,4 +77,65 @@ export async function syncRevisionTemplate(
   if (plan.action === "create") await setRecurringTaskTemplate(uid, plan.templateId, plan.template);
   else if (plan.action === "update") await updateRecurringTaskTemplate(uid, plan.templateId, plan.patch);
   else if (plan.action === "pause") await updateRecurringTaskTemplate(uid, plan.templateId, { active: false });
+}
+
+/** This week's Mon-Sun date keys — the same window `lib/dates.ts`'s `currentWeekDays`/`lib/analytics.ts`'s `weeklyPomodoros` already use — the default "this week" for every bucket total below. */
+export function currentWeekDateKeys(date = new Date()): string[] {
+  return weekDates(weekStartKey(date));
+}
+
+/**
+ * A course's weekly target for one of its four planning buckets (goal/assignment/backlog/revision
+ * — TaskBucket, distinct from Task.category). "Revision" keeps reading the pre-existing
+ * `targetMinutesPerWeek` unchanged (still what `planRevisionTemplateSync`/`courseTargetMinutesForDay`
+ * read), so nothing about the existing revision-template sync above changes. "Goal" has no stored
+ * target on the course at all — it's derived from whichever Goals are linked to this course, so a
+ * goal's own weekly-hours target (set once, on the Goal) never drifts out of sync with a second
+ * number kept here.
+ */
+export function bucketWeeklyTarget(
+  course: Pick<Course, "targetMinutesPerWeek" | "weeklyTargets">,
+  bucket: TaskBucket,
+  linkedGoals: Pick<Goal, "targetHoursPerWeek">[]
+): number {
+  if (bucket === "revision") return course.targetMinutesPerWeek ?? 0;
+  if (bucket === "goal") return linkedGoals.reduce((sum, goal) => sum + (goal.targetHoursPerWeek ?? 0) * 60, 0);
+  return course.weeklyTargets?.[bucket] ?? 0;
+}
+
+type BucketedTask = Pick<Task, "courseId" | "bucket" | "dueDate" | "estimatedPomodoros" | "completedPomodoros">;
+
+function tasksDueThisWeek(tasks: BucketedTask[], courseId: string, bucket: TaskBucket, weekDateKeys: string[]): BucketedTask[] {
+  return tasks.filter((task) => task.courseId === courseId && task.bucket === bucket && task.dueDate && weekDateKeys.includes(task.dueDate));
+}
+
+/**
+ * Minutes "scheduled" this week for one course/bucket: every task due this week in that bucket,
+ * sized the same way `lib/timeline.ts`'s `taskBlockMinutes` sizes a dropped-in task
+ * (estimatedPomodoros × workMinutes, defaulting to one pomodoro). Includes done tasks — "scheduled"
+ * is what was planned for the week, not what's still open.
+ */
+export function scheduledMinutesThisWeek(
+  tasks: BucketedTask[],
+  courseId: string,
+  bucket: TaskBucket,
+  workMinutes: number,
+  weekDateKeys: string[] = currentWeekDateKeys()
+): number {
+  return tasksDueThisWeek(tasks, courseId, bucket, weekDateKeys).reduce((sum, task) => sum + (task.estimatedPomodoros ?? 1) * workMinutes, 0);
+}
+
+/**
+ * Minutes actually done this week for one course/bucket — the same task set as
+ * `scheduledMinutesThisWeek`, sized by completed focus sessions (`Task.completedPomodoros`, kept
+ * current by `finalizeSession` in components/focus-session-provider.tsx) instead of the estimate.
+ */
+export function completedMinutesThisWeek(
+  tasks: BucketedTask[],
+  courseId: string,
+  bucket: TaskBucket,
+  workMinutes: number,
+  weekDateKeys: string[] = currentWeekDateKeys()
+): number {
+  return tasksDueThisWeek(tasks, courseId, bucket, weekDateKeys).reduce((sum, task) => sum + (task.completedPomodoros ?? 0) * workMinutes, 0);
 }

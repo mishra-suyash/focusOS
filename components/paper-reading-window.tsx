@@ -18,10 +18,10 @@ import {
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { PassTimer } from "@/components/pass-timer";
+import { PassTimer, elapsedMinutesSince } from "@/components/pass-timer";
 import { PaperNotesPanel } from "@/components/paper-notes-panel";
 import { generateHighlightCandidates } from "@/lib/ai/client";
-import { createAnnotation, createAnnotationsBatch, deleteAnnotation, subscribeAnnotations } from "@/lib/firestore";
+import { createAnnotation, createAnnotationsBatch, deleteAnnotation, savePomodoro, subscribeAnnotations } from "@/lib/firestore";
 import {
   buildDocumentTextIndex,
   getPageTextIndex,
@@ -586,6 +586,52 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
   const runningPass = ([1, 2, 3] as const)
     .map((n) => ({ n, state: n === 1 ? paper.pass1 : n === 2 ? paper.pass2 : paper.pass3 }))
     .find((p) => p.state?.status === "in_progress");
+
+  /**
+   * "When reading, add the time to the specific paper" — this window otherwise logs zero time
+   * unless a formal Pass 1/2/3 happens to be running (`PassTimer` above, whose own `finishPass` in
+   * paper-pass-section.tsx already logs a session). Refs, not state, since only the *flush* needs
+   * the latest paper/user — the start/stop effect below only cares whether a pass is running.
+   */
+  const freeReadingStartRef = useRef<number | null>(null);
+  const paperRef = useRef(paper);
+  const userRef = useRef(user);
+  useEffect(() => {
+    paperRef.current = paper;
+    userRef.current = user;
+  }, [paper, user]);
+
+  const flushFreeReading = useCallback(async () => {
+    const start = freeReadingStartRef.current;
+    freeReadingStartRef.current = null;
+    const uid = userRef.current?.uid;
+    if (!start || !uid) return;
+    const minutes = elapsedMinutesSince(new Date(start).toISOString());
+    if (minutes < 1) return;
+    await savePomodoro(uid, {
+      label: `Reading: ${paperRef.current.title}`,
+      category: "reading",
+      mode: "work",
+      minutes,
+      completedAt: new Date().toISOString(),
+      cycle: 0,
+      paperId: paperRef.current.id
+    });
+  }, []);
+
+  const isPassRunning = Boolean(runningPass);
+  useEffect(() => {
+    // A formal pass running has its own timer/logging — stop the free-reading clock (and flush
+    // whatever it already accumulated) so the two never double-count the same minutes.
+    if (isPassRunning) {
+      void flushFreeReading();
+      return;
+    }
+    freeReadingStartRef.current = Date.now();
+    return () => {
+      void flushFreeReading();
+    };
+  }, [isPassRunning, flushFreeReading]);
 
   const annotationsByPageMap = useMemo(() => {
     const map = new Map<number, Annotation[]>();

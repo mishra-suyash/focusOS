@@ -1,6 +1,8 @@
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type Priority = "low" | "medium" | "high";
 export type Category = "research" | "coding" | "reading" | "writing" | "admin" | "personal";
+/** A course's four weekly-planning buckets (lib/courses.ts's `bucketWeeklyTarget`) — a different axis from `Category`. */
+export type TaskBucket = "goal" | "assignment" | "backlog" | "revision";
 export type TimerMode = "work" | "short_break" | "long_break";
 export type ScheduleSlotType = "deep_work" | "reading" | "meal" | "free" | "admin" | "break" | "commute" | "sleep" | "gym" | "class" | "custom" | "external";
 export type ScheduleSlotStatus = "upcoming" | "active" | "completed" | "skipped";
@@ -167,6 +169,10 @@ export interface Task {
   courseId?: string;
   /** Set only on a task materialized from a RecurringTaskTemplate (§4) — points back at it. Absent = an ordinary, hand-created task, the common case, unchanged. A generated instance is immutable-after-creation (§4.3): editing it is always just editing that one task by hand. */
   seriesId?: string;
+  /** Only meaningful with a `courseId` — which of the course's four weekly buckets (lib/courses.ts's `bucketWeeklyTarget`) this task counts against. Absent = unbucketed, same as every task before this field existed. */
+  bucket?: TaskBucket;
+  /** Count of completed work-mode focus sessions linked to this task via PomodoroSession.taskId (components/focus-session-provider.tsx). "Sessions left" is always derived as estimatedPomodoros - completedPomodoros, never stored. */
+  completedPomodoros?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -291,6 +297,8 @@ export interface Course {
   startDate?: string;
   endDate?: string;
   targetMinutesPerWeek?: number;
+  /** The "assignment"/"backlog" weekly buckets (lib/courses.ts's `bucketWeeklyTarget`) — additive alongside `targetMinutesPerWeek`, which stays the "revision" bucket's target unchanged (still read by `planRevisionTemplateSync`/`courseTargetMinutesForDay`). The "goal" bucket has no stored target here — it's derived from linked Goals' own `targetHoursPerWeek`. */
+  weeklyTargets?: { assignment?: number; backlog?: number };
   sessions: CourseSession[];
   createdAt: string;
   updatedAt: string;
