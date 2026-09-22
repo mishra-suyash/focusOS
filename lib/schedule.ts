@@ -16,6 +16,16 @@ export const slotTypes: ScheduleSlotType[] = [
   "external"
 ];
 
+/**
+ * `slotTypes` minus "external" — for dropdowns where a person is picking a block's type by hand.
+ * "external" (an imported Google Calendar event, plan/11) is never created by anything today and
+ * exists only so the future sync feature has a type to write; the type stays a valid,
+ * schema-accepted `ScheduleSlotType` (see `slotTypes`) so nothing breaks once that feature lands,
+ * but offering it in a manual picker today just lets someone pick it, get silently locked
+ * (`isLockedSlot`), and have no explanation why (plan/13 T8/A5).
+ */
+export const userSelectableSlotTypes: ScheduleSlotType[] = slotTypes.filter((type) => type !== "external");
+
 export const slotTypeLabels: Record<ScheduleSlotType, string> = {
   deep_work: "Deep work",
   reading: "Reading",
@@ -161,13 +171,22 @@ export function slotProgressPercent(slot?: ScheduleSlot, minute = currentMinute(
   return Math.min(100, Math.max(0, Math.round(((minute - start) / Math.max(1, end - start)) * 100)));
 }
 
+/**
+ * `completed*` means explicitly marked done (`slot.status === "completed"`) — plan/13 A9: this used
+ * to also count a block whose end time had simply passed, so a day where nothing was actually
+ * worked but every block had timed out read as "100% day complete." `elapsed*` is that time-passed
+ * signal on its own, kept separate so a caller that wants "block is in the past, worked or not"
+ * (e.g. deciding whether it can still be edited) still has it, without it masquerading as
+ * completion in a UI that says "done."
+ */
 export function scheduleSummary(slots: ScheduleSlot[], minute = currentMinute()) {
   const plannedDeepWork = slots.filter((slot) => slot.type === "deep_work").reduce((sum, slot) => sum + slotDuration(slot), 0);
   const completedDeepWork = slots
-    .filter((slot) => slot.type === "deep_work" && (slot.status === "completed" || minutesFromTime(slot.endTime) <= minute))
+    .filter((slot) => slot.type === "deep_work" && slot.status === "completed")
     .reduce((sum, slot) => sum + slotDuration(slot), 0);
-  const completedSlots = slots.filter((slot) => slot.status === "completed" || minutesFromTime(slot.endTime) <= minute).length;
-  return { plannedDeepWork, completedDeepWork, completedSlots, totalSlots: slots.length };
+  const completedSlots = slots.filter((slot) => slot.status === "completed").length;
+  const elapsedSlots = slots.filter((slot) => slot.status !== "completed" && minutesFromTime(slot.endTime) <= minute).length;
+  return { plannedDeepWork, completedDeepWork, completedSlots, elapsedSlots, totalSlots: slots.length };
 }
 
 export function taskNamesForSlot(slot: ScheduleSlot, tasks: Task[]) {

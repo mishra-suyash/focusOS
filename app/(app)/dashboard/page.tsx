@@ -27,6 +27,7 @@ import { useUserSettings } from "@/hooks/use-user-settings";
 import { friendlyDate, todayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { resolveDashboardWidgets } from "@/lib/dashboard-widgets";
 import { saveDailySchedule, saveDayFields, updateTask } from "@/lib/firestore";
+import { categoryLabels } from "@/lib/options";
 import { computeStatusPatch } from "@/lib/tasks";
 import { todayMetrics } from "@/lib/analytics";
 import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak } from "@/lib/loadindex";
@@ -58,7 +59,10 @@ function DashboardContent() {
   const { day } = useDay(today);
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
-  const { items: dailySchedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
+  const { items: dailySchedules, loading: dailySchedulesLoading } = useUserCollection<DailySchedule>(
+    "dailySchedules",
+    useMemo(() => [orderBy("updatedAt", "desc")], [])
+  );
   const { items: terms } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
   const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
@@ -104,12 +108,22 @@ function DashboardContent() {
   // this effect just starts the session and clears the query string when the URL carries the param.
   useEffect(() => {
     if (searchParams.get("startFocus") !== "1") return;
+    // `dailySchedules` starts empty and loads asynchronously — on a cold mount (the actual path
+    // from BlockInspector's Play link, not a rare race) this effect would otherwise run once with
+    // `dailySchedule` still undefined, find no linked task, then never get a second chance once the
+    // real snapshot arrives (the `startFocus=1` param is already gone by then). Wait for the load
+    // instead of consuming the param against incomplete data (plan/13 A7).
+    if (dailySchedulesLoading) return;
     const label = searchParams.get("label");
     const category = searchParams.get("category") as Task["category"] | null;
     if (!label || !category) return;
-    startFocus({ label, category, slotId: searchParams.get("slotId") ?? undefined });
+    const slotId = searchParams.get("slotId") ?? undefined;
+    // A block linked to exactly one task should credit that task's focus-session count — a block
+    // with zero or several linked tasks is ambiguous, so it's left uncredited as before.
+    const linkedTaskIds = slotId ? dailySchedule?.slots.find((slot) => slot.id === slotId)?.assignedTaskIds ?? [] : [];
+    startFocus({ label, category, slotId, taskId: linkedTaskIds.length === 1 ? linkedTaskIds[0] : undefined });
     router.replace("/dashboard", { scroll: false });
-  }, [searchParams]);
+  }, [searchParams, dailySchedule, dailySchedulesLoading]);
 
   /** S5 "Schedule it" on the Up next card — places it in the next free gap after now and opens Plan — Day. */
   async function scheduleAction() {
@@ -213,7 +227,7 @@ function DashboardContent() {
               ["Focus sessions", metrics.pomodoros],
               ["Focus min", metrics.focusedMinutes],
               ["Tasks done", metrics.tasksCompleted],
-              ["On-track streak", `${metrics.streak}d`]
+              ["Active-day streak", `${metrics.streak}d`]
             ].map(([label, value]) => (
               <div key={label} className="rounded-md bg-ink-50 px-3 py-2 dark:bg-ink-800">
                 <p className="label">{label}</p>
@@ -244,6 +258,7 @@ function DashboardContent() {
             <div className="space-y-2">
               {visibleTasks.map((task) => {
                 const pinned = pinnedIds.includes(task.id);
+                const taskCourse = task.courseId ? courses.find((item) => item.id === task.courseId) : undefined;
                 return (
                   <div key={task.id} className="flex items-start gap-2 rounded-md border border-ink-200 p-2 text-sm dark:border-ink-800">
                     <input
@@ -252,7 +267,35 @@ function DashboardContent() {
                       checked={task.status === "done"}
                       onChange={(event) => updateTask(user!.uid, task.id, computeStatusPatch(task, event.target.checked ? "done" : "todo"))}
                     />
-                    <span className={clsx("flex-1", task.status === "done" && "text-ink-400 line-through")}>{task.title}</span>
+                    <div className="min-w-0 flex-1">
+                      <span className={clsx(task.status === "done" && "text-ink-400 line-through")}>{task.title}</span>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span
+                          className={clsx(
+                            "rounded px-1.5 py-0.5 font-semibold uppercase",
+                            task.priority === "high" && "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-200",
+                            task.priority === "medium" && "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
+                            task.priority === "low" && "bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300"
+                          )}
+                        >
+                          {task.priority}
+                        </span>
+                        <span className="rounded bg-moss-600/10 px-1.5 py-0.5 font-medium text-moss-700 dark:text-moss-500">
+                          {categoryLabels[task.category]}
+                        </span>
+                        {taskCourse ? (
+                          <span className="rounded bg-ink-100 px-1.5 py-0.5 font-medium text-ink-600 dark:bg-ink-800 dark:text-ink-300">
+                            {taskCourse.code || taskCourse.name}
+                          </span>
+                        ) : null}
+                        {task.dueDate ? <span className="text-ink-500">Due {task.dueDate}</span> : null}
+                        {task.kind === "external" ? (
+                          <span className="rounded bg-sky-100 px-1.5 py-0.5 font-semibold uppercase text-sky-700 dark:bg-sky-950 dark:text-sky-300">
+                            Hard deadline
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
                     <button
                       className={clsx("shrink-0", pinned ? "text-amberline" : "text-ink-300 hover:text-ink-500 dark:text-ink-600")}
                       onClick={() => (pinned ? unpinTask(task.id) : pinTask(task.id))}

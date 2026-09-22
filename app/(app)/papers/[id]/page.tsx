@@ -73,7 +73,10 @@ export default function PaperDetailPage() {
           <p className="mt-1 text-lg font-semibold">{paperStatusLabels[paper.status]}</p>
         </div>
         <div className="card p-3">
-          <p className="label">Progress</p>
+          <p className="label flex items-center gap-1">
+            Progress
+            <InfoHint term="paperProgress" />
+          </p>
           <div className="mt-2 h-2 overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
             <div className="h-full bg-moss-600" style={{ width: `${paper.progress ?? 0}%` }} />
           </div>
@@ -101,14 +104,20 @@ export default function PaperDetailPage() {
           </section>
           {paper.pass1?.status === "done" && (paper.pass1.output as { verdict?: string })?.verdict === "continue" ? (
             <section className="card p-5">
-              <h2 className="mb-3 text-lg font-semibold">Read — grasp the content</h2>
+              <h2 className="mb-3 flex items-center gap-1 text-lg font-semibold">
+                Grasp the content
+                <InfoHint term="read" />
+              </h2>
               <PaperPassSection paper={paper} passNo={2} file={file} />
             </section>
           ) : null}
           {paper.pass2?.status === "done" ? (
             <section className="card p-5">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h2 className="text-lg font-semibold">Deep dive — re-implement (opt-in)</h2>
+                <h2 className="flex items-center gap-1 text-lg font-semibold">
+                  Deep dive — re-implement (opt-in)
+                  <InfoHint term="deepDive" />
+                </h2>
                 {!paper.pass3 ? <span className="text-xs text-ink-500">Most papers never need this pass.</span> : null}
               </div>
               <PaperPassSection paper={paper} passNo={3} file={file} />

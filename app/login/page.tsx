@@ -23,13 +23,24 @@ function friendlyAuthError(error: unknown): string {
     "auth/user-not-found": "No account with that email — try Create account.",
     "auth/email-already-in-use": "That email already has an account — try Sign in instead.",
     "auth/weak-password": "Password must be at least 6 characters.",
-    "auth/invalid-email": "That doesn't look like a valid email address."
+    "auth/invalid-email": "That doesn't look like a valid email address.",
+    "auth/user-disabled": "This account has been disabled. Contact an admin if you think that's wrong."
   };
   return map[code] ?? "Something went wrong. Please try again.";
 }
 
 export default function LoginPage() {
-  const { signInWithGoogle, signInAsGuest, signInWithEmail, signUpWithEmail, sendMagicLink, loading, isDemoMode } = useAuth();
+  const {
+    signInWithGoogle,
+    signInAsGuest,
+    signInWithEmail,
+    signUpWithEmail,
+    sendMagicLink,
+    loading,
+    isDemoMode,
+    signupBlockedMessage,
+    clearSignupBlockedMessage
+  } = useAuth();
   const [emailMode, setEmailMode] = useState<EmailMode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -99,6 +110,14 @@ export default function LoginPage() {
         {error ? (
           <div className="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
             {error}
+          </div>
+        ) : null}
+        {signupBlockedMessage ? (
+          <div className="mb-4 flex items-start justify-between gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+            <span>{signupBlockedMessage}</span>
+            <button className="shrink-0 opacity-70 hover:opacity-100" onClick={clearSignupBlockedMessage} aria-label="Dismiss">
+              ×
+            </button>
           </div>
         ) : null}
 

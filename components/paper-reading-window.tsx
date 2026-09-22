@@ -21,7 +21,7 @@ import { useAuth } from "@/components/auth-provider";
 import { PassTimer, elapsedMinutesSince } from "@/components/pass-timer";
 import { PaperNotesPanel } from "@/components/paper-notes-panel";
 import { generateHighlightCandidates } from "@/lib/ai/client";
-import { createAnnotation, createAnnotationsBatch, deleteAnnotation, savePomodoro, subscribeAnnotations } from "@/lib/firestore";
+import { createAnnotation, createAnnotationsBatch, deleteAnnotation, savePomodoro, subscribeAnnotations, updatePaper } from "@/lib/firestore";
 import {
   buildDocumentTextIndex,
   getPageTextIndex,
@@ -617,6 +617,14 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
       cycle: 0,
       paperId: paperRef.current.id
     });
+    // plan/13 B1 — progress/status are otherwise derived only from pass1/2/3 (see
+    // derivePaperStatus), so time spent in this free-reading window never moved a paper off
+    // "To read" even after hours of real reading. This is a one-way nudge, not a full derivation:
+    // once any pass is actually touched, `derivePaperFields` takes back over and computes the real
+    // status from that, same as before.
+    if (paperRef.current.status === "to_read") {
+      await updatePaper(uid, paperRef.current.id, { status: "reading" });
+    }
   }, []);
 
   const isPassRunning = Boolean(runningPass);

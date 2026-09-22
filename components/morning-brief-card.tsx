@@ -51,6 +51,9 @@ export function MorningBriefCard({ brief }: { brief?: MorningBrief }) {
             {current.requiredMinutesTarget} min target today · {current.revisionsDue} revision{current.revisionsDue === 1 ? "" : "s"} due
             {current.unresolvedCriticalAlerts > 0 ? ` · ${current.unresolvedCriticalAlerts} urgent heads-up${current.unresolvedCriticalAlerts === 1 ? "" : "s"}` : ""}
           </p>
+          <p className="text-xs text-ink-400">
+            Snapshot from {new Date(current.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} — the Workload widget above recalculates this target live as your day changes.
+          </p>
           {current.checkpointsInWindow.length > 0 ? (
             <p>
               <span className="label">Assessments in prep window: </span>

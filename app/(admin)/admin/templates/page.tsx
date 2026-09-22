@@ -6,7 +6,7 @@ import { adminFetch } from "@/lib/admin-client";
 import { SectionHeader } from "@/components/section-header";
 import { BUILTIN_DAY_TEMPLATES } from "@/lib/templates/builtin";
 import { categories, priorities } from "@/lib/options";
-import { slotTypeLabels, slotTypes, sortedSlots, validateSlots } from "@/lib/schedule";
+import { slotTypeLabels, sortedSlots, userSelectableSlotTypes, validateSlots } from "@/lib/schedule";
 import type {
   DayTemplatePayload,
   GoalPayload,
@@ -365,7 +365,7 @@ function DayPayloadEditor({ payload, onChange }: { payload: Partial<DayTemplateP
           <div key={index} className="grid grid-cols-[1fr_120px_90px_90px_auto] items-center gap-2">
             <input className="input py-1 text-xs" value={slot.title} onChange={(e) => updateSlot(index, { title: e.target.value })} />
             <select className="input py-1 text-xs" value={slot.type} onChange={(e) => updateSlot(index, { type: e.target.value as ScheduleSlotType })}>
-              {slotTypes.map((type) => <option key={type} value={type}>{slotTypeLabels[type]}</option>)}
+              {userSelectableSlotTypes.map((type) => <option key={type} value={type}>{slotTypeLabels[type]}</option>)}
             </select>
             <input className="input py-1 text-xs" type="time" value={slot.startTime} onChange={(e) => updateSlot(index, { startTime: e.target.value })} />
             <input className="input py-1 text-xs" type="time" value={slot.endTime} onChange={(e) => updateSlot(index, { endTime: e.target.value })} />

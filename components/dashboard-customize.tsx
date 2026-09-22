@@ -36,6 +36,10 @@ export function DashboardCustomizeDialog({
             <X className="h-4 w-4" />
           </button>
         </div>
+        <p className="mb-3 text-xs text-ink-500">
+          Focus timer, Today&apos;s tasks, Daily schedule, and Reading now are always shown — these are the only cards this
+          controls.
+        </p>
         <div className="space-y-2">
           {OPTIONAL_DASHBOARD_WIDGETS.map((widget) => (
             <label key={widget.id} className="flex items-center gap-2 text-sm">

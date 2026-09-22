@@ -57,15 +57,19 @@ export default function DailyReviewPage() {
         <ReviewTextarea label="What was blocked?" value={blocked} onChange={setBlocked} />
         <ReviewTextarea label="What should carry forward?" value={carryForward} onChange={setCarryForward} />
         <div className="grid gap-4 sm:grid-cols-2">
-          <Rating label="Focus" value={focusRating} onChange={setFocusRating} />
-          <Rating label="Energy" value={energyRating} onChange={setEnergyRating} />
+          <Rating label="Focus" value={focusRating} onChange={setFocusRating} lowLabel="Scattered" highLabel="Sharp" />
+          <Rating label="Energy" value={energyRating} onChange={setEnergyRating} lowLabel="Drained" highLabel="Energized" />
         </div>
         <div className="mt-5 flex items-center gap-3">
           <button className="btn-primary" onClick={save} disabled={saving}>{saving ? "Saving..." : "Save review"}</button>
           {message ? <p className="text-sm text-moss-700 dark:text-moss-400">{message}</p> : null}
         </div>
       </section>
-      {date === todayKey() ? <EveningRollupCard date={date} rollup={day?.rollup} /> : null}
+      {date === todayKey() ? (
+        <EveningRollupCard date={date} rollup={day?.rollup} />
+      ) : (
+        <p className="mb-4 text-xs text-ink-500">Suggestions for tomorrow only appear when reviewing today.</p>
+      )}
     </>
   );
 }
@@ -79,11 +83,27 @@ function ReviewTextarea({ label, value, onChange }: { label: string; value: stri
   );
 }
 
-function Rating({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+function Rating({
+  label,
+  value,
+  onChange,
+  lowLabel,
+  highLabel
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  lowLabel: string;
+  highLabel: string;
+}) {
   return (
     <label>
       <span className="label mb-2 block">{label} rating: {value}</span>
       <input className="w-full accent-moss-600" type="range" min={1} max={5} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      <div className="mt-1 flex justify-between text-xs text-ink-500">
+        <span>{lowLabel}</span>
+        <span>{highLabel}</span>
+      </div>
     </label>
   );
 }

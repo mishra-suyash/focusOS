@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { useFeatures } from "@/hooks/use-features";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { withModuleToggled } from "@/lib/features";
+import { dashboardWidgetsAfterModuleToggle, withModuleToggled } from "@/lib/features";
 import { computeNudges, type NudgeData } from "@/lib/nudges";
 import { todayKey } from "@/lib/dates";
 
@@ -53,7 +53,11 @@ export function NudgeBanner({ data }: { data: NudgeData }) {
   }
 
   function turnOn() {
-    update({ enabledModules: withModuleToggled(settings, nudge!.moduleId, true) });
+    const dashboardWidgets = dashboardWidgetsAfterModuleToggle(settings, nudge!.moduleId, true);
+    update({
+      enabledModules: withModuleToggled(settings, nudge!.moduleId, true),
+      ...(dashboardWidgets ? { dashboardWidgets } : {})
+    });
   }
 
   return (

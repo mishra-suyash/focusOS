@@ -55,7 +55,7 @@ interface FocusSessionContextValue {
    * lives in this provider (not a component that mounts/unmounts with the dashboard page), there's
    * no "consume once" dance needed — the caller (the dashboard page, reacting to its own
    * `?startFocus=1` query param) just calls this and clears the param itself. */
-  startFocus: (opts: { label: string; category: Category; slotId?: string }) => void;
+  startFocus: (opts: { label: string; category: Category; slotId?: string; taskId?: string }) => void;
 }
 
 const FocusSessionContext = createContext<FocusSessionContextValue | null>(null);
@@ -85,8 +85,21 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   // rather than decremented tick-by-tick so a throttled/backgrounded tab can't drift or stall.
   const [targetEndTime, setTargetEndTime] = useState<number | null>(null);
   const [cycle, setCycle] = useState(1);
-  const [label, setLabel] = useState("writing");
   const [category, setCategory] = useState<Category>("research");
+  const [label, setLabelState] = useState<string>(category);
+  // Once the user (or a linked-task pick) has set a label by hand, category changes stop
+  // overwriting it — otherwise every keystroke-free session would default to the literal string
+  // "writing" regardless of category (plan/13 A32).
+  const [labelTouched, setLabelTouched] = useState(false);
+
+  function setLabel(next: string) {
+    setLabelTouched(true);
+    setLabelState(next);
+  }
+
+  useEffect(() => {
+    if (!labelTouched) setLabelState(category);
+  }, [category, labelTouched]);
   const [taskId, setTaskId] = useState("");
   const [slotId, setSlotId] = useState<string | undefined>(undefined);
   const [pendingSession, setPendingSession] = useState<PendingSession | null>(null);
@@ -159,7 +172,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     // The tab may have been backgrounded well past the real end time before this effect got to run
     // — stamp completion at `targetEndTime`, not `Date.now()`, so a session doesn't get logged
     // hours late or land on the wrong day across a midnight boundary.
-    completeSession(targetEndTime ?? undefined);
+    completeSession({ endedAt: targetEndTime ?? undefined });
   }, [secondsLeft, running, user]);
 
   function toggleRunning() {
@@ -179,15 +192,19 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     setSecondsLeft(duration * 60);
   }
 
-  function completeSession(endedAt?: number) {
+  function completeSession(opts?: { endedAt?: number; elapsedMinutes?: number }) {
     setRunning(false);
     setTargetEndTime(null);
     const data: PendingSession = {
       label,
       category,
       mode,
-      minutes: duration,
-      completedAt: new Date(endedAt ?? Date.now()).toISOString(),
+      // A real timeout (the natural-completion effect below, which never passes elapsedMinutes)
+      // logs the full configured length since the session genuinely ran that long; a manual
+      // "Finish" click passes actual elapsed time instead, so stopping 30 seconds in doesn't award
+      // full credit (plan/13 A6).
+      minutes: opts?.elapsedMinutes ?? duration,
+      completedAt: new Date(opts?.endedAt ?? Date.now()).toISOString(),
       cycle,
       taskId: taskId || undefined,
       slotId
@@ -205,19 +222,31 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       productivityRating: survey?.productivityRating,
       comment: survey?.comment || undefined
     });
-    if (data.mode === "work" && data.taskId) {
+    // A6/A7 (plan/13) — `minutes` is now the real elapsed time, not always the full configured
+    // length, so crediting a task's pomodoro count still needs its own floor: without one, clicking
+    // Finish moments after Start (or after "start focus from a block", now that A7 can supply a
+    // taskId immediately) would award a full completed-pomodoro for a near-zero-minute session.
+    const MIN_MINUTES_FOR_TASK_CREDIT = 5;
+    if (data.mode === "work" && data.taskId && data.minutes >= MIN_MINUTES_FOR_TASK_CREDIT) {
       await incrementTaskCompletedPomodoros(user!.uid, data.taskId);
     }
     const nextMode: TimerMode = data.mode === "work" ? (data.cycle % 4 === 0 ? "long_break" : "short_break") : "work";
     if (data.mode === "work") setCycle((current) => current + 1);
     setMode(nextMode);
+    // Reset per finished session rather than once per provider lifetime, so the category default
+    // resumes for the next *unrelated* session — but only once nothing is linked any more. While a
+    // task stays linked, its title should keep winning across repeat sessions against it; resetting
+    // unconditionally here would otherwise overwrite that title with the bare category slug the
+    // moment the first session against it ends, even though the same task is still selected
+    // (plan/13 A32).
+    if (!data.taskId) setLabelTouched(false);
   }
 
-  function startFocus(opts: { label: string; category: Category; slotId?: string }) {
+  function startFocus(opts: { label: string; category: Category; slotId?: string; taskId?: string }) {
     setLabel(opts.label);
     setCategory(opts.category);
     setSlotId(opts.slotId);
-    setTaskId("");
+    setTaskId(opts.taskId ?? "");
     setMode("work");
     const totalSeconds = work * 60;
     setSecondsLeft(totalSeconds);
@@ -248,7 +277,11 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     applyPreset,
     toggleRunning,
     reset,
-    finishNow: () => completeSession(),
+    finishNow: () => {
+      const remainingSeconds = targetEndTime == null ? secondsLeft : Math.max(0, Math.ceil((targetEndTime - Date.now()) / 1000));
+      const elapsedMinutes = Math.max(0, Math.round((duration * 60 - remainingSeconds) / 60));
+      completeSession({ elapsedMinutes });
+    },
     startFocus
   };
 

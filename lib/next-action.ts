@@ -69,13 +69,17 @@ export function pickNextAction({
   }
 
   const openTasks = tasks.filter((task) => task.status !== "done");
-  const topTask =
-    openTasks
-      .filter((task) => task.priority === "high" && task.dueDate && task.dueDate <= weekEndKey)
-      .sort((a, b) => (a.dueDate! < b.dueDate! ? -1 : 1))[0] ?? openTasks.find((task) => task.dueDate === todayKey);
+  const priorityTask = openTasks
+    .filter((task) => task.priority === "high" && task.dueDate && task.dueDate <= weekEndKey)
+    .sort((a, b) => (a.dueDate! < b.dueDate! ? -1 : 1))[0];
+  const fallbackTask = priorityTask ? undefined : openTasks.find((task) => task.dueDate === todayKey);
+  const topTask = priorityTask ?? fallbackTask;
 
   if (topTask) {
-    return { kind: "task", title: topTask.title, why: "Highest-priority open task due this week", href: "/tasks", taskId: topTask.id };
+    // The fallback branch is a plain first-match on "due today", not priority-sorted — it needs its
+    // own honest `why` rather than reusing the priority branch's claim (plan/13 A10).
+    const why = priorityTask ? "Highest-priority open task due this week" : "Due today";
+    return { kind: "task", title: topTask.title, why, href: "/tasks", taskId: topTask.id };
   }
 
   if (enabled("analytics") && loadIndexValue > 1.3) {

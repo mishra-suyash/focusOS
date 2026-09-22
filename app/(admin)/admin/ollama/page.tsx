@@ -28,6 +28,7 @@ export default function AdminOllamaPage() {
   const [config, setConfig] = useState<OllamaConfig | null>(null);
   const [available, setAvailable] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
+  const [maxConcurrent, setMaxConcurrent] = useState("0");
   const [error, setError] = useState("");
   const [test, setTest] = useState<TestResult | null>(null);
   const [testing, setTesting] = useState(false);
@@ -40,6 +41,7 @@ export default function AdminOllamaPage() {
       setConfig(result.config);
       setAvailable(result.available);
       setBaseUrl(result.config.baseUrl ?? "");
+      setMaxConcurrent(String(result.config.maxConcurrent));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load Ollama config.");
     }
@@ -115,9 +117,13 @@ export default function AdminOllamaPage() {
             {test.ok ? `Reachable in ${test.latencyMs}ms. Models: ${test.models.join(", ") || "(none)"}` : `Failed (${test.latencyMs}ms): ${test.error}`}
           </div>
         ) : null}
+        <p className="text-sm">
+          <span className="text-ink-500">Configured model: </span>
+          <span className="font-medium">{config.model || "(none selected)"}</span>
+        </p>
         {test?.ok && test.models.length > 0 ? (
           <label className="block text-sm">
-            Model
+            Change model (from the last test&apos;s results)
             <select className="input mt-1" value={config.model ?? ""} onChange={(e) => save({ model: e.target.value })}>
               <option value="">(none selected)</option>
               {test.models.map((model) => (
@@ -133,12 +139,21 @@ export default function AdminOllamaPage() {
       <section className="card p-5">
         <label className="block text-sm">
           Max concurrent calls
-          <input
-            className="input mt-1 max-w-[120px]"
-            type="number"
-            value={config.maxConcurrent}
-            onChange={(e) => save({ maxConcurrent: Number(e.target.value) })}
-          />
+          <div className="mt-1 flex gap-2">
+            <input
+              className="input max-w-[120px]"
+              type="number"
+              value={maxConcurrent}
+              onChange={(e) => setMaxConcurrent(e.target.value)}
+            />
+            <button
+              className="btn-secondary py-1.5 text-xs"
+              disabled={saving || Number(maxConcurrent) === config.maxConcurrent}
+              onClick={() => save({ maxConcurrent: Number(maxConcurrent) })}
+            >
+              Save
+            </button>
+          </div>
         </label>
         <p className="mt-1 text-xs text-ink-500">Over the limit, calls skip straight to Claude rather than queueing.</p>
       </section>

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
+import { focusSection } from "@/components/empty-state";
 import { dayOfWeekLabels } from "@/lib/courses";
 import { deleteRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/firestore";
 import type { RecurringTaskTemplate } from "@/types";
@@ -69,9 +70,13 @@ export function RecurringCommitmentRow({ uid, template, courseName }: { uid: str
             {template.active ? "Pause" : "Resume"}
           </button>
           {isAutoRevision ? (
-            <span className="text-xs text-ink-400" title="Managed by this course's revision hours/week — clear the hours to stop it.">
+            <button
+              className="text-xs text-ink-400 underline-offset-2 hover:text-moss-700 hover:underline dark:hover:text-moss-400"
+              title="Managed by this course's revision hours/week — clear the hours to stop it."
+              onClick={() => template.courseId && focusSection(`revision-hours-${template.courseId}`)}
+            >
               Clear hours to stop
-            </span>
+            </button>
           ) : (
             <button className="text-ink-400 hover:text-red-600 disabled:opacity-50" onClick={remove} disabled={busy} aria-label="Delete recurring commitment">
               <Trash2 className="h-3.5 w-3.5" />

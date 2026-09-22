@@ -92,7 +92,7 @@ export function PaperNotesPanel({
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {note.kind === "todo" ? (
-                <button className="text-ink-400 hover:text-moss-700" onClick={() => promote(note)} aria-label="Promote to task">
+                <button className="text-ink-400 hover:text-moss-700" onClick={() => promote(note)} aria-label="Promote to task" title="Promote to task">
                   <ArrowUpRight className="h-3.5 w-3.5" />
                 </button>
               ) : null}

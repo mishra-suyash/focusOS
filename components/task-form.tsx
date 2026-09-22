@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { InfoHint } from "@/components/info-hint";
 import { MoreOptions } from "@/components/more-options";
 import { addDaysToKey, todayKey } from "@/lib/dates";
-import { categories, priorities, taskBuckets, taskBucketLabels } from "@/lib/options";
+import { categories, categoryLabels, priorities, taskBuckets, taskBucketLabels } from "@/lib/options";
 import type { Category, Course, NewTask, Priority, TaskBucket } from "@/types";
 
 const DEFAULT_EXTERNAL_LEAD_DAYS = [7, 2, 0];
@@ -84,7 +85,9 @@ export function TaskForm({
           <div className="grid gap-3 sm:grid-cols-3">
             <select className="input" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
               {categories.map((item) => (
-                <option key={item}>{item}</option>
+                <option key={item} value={item}>
+                  {categoryLabels[item]}
+                </option>
               ))}
             </select>
             <select className="input" value={priority} onChange={(e) => setPriority(e.target.value as Priority)}>
@@ -113,9 +116,10 @@ export function TaskForm({
               onChange={(e) => {
                 const nextCourseId = e.target.value;
                 setCourseId(nextCourseId);
-                // Defaults to the most common case (ordinary coursework) the moment a course is
-                // picked, rather than leaving the new weekly-bucket field silently unset.
-                setBucket(nextCourseId ? "assignment" : "");
+                // Only default the bucket the moment a course is first picked (empty -> a course).
+                // Switching between two already-selected courses, or clearing back to no course,
+                // preserves whatever bucket the user already chose instead of silently overwriting it.
+                if (!courseId && nextCourseId) setBucket("assignment");
               }}
               aria-label="Course"
             >
@@ -128,13 +132,19 @@ export function TaskForm({
             </select>
           ) : null}
           {courseId ? (
-            <select className="input" value={bucket} onChange={(e) => setBucket(e.target.value as TaskBucket)} aria-label="Weekly bucket">
-              {taskBuckets.map((item) => (
-                <option key={item} value={item}>
-                  {taskBucketLabels[item]}
-                </option>
-              ))}
-            </select>
+            <label className="text-xs text-ink-500">
+              <span className="inline-flex items-center gap-1">
+                Weekly bucket
+                <InfoHint term="weeklyBucket" />
+              </span>
+              <select className="input mt-1" value={bucket} onChange={(e) => setBucket(e.target.value as TaskBucket)} aria-label="Weekly bucket">
+                {taskBuckets.map((item) => (
+                  <option key={item} value={item}>
+                    {taskBucketLabels[item]}
+                  </option>
+                ))}
+              </select>
+            </label>
           ) : null}
         </MoreOptions>
       ) : null}

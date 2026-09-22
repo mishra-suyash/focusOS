@@ -59,7 +59,7 @@ export function DailyScheduleWidget({ schedule, tasks, compact = false }: { sche
     <section className={`card ${compact ? "p-4" : "p-5"}`}>
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <p className="label">Full-day schedule</p>
+          <p className="label">Daily schedule</p>
           <h2 className="mt-1 text-lg font-semibold">Today in progress</h2>
         </div>
         <Link href={`/plan/day?date=${schedule.dateKey}`} className="btn-secondary py-1.5">
@@ -129,27 +129,38 @@ export function DailyScheduleWidget({ schedule, tasks, compact = false }: { sche
               <TaskNames names={taskNamesForSlot(next, tasks)} />
             </>
           ) : (
-            <p className="text-sm text-ink-500">No upcoming slots left today.</p>
+            <p className="text-sm text-ink-500">No upcoming blocks left today.</p>
           )}
           <div className="mt-4 rounded-md bg-ink-50 p-3 text-sm dark:bg-ink-800">
-            {summary.completedSlots} of {summary.totalSlots} planned slots completed
+            {summary.completedSlots} of {summary.totalSlots} planned blocks marked complete
+            {summary.elapsedSlots > 0 ? (
+              <span className="block text-xs text-ink-500">
+                {summary.elapsedSlots} more {summary.elapsedSlots === 1 ? "has" : "have"} timed out without being marked
+              </span>
+            ) : null}
           </div>
         </div>
       </div>
       <div className={`${compact ? "mt-4 grid gap-2 md:grid-cols-2" : "mt-5 space-y-2"}`}>
         {(compact ? slots.filter((slot) => computeSlotStatus(slot, minute) !== "completed").slice(0, 4) : slots).map((slot) => {
           const status = computeSlotStatus(slot, minute);
+          // `computeSlotStatus` calls a block "completed" once its time has simply passed, same as
+          // everywhere else in the timeline UI (a reasonable *visual* "this is in the past" state) —
+          // but showing that word here would directly contradict the summary above, which now only
+          // counts a block explicitly marked done (plan/13 A9). Only the label changes; the marked-
+          // done case still reads "completed", genuinely.
+          const displayStatus = status === "completed" && slot.status !== "completed" ? "past" : status;
           return (
             <div key={slot.id} className={clsx("grid gap-2 rounded-md border p-2 text-xs sm:grid-cols-[88px_1fr_auto]", status === "active" ? "border-moss-600 bg-moss-600/5" : "border-ink-200 dark:border-ink-800")}>
               <span className="font-mono text-xs text-ink-500">{slot.startTime} - {slot.endTime}</span>
               <span className="font-medium">{slot.title}</span>
-              <span className="text-xs capitalize text-ink-500">{status}</span>
+              <span className="text-xs capitalize text-ink-500">{displayStatus}</span>
             </div>
           );
         })}
         {compact && slots.filter((slot) => computeSlotStatus(slot, minute) !== "completed").length > 4 ? (
           <Link href={`/plan/day?date=${schedule.dateKey}`} className="btn-secondary py-2 text-xs">
-            View all slots
+            View all blocks
           </Link>
         ) : null}
       </div>

@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * NOTE for maintainers: this route (`/review`, singular — the spaced-repetition "Revise" queue)
+ * is unrelated to `/reviews/daily` and `/reviews/weekly` (plural — the Daily wrap-up / Weekly
+ * check-in reflection pages). Also unrelated to a course's "Revision hours/week" field, which
+ * creates a plain recurring Task rather than feeding this queue. See plan/13's T5 — a real naming
+ * collision across three independent features, kept distinct in nav copy but not in route/code
+ * naming. Don't assume shared logic between these just because the names rhyme.
+ */
 import { orderBy } from "firebase/firestore";
 import { Sparkles } from "lucide-react";
 import Link from "next/link";
@@ -138,7 +146,12 @@ function ReviewPageContent() {
 
   return (
     <>
-      <SectionHeader title="Revise" eyebrow={`${queue.length} due now · ${overdueCount} overdue · ${reviewedCount} reviewed today`} />
+      <SectionHeader
+        title="Revise"
+        eyebrow={`${
+          queue.length < dueItems.length ? `${queue.length} of ${dueItems.length} due now (daily cap reached)` : `${queue.length} due now`
+        } · ${overdueCount} overdue · ${reviewedCount} reviewed today`}
+      />
       {current ? (
         group ? (
           <section className="card mx-auto max-w-3xl p-6">
@@ -209,7 +222,10 @@ function ReviewPageContent() {
         )
       ) : (
         <div className="card mx-auto max-w-xl p-10 text-center">
-          <p className="text-sm text-ink-600 dark:text-ink-300">Cards appear after you log a class or save a paper for later.</p>
+          <p className="text-sm text-ink-600 dark:text-ink-300">
+            Cards appear after you log a class, save a paper for later, grade a Deep dive structure-recall, or start revision on a
+            paper set.
+          </p>
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             <Link href="/courses" className="btn-primary px-3 py-1.5 text-xs">Log a class</Link>
             <Link href="/papers" className="btn-secondary px-3 py-1.5 text-xs">Add a paper</Link>

@@ -2,9 +2,16 @@
 
 import { X } from "lucide-react";
 
-/** Plan §5's table, condensed to the renames most likely to be noticed — the full table also
+/**
+ * Plan §5's table, condensed to the renames most likely to be noticed — the full table also
  * lives in the README glossary for anyone who wants every row. Exported for reuse on /help
- * (plan §11.2's U6 row), so the glossary there and this one-time dialog never drift apart. */
+ * (plan §11.2's U6 row), so the glossary there and this one-time dialog never drift apart.
+ *
+ * Naming note (plan/13 C16): despite the filename, this is a static, hardcoded glossary plus a
+ * one-time "we renamed things" modal — not a user-customizable renaming tool. Don't build a
+ * "let users rename their own vocabulary" feature on top of this file expecting it to already
+ * support that; it doesn't.
+ */
 export const RENAMES: { was: string; now: string; hint?: string }[] = [
   { was: "Load Index (LI)", now: "Workload", hint: "How much you've done today compared with what today asked for" },
   { was: "Debt", now: "Catch-up hours", hint: "Planned work you didn't get to over the last two weeks" },

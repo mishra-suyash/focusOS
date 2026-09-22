@@ -28,7 +28,7 @@ export function LoadIndexWidget({
       </div>
       <p className="text-3xl font-semibold leading-none">{snapshot.value.toFixed(2)}</p>
       <p className="mt-2 text-xs text-ink-500">
-        {snapshot.actualMinutes}m done of {snapshot.requiredMinutes}m required today
+        {snapshot.actualMinutes}m done of {Math.max(snapshot.requiredMinutes, 30)}m required today
       </p>
       {debtHours !== undefined || streak !== undefined ? (
         <div className="mt-3 flex gap-4 border-t border-ink-100 pt-2 text-xs text-ink-500 dark:border-ink-800">

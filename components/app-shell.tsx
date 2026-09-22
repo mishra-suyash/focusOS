@@ -104,7 +104,8 @@ function SidebarNav({
   moreOpen,
   setMoreOpen,
   pathname,
-  onNavigate
+  onNavigate,
+  hiddenModuleCount = 0
 }: {
   primaryItems: NavItem[];
   moreItems: NavItem[];
@@ -113,6 +114,7 @@ function SidebarNav({
   setMoreOpen: (fn: (current: boolean) => boolean) => void;
   pathname: string;
   onNavigate?: () => void;
+  hiddenModuleCount?: number;
 }) {
   return (
     <nav className="flex-1 space-y-1">
@@ -138,6 +140,15 @@ function SidebarNav({
         </div>
       ) : null}
       {adminItem ? <NavLink item={adminItem} pathname={pathname} onNavigate={onNavigate} /> : null}
+      {hiddenModuleCount > 0 ? (
+        <Link
+          href="/settings/features"
+          onClick={onNavigate}
+          className="block rounded-md px-3 py-2 text-xs text-ink-400 outline-none transition hover:bg-ink-100 hover:text-ink-600 focus:ring-2 focus:ring-moss-500 dark:text-ink-500 dark:hover:bg-ink-800 dark:hover:text-ink-300"
+        >
+          +{hiddenModuleCount} more module{hiddenModuleCount === 1 ? "" : "s"} available
+        </Link>
+      ) : null}
     </nav>
   );
 }
@@ -191,6 +202,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const visible = NAV_ITEMS.filter((item) => !item.moduleId || isEnabled(item.moduleId));
   const primaryItems = visible.filter((item) => item.group === "primary");
   const moreItems = visible.filter((item) => item.group === "more");
+  // plan/13 D12 — module-gated nav items just vanish with no in-nav cue that more exist, once a
+  // returning user has dismissed onboarding. A real discovery path already exists (Settings ->
+  // "Manage features"), this just keeps a persistent, low-key pointer to it.
+  const hiddenModuleCount = NAV_ITEMS.filter((item) => item.moduleId && !isEnabled(item.moduleId)).length;
   const adminItem = role === "owner" || role === "admin" ? { href: "/admin", label: "Admin", icon: ShieldCheck, group: "primary" as const } : null;
 
   return (
@@ -211,6 +226,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             moreOpen={moreOpen}
             setMoreOpen={setMoreOpen}
             pathname={pathname}
+            hiddenModuleCount={hiddenModuleCount}
           />
         </div>
         <div className="border-t border-ink-200 pt-2 dark:border-ink-800">
@@ -242,6 +258,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               setMoreOpen={setMoreOpen}
               pathname={pathname}
               onNavigate={() => setMobileNavOpen(false)}
+              hiddenModuleCount={hiddenModuleCount}
             />
             <div className="border-t border-ink-200 pt-2 dark:border-ink-800">
               <NavLink item={SETTINGS_ITEM} pathname={pathname} onNavigate={() => setMobileNavOpen(false)} />

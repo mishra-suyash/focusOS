@@ -1,7 +1,8 @@
 "use client";
 
 import { orderBy } from "firebase/firestore";
-import { Copy, Plus, Star, Trash2 } from "lucide-react";
+import { Copy, Lock, Plus, Star, Trash2 } from "lucide-react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { DayTimelineEditor } from "@/components/plan/day-timeline-editor";
@@ -26,12 +27,13 @@ import {
 } from "@/lib/firestore";
 import {
   createSlot,
+  isLockedSlot,
   materializeSlots,
   minutesFromTime,
   scheduleFromTemplate,
   slotTypeLabels,
-  slotTypes,
   sortedSlots,
+  userSelectableSlotTypes,
   validateSlots
 } from "@/lib/schedule";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
@@ -62,7 +64,7 @@ function DayPlannerContent() {
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses, loading: coursesLoading } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: terms, loading: termsLoading } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
-  const { settings, loaded: settingsLoaded } = useUserSettings();
+  const { settings, loaded: settingsLoaded, update: updateSettings } = useUserSettings();
   const { catalog } = useTemplateCatalog();
   const schedule = schedules.find((item) => item.dateKey === dateKey);
   // Routine-Blocks-and-AI-Templates spec §2.4 — this date's class + enabled routine blocks,
@@ -81,6 +83,8 @@ function DayPlannerContent() {
   const [templateDescription, setTemplateDescription] = useState("");
   const [galleryOpen, setGalleryOpen] = useState(false);
   const errors = validateSlots(slots);
+  const [templateUpdateId, setTemplateUpdateId] = useState("");
+  const [templateUpdateMessage, setTemplateUpdateMessage] = useState<{ text: string; isError: boolean } | null>(null);
 
   useEffect(() => {
     setDateKey(searchParams.get("date") ?? todayKey());
@@ -132,11 +136,41 @@ function DayPlannerContent() {
     setTemplateDescription("");
   }
 
+  const needsTerm = courses.length > 0 && isBreakMode(terms, dateKey);
+  const NEW_DAY_VIEW_HINT_KEY = "planDayTimelineCallout";
+  const showNewDayViewCallout = !timelineEditorEnabled && !(settings.dismissedHints ?? []).includes(NEW_DAY_VIEW_HINT_KEY);
+
   return (
     <>
       <SectionHeader title="Day" eyebrow={friendlyDate(dateKey)}>
         <input className="input max-w-48" type="date" value={dateKey} onChange={(event) => setDateKey(event.target.value)} />
       </SectionHeader>
+      {showNewDayViewCallout ? (
+        <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+          <span>
+            There&apos;s a newer day view with drag-and-drop, autosave, undo/redo, and AI templates — try it from Settings → Features.
+          </span>
+          <div className="flex shrink-0 gap-2">
+            <Link href="/settings/features" className="btn-secondary py-1 text-xs">
+              Try the new day view
+            </Link>
+            <button
+              className="btn-secondary py-1 text-xs"
+              onClick={() => updateSettings({ dismissedHints: [...(settings.dismissedHints ?? []), NEW_DAY_VIEW_HINT_KEY] })}
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {needsTerm ? (
+        <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+          <span>You have courses, but no active term — class blocks won&apos;t show here until one covers this date.</span>
+          <Link href="/courses" className="btn-secondary py-1 text-xs">
+            Set up a term
+          </Link>
+        </div>
+      ) : null}
       <div className={timelineEditorEnabled ? "grid gap-6" : "grid gap-6 xl:grid-cols-[320px_1fr]"}>
         {!timelineEditorEnabled ? (
           <aside className="space-y-6">
@@ -244,6 +278,7 @@ function DayPlannerContent() {
                 schedule={schedule ?? null}
                 wantedLockedSlots={wantedLockedSlots}
                 tasks={tasks}
+                templates={templates}
                 onSlotsChange={setSlots}
               />
             )
@@ -281,21 +316,42 @@ function DayPlannerContent() {
             <div className="mt-6">
               <h3 className="mb-3 text-sm font-semibold">Update existing template from this day</h3>
               <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                <select id="template-update-select" className="input" defaultValue="">
+                <select
+                  className="input"
+                  value={templateUpdateId}
+                  onChange={(event) => {
+                    setTemplateUpdateId(event.target.value);
+                    setTemplateUpdateMessage(null);
+                  }}
+                >
                   <option value="" disabled>Select template</option>
                   {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
                 </select>
                 <button
                   className="btn-secondary"
-                  onClick={() => {
-                    const select = document.getElementById("template-update-select") as HTMLSelectElement | null;
-                    const template = templates.find((item) => item.id === select?.value);
-                    if (user && template && errors.length === 0) updateDayTemplate(user.uid, template.id, { slots: sortedSlots(slots) });
+                  onClick={async () => {
+                    const template = templates.find((item) => item.id === templateUpdateId);
+                    if (!template) {
+                      setTemplateUpdateMessage({ text: "Pick a template first.", isError: true });
+                      return;
+                    }
+                    if (errors.length > 0) {
+                      setTemplateUpdateMessage({ text: "Fix today's block errors above before updating a template from it.", isError: true });
+                      return;
+                    }
+                    if (!user) return;
+                    await updateDayTemplate(user.uid, template.id, { slots: sortedSlots(slots) });
+                    setTemplateUpdateMessage({ text: `"${template.name}" updated from today's blocks.`, isError: false });
                   }}
                 >
                   Update template blocks
                 </button>
               </div>
+              {templateUpdateMessage ? (
+                <p className={`mt-2 text-xs ${templateUpdateMessage.isError ? "text-red-600 dark:text-red-400" : "text-moss-600 dark:text-moss-400"}`}>
+                  {templateUpdateMessage.text}
+                </p>
+              ) : null}
             </div>
           ) : null}
         </section>
@@ -330,17 +386,28 @@ function SlotEditor({
   onMove: (direction: "up" | "down") => void;
 }) {
   const selectedTaskIds = new Set(slot.assignedTaskIds ?? []);
+  const isLocked = isLockedSlot(slot);
+  const isClass = slot.type === "class";
   return (
     <article className="rounded-md border border-ink-200 p-4 dark:border-ink-800">
+      {isLocked ? (
+        <div className="mb-3 flex items-center gap-2 rounded-md border border-fuchsia-500/40 bg-fuchsia-500/10 px-2.5 py-2 text-xs text-fuchsia-800 dark:text-fuchsia-200">
+          <Lock className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">{isClass ? "Class block — locked here." : "Routine block — locked here."}</span>
+          <Link href={isClass ? "/courses" : "/settings/routine"} className="font-medium underline">
+            {isClass ? "Edit course schedule" : "Edit in Settings"}
+          </Link>
+        </div>
+      ) : null}
       <div className="grid gap-3 lg:grid-cols-[1fr_120px_120px]">
-        <input className="input" value={slot.title} onChange={(event) => onChange({ ...slot, title: event.target.value })} />
-        <input className="input" type="time" value={slot.startTime} onChange={(event) => onChange({ ...slot, startTime: event.target.value })} />
-        <input className="input" type="time" value={slot.endTime} onChange={(event) => onChange({ ...slot, endTime: event.target.value })} />
+        <input className="input" value={slot.title} disabled={isLocked} onChange={(event) => onChange({ ...slot, title: event.target.value })} />
+        <input className="input" type="time" value={slot.startTime} disabled={isLocked} onChange={(event) => onChange({ ...slot, startTime: event.target.value })} />
+        <input className="input" type="time" value={slot.endTime} disabled={isLocked} onChange={(event) => onChange({ ...slot, endTime: event.target.value })} />
       </div>
       <div className="mt-3">
         <MoreOptions>
-          <select className="input" value={slot.type} onChange={(event) => onChange({ ...slot, type: event.target.value as ScheduleSlotType })}>
-            {slotTypes.map((type) => <option key={type} value={type}>{slotTypeLabels[type]}</option>)}
+          <select className="input" value={slot.type} disabled={isLocked} onChange={(event) => onChange({ ...slot, type: event.target.value as ScheduleSlotType })}>
+            {userSelectableSlotTypes.map((type) => <option key={type} value={type}>{slotTypeLabels[type]}</option>)}
           </select>
           <div className="grid gap-3 lg:grid-cols-[1fr_180px]">
             <textarea className="input min-h-20" value={slot.note ?? ""} onChange={(event) => onChange({ ...slot, note: event.target.value })} placeholder="Optional note" />
@@ -379,7 +446,7 @@ function SlotEditor({
           <button className="btn-secondary py-1.5 text-xs" onClick={() => onMove("up")} disabled={index === 0}>Move up</button>
           <button className="btn-secondary py-1.5 text-xs" onClick={() => onMove("down")}>Move down</button>
         </div>
-        <button className="btn-secondary py-1.5 text-xs text-red-600" onClick={onDelete}>Delete block</button>
+        <button className="btn-secondary py-1.5 text-xs text-red-600" onClick={onDelete} disabled={isLocked}>Delete block</button>
       </div>
     </article>
   );

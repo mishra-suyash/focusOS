@@ -11,11 +11,14 @@ export default function AdminSettingsPage() {
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [maxActiveUsersInput, setMaxActiveUsersInput] = useState("");
 
   const load = useCallback(async () => {
     if (!user) return;
     try {
-      setSettings(await adminFetch<AdminSettings>(user, "/api/admin/settings"));
+      const result = await adminFetch<AdminSettings>(user, "/api/admin/settings");
+      setSettings(result);
+      setMaxActiveUsersInput(String(result.maxActiveUsers));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load settings.");
     }
@@ -70,10 +73,36 @@ export default function AdminSettingsPage() {
             <option value="invite">Invite only</option>
             <option value="closed">Closed</option>
           </select>
+          <span className="mt-1 block text-xs text-ink-500">
+            Only gates brand-new accounts (identified by matching creation/last-sign-in time) — never affects anyone already signed up,
+            and never affects anonymous &quot;guest testing&quot; sign-ins (disable those separately below, under Sign-in methods).
+          </span>
         </label>
+      </section>
+
+      <section className="card mb-4 space-y-3 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-500">Budget estimate</h2>
         <label className="block text-sm">
-          Max active users
-          <input className="input mt-1 max-w-[120px]" type="number" value={settings.maxActiveUsers} onChange={(e) => save({ maxActiveUsers: Number(e.target.value) })} />
+          Users assumed for budget estimate
+          <div className="mt-1 flex gap-2">
+            <input
+              className="input max-w-[120px]"
+              type="number"
+              value={maxActiveUsersInput}
+              onChange={(e) => setMaxActiveUsersInput(e.target.value)}
+            />
+            <button
+              className="btn-secondary py-1.5 text-xs"
+              disabled={saving || Number(maxActiveUsersInput) === settings.maxActiveUsers}
+              onClick={() => save({ maxActiveUsers: Number(maxActiveUsersInput) })}
+            >
+              Save
+            </button>
+          </div>
+          <span className="mt-1 block text-xs text-ink-500">
+            Not a cap — just how many users the Overview page&apos;s &quot;Month-to-date AI spend&quot; ceiling assumes when multiplying by the per-user
+            budget. Doesn&apos;t limit signups or disable anyone.
+          </span>
         </label>
       </section>
 

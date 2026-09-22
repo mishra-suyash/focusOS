@@ -38,6 +38,7 @@ export default function CalendarPage() {
   });
 
   const today = todayKey();
+  const needsTerm = courses.length > 0 && isBreakMode(terms, today);
 
   return (
     <>
@@ -52,6 +53,30 @@ export default function CalendarPage() {
           </button>
         </div>
       </SectionHeader>
+      {needsTerm ? (
+        <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
+          <span>
+            You have courses, but no active term — class blocks won&apos;t show on Calendar or Plan/Day until one covers today.
+          </span>
+          <Link href="/courses" className="btn-secondary py-1 text-xs">
+            Set up a term
+          </Link>
+        </div>
+      ) : null}
+      <div className="mb-2 flex flex-wrap gap-3 text-xs text-ink-500">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-fuchsia-500/60" />
+          Class
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-sky-500/60" />
+          Assessment due
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-amberline/60" />
+          Task due
+        </span>
+      </div>
       <div className="card overflow-hidden p-0">
         <div className="grid grid-cols-7 border-b border-ink-200 text-xs font-semibold uppercase text-ink-500 dark:border-ink-800">
           {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
@@ -66,7 +91,7 @@ export default function CalendarPage() {
             const classes = isBreakMode(terms, dateKey) ? [] : courseSlotsForDate(courses, dateKey);
             const dueTasks = tasks.filter((task) => task.dueDate === dateKey);
             const dueCheckpoints = allCheckpoints.filter((checkpoint) => checkpoint.dueAt === dateKey);
-            const hasSchedule = schedules.some((schedule) => schedule.dateKey === dateKey);
+            const hasSchedule = schedules.some((schedule) => schedule.dateKey === dateKey && schedule.slots.length > 0);
             return (
               <Link
                 key={dateKey}
@@ -81,7 +106,7 @@ export default function CalendarPage() {
                   >
                     {format(day, "d")}
                   </span>
-                  {hasSchedule ? <span className="h-1.5 w-1.5 rounded-full bg-moss-500" aria-label="Schedule planned" /> : null}
+                  {hasSchedule ? <span className="h-1.5 w-1.5 rounded-full bg-moss-500" title="Schedule planned" aria-label="Schedule planned" /> : null}
                 </div>
                 <div className="mt-1 space-y-0.5">
                   {classes.slice(0, 2).map((slot) => (
@@ -99,6 +124,11 @@ export default function CalendarPage() {
                       {task.title}
                     </p>
                   ))}
+                  {classes.length > 2 || dueTasks.length > 2 ? (
+                    <p className="truncate px-1 text-ink-500">
+                      +{Math.max(0, classes.length - 2) + Math.max(0, dueTasks.length - 2)} more
+                    </p>
+                  ) : null}
                 </div>
               </Link>
             );

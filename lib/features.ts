@@ -1,3 +1,4 @@
+import { resolveDashboardWidgets, type DashboardWidgetId } from "@/lib/dashboard-widgets";
 import type { PackId } from "@/types";
 
 /**
@@ -74,7 +75,7 @@ export const FEATURE_MODULES: Record<ModuleId, FeatureModule> = {
   weeklyCheckin: { id: "weeklyCheckin", label: "Weekly check-in", description: "A short weekly review of long-running goals." },
   workload: { id: "workload", label: "Workload", description: "How much you've done today compared with what today asked for." },
   analytics: { id: "analytics", label: "Analytics", description: "Trends across tasks, focus sessions, and load." },
-  insights: { id: "insights", label: "Insights", description: "AI-generated daily insight summaries." },
+  insights: { id: "insights", label: "AI Insights", description: "AI-generated daily insight summaries." },
   /**
    * plan/05.FocusOS-v2-Plan-Day-Timeline.md §7.3 registered this as a `hidden` rollout flag through
    * DP0–DP5 while the new editor was being built. DP5 shipped it; the user has since chosen to
@@ -133,6 +134,27 @@ export function withModuleToggled(settings: { packId?: PackId; enabledModules?: 
     }
   }
   return Array.from(current).filter((id) => !CORE_MODULES.includes(id));
+}
+
+/**
+ * "Workload" is presented to users as one on/off concept, but it's actually backed by two
+ * independent settings: this module flag (`enabledModules`, gates the heads-up banner/nav) and a
+ * separate dashboard-widget flag (`dashboardWidgets`, lib/dashboard-widgets.ts — gates whether the
+ * card actually renders on the Dashboard). Every place that lets someone "turn Workload on/off"
+ * (the nudge banner, Settings → Features, `ModuleGate`'s disabled-route prompt) needs to flip both,
+ * or the module toggle changes nothing anyone can see (plan/13 C1). A no-op for every other module,
+ * which has no matching dashboard widget to sync.
+ */
+export function dashboardWidgetsAfterModuleToggle(
+  settings: { packId?: PackId; dashboardWidgets?: string[] },
+  moduleId: ModuleId,
+  enabled: boolean
+): DashboardWidgetId[] | undefined {
+  if (moduleId !== "workload") return undefined;
+  const widgets = resolveDashboardWidgets(settings);
+  if (enabled) widgets.add("workload");
+  else widgets.delete("workload");
+  return Array.from(widgets);
 }
 
 /** Which module each alert's source concept belongs to (plan §9.2: the heads-up banner only shows alerts whose source module is enabled). */

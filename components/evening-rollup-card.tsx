@@ -5,9 +5,8 @@ import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { appendProposedSlotToSchedule, createTask, saveDayFields } from "@/lib/firestore";
 import { todayKey } from "@/lib/dates";
+import { categories as CATEGORIES, categoryLabels } from "@/lib/options";
 import type { Category, EveningRollup, ProposalDecision, ProposedSlot, ProposedTask } from "@/types";
-
-const CATEGORIES: Category[] = ["research", "coding", "reading", "writing", "admin", "personal"];
 
 /**
  * Accept/Edit/Dismiss for tomorrow's proposed plan (plan §10.1). Nothing here
@@ -160,7 +159,7 @@ function ProposedTaskRow({
       <select className="input py-1 text-xs" value={category} onChange={(e) => setCategory(e.target.value as Category)}>
         {CATEGORIES.map((c) => (
           <option key={c} value={c}>
-            {c}
+            {categoryLabels[c]}
           </option>
         ))}
       </select>

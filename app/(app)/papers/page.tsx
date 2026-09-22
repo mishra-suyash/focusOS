@@ -5,6 +5,7 @@ import { ExternalLink, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState, focusSection } from "@/components/empty-state";
+import { InfoHint } from "@/components/info-hint";
 import { PaperForm } from "@/components/paper-form";
 import { PaperGroupsPanel } from "@/components/paper-groups-panel";
 import { SectionHeader } from "@/components/section-header";
@@ -132,7 +133,10 @@ export default function PapersPage() {
                     <div className="h-full bg-moss-600" style={{ width: `${paper.progress ?? 0}%` }} />
                   </div>
                   {totalReadingMinutes(sessions, paper.id) > 0 ? (
-                    <p className="mt-1 text-xs text-ink-500 dark:text-ink-400">{formatReadingMinutes(totalReadingMinutes(sessions, paper.id))}</p>
+                    <p className="mt-1 flex items-center gap-1 text-xs text-ink-500 dark:text-ink-400">
+                      {formatReadingMinutes(totalReadingMinutes(sessions, paper.id))}
+                      <InfoHint term="readingTime" />
+                    </p>
                   ) : null}
                   {paper.tags.length > 0 ? (
                     <div className="mt-2 flex flex-wrap gap-1">

@@ -196,6 +196,10 @@ export default function SettingsPage() {
               Revision schedule: {DEFAULT_LADDER.join(", ")} days. Overflow past today&apos;s cap rolls forward, it never disappears. Your plan&apos;s ceiling is{" "}
               {tierLimits.maxRevisionsPerDay} items / {tierLimits.maxRevisionMinutesPerDay} min.
             </p>
+            <p className="text-xs text-ink-500">
+              Your Focus timer&apos;s work session length (currently {settings.workMinutes ?? 25}m, changed via a preset on the timer itself)
+              also sizes revision time estimates, course weekly-hours totals, and Plan block durations — not just focus sessions.
+            </p>
           </div>
         </section>
         <section className="card p-5">

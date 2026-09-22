@@ -32,7 +32,7 @@ import {
   syncRevisionTemplate
 } from "@/lib/courses";
 import { todayKey } from "@/lib/dates";
-import { computeCourseCoverage, loadIndexBand, loadIndexBandStyles } from "@/lib/loadindex";
+import { computeCourseCoverage, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import { taskBucketLabels, taskBuckets } from "@/lib/options";
 import {
   createCheckpoint,
@@ -348,25 +348,36 @@ function CourseCard({
       ) : null}
 
       <div className="mt-3 space-y-1.5">
-        <p className="label mb-1 flex items-center gap-1">
-          This week&apos;s buckets
-          <InfoHint term="revisionHoursPerWeek" />
-        </p>
+        <p className="label mb-1">This week&apos;s buckets</p>
         {taskBuckets.map((bucket) => {
           const target = bucketWeeklyTarget(course, bucket, linkedGoals);
           const scheduled = scheduledMinutesThisWeek(courseTasks, course.id, bucket, workMinutes);
           const done = completedMinutesThisWeek(courseTasks, course.id, bucket, workMinutes);
           if (bucket === "goal") {
-            return <BucketRow key={bucket} label={taskBucketLabels[bucket]} target={target} scheduled={scheduled} done={done} />;
-          }
-          if (bucket === "revision") {
             return (
               <BucketRow
                 key={bucket}
                 label={taskBucketLabels[bucket]}
+                infoHint="bucketGoal"
                 target={target}
                 scheduled={scheduled}
                 done={done}
+                linkedGoals={linkedGoals}
+              />
+            );
+          }
+          if (bucket === "revision") {
+            const revisionTemplate = recurringTemplates.find((template) => template.generatedFrom === "courseRevisionTarget");
+            return (
+              <BucketRow
+                key={bucket}
+                id={`revision-hours-${course.id}`}
+                label={taskBucketLabels[bucket]}
+                infoHint="revisionHoursPerWeek"
+                target={target}
+                scheduled={scheduled}
+                done={done}
+                paused={Boolean(revisionTemplate && !revisionTemplate.active)}
                 editableHours={revisionHours}
                 onEditableHoursChange={setRevisionHours}
                 onSave={saveRevisionHours}
@@ -380,6 +391,7 @@ function CourseCard({
             <BucketRow
               key={bucket}
               label={taskBucketLabels[bucket]}
+              infoHint="bucketAssignmentBacklog"
               target={target}
               scheduled={scheduled}
               done={done}
@@ -421,6 +433,7 @@ function CourseCard({
             {generating ? "Generating..." : "Generate now"}
           </button>
         </div>
+        <p className="mb-2 text-xs text-ink-500">Generates due tasks for every course&apos;s recurring commitments, not just this one.</p>
         {generateError ? <p className="mb-2 text-xs text-red-600 dark:text-red-400">{generateError}</p> : null}
         <div className="space-y-2">
           {recurringTemplates.map((template) => (
@@ -534,15 +547,21 @@ function formatHours(minutes: number): string {
  */
 function BucketRow({
   label,
+  infoHint,
   target,
   scheduled,
   done,
   editableHours,
   onEditableHoursChange,
   onSave,
-  saving
+  saving,
+  linkedGoals,
+  paused,
+  id
 }: {
+  id?: string;
   label: string;
+  infoHint?: "revisionHoursPerWeek" | "bucketAssignmentBacklog" | "bucketGoal";
   target: number;
   scheduled: number;
   done: number;
@@ -550,11 +569,19 @@ function BucketRow({
   onEditableHoursChange?: (value: string) => void;
   onSave?: () => void;
   saving?: boolean;
+  /** plan/13 B6 — only meaningful for the read-only "goal" row, so the target/hours can link straight to the goal(s) it comes from instead of leaving a user to hunt for it on /goals. */
+  linkedGoals?: Goal[];
+  /** plan/13 B10 — the Revision row's own auto-generated task can be paused by hand without the hours target changing, which otherwise leaves this row looking like it's still being pursued. */
+  paused?: boolean;
 }) {
   const band = target > 0 ? loadIndexBand(scheduled / target) : null;
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-md bg-ink-50 px-2 py-1.5 text-xs dark:bg-ink-800">
-      <span className="w-20 shrink-0 font-medium">{label}</span>
+    <div id={id} className="flex flex-wrap items-center gap-2 rounded-md bg-ink-50 px-2 py-1.5 text-xs dark:bg-ink-800">
+      <span className="inline-flex w-20 shrink-0 items-center gap-1 font-medium">
+        {label}
+        {infoHint ? <InfoHint term={infoHint} /> : null}
+      </span>
+      {paused ? <span className="text-amber-700 dark:text-amber-400">(auto-task paused)</span> : null}
       {onEditableHoursChange && onSave ? (
         <>
           <input
@@ -570,10 +597,25 @@ function BucketRow({
             {saving ? "Saving..." : "Save"}
           </button>
         </>
+      ) : target > 0 ? (
+        <span className="text-ink-500">
+          {formatHours(target)}/week (from{" "}
+          {(linkedGoals ?? []).map((goal, index) => (
+            <span key={goal.id}>
+              {index > 0 ? ", " : ""}
+              <Link href={`/goals#goal-${goal.id}`} className="underline hover:text-moss-700 dark:hover:text-moss-400">
+                {goal.title}
+              </Link>
+              {goal.linked.courseIds.length > 1 ? ` (shared with ${goal.linked.courseIds.length - 1} other course${goal.linked.courseIds.length - 1 === 1 ? "" : "s"})` : ""}
+            </span>
+          ))}
+          )
+        </span>
       ) : (
-        <span className="text-ink-500">{target > 0 ? `${formatHours(target)}/week (from linked goals)` : "No linked goals"}</span>
+        <span className="text-ink-500">No linked goals</span>
       )}
       <span className={`ml-auto rounded px-1.5 py-0.5 font-medium ${band ? loadIndexBandStyles[band] : "text-ink-500"}`}>
+        {band ? `${loadIndexBandLabels[band]} · ` : ""}
         {formatHours(done)} done · {formatHours(scheduled)} scheduled{target > 0 ? ` · ${formatHours(target)} target` : ""}
       </span>
     </div>
@@ -625,6 +667,7 @@ function CheckpointRow({ courseId, checkpoint, topics }: { courseId: string; che
             {checkpointTypeLabels[checkpoint.type]}
           </span>
           <span>{checkpoint.title}</span>
+          {checkpoint.weightPct != null ? <span className="text-xs text-ink-500">({checkpoint.weightPct}%)</span> : null}
           {checkpoint.requiresPrep ? <Star className="h-3 w-3 text-amberline" aria-label="Needs prep" /> : null}
         </div>
         <div className="flex items-center gap-2">

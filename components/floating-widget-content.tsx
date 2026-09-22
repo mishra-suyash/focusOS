@@ -3,7 +3,7 @@
 import { Droplets, Pause, Play, X } from "lucide-react";
 import { useFocusSession } from "@/components/focus-session-provider";
 import { useWorkdaySession } from "@/components/workday-session-provider";
-import { useDay } from "@/hooks/use-day";
+import { useLiveLoadIndex } from "@/hooks/use-live-load-index";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { todayKey } from "@/lib/dates";
 import { resolveFloatingWidgetItems } from "@/lib/floating-widget";
@@ -12,7 +12,7 @@ import { resolveFloatingWidgetItems } from "@/lib/floating-widget";
  * The floating widget's actual content — the only component ever rendered inside the Document
  * Picture-in-Picture window (via a React portal, see `floating-widget-button.tsx`). All four items
  * from the plan doc are on by default (§3–4): the focus timer, current focus, the hydration/break
- * nudge, and today's Load Index — never a generic reminders feed or motivational text (plan §3,
+ * nudge, and today's Workload — never a generic reminders feed or motivational text (plan §3,
  * §12), but otherwise everything the plan recommends keeping, shown, not tucked behind toggles.
  */
 export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
@@ -20,7 +20,7 @@ export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
   const items = resolveFloatingWidgetItems(settings);
   const { modeLabel, secondsLeft, running, progress, label, toggleRunning } = useFocusSession();
   const { reminder, acknowledgeReminder, dismissReminder } = useWorkdaySession();
-  const { day } = useDay(todayKey());
+  const loadIndex = useLiveLoadIndex(todayKey());
 
   const minutes = Math.floor(secondsLeft / 60)
     .toString()
@@ -79,11 +79,10 @@ export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
         </section>
       ) : null}
 
-      {/* Reads the last cron-computed snapshot on `Day.loadIndex`, not a live recompute. */}
-      {items.has("loadIndex") && day?.loadIndex ? (
+      {items.has("loadIndex") ? (
         <section className="card p-3 text-sm">
-          <p className="label">Load Index</p>
-          <p className="mt-0.5 text-xl font-semibold">{day.loadIndex.value.toFixed(2)}</p>
+          <p className="label">Workload</p>
+          <p className="mt-0.5 text-xl font-semibold">{loadIndex.value.toFixed(2)}</p>
         </section>
       ) : null}
     </div>

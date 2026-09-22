@@ -258,7 +258,7 @@ function GoalCard({
   }
 
   return (
-    <div className="card space-y-3 p-4">
+    <div id={`goal-${goal.id}`} className="card space-y-3 p-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="font-medium">{goal.title}</p>

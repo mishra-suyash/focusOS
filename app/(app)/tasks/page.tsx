@@ -20,10 +20,10 @@ import type { Category, Course, Priority, RecurringTaskTemplate, Task, TaskStatu
 
 export default function TasksPage() {
   const { user } = useAuth();
-  const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: tasks, loading: tasksLoading } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: recurringTemplates } = useUserCollection<RecurringTaskTemplate>("recurringTaskTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
-  const [view, setView] = useState("inbox");
+  const [view, setView] = useState("all");
   const [category, setCategory] = useState<Category | "all">("all");
   const [priority, setPriority] = useState<Priority | "all">("all");
   const [status, setStatus] = useState<TaskStatus | "all">("all");
@@ -35,7 +35,7 @@ export default function TasksPage() {
 
   const filtered = tasks.filter((task) => {
     const viewMatch =
-      view === "inbox" ||
+      view === "all" ||
       (view === "today" && task.dueDate === today) ||
       // F6 (plan §11.2) — bounded to this Mon-Sun; anything past Sunday shows under "Upcoming" instead.
       (view === "week" && task.dueDate && task.dueDate >= week && task.dueDate <= weekEnd) ||
@@ -68,7 +68,7 @@ export default function TasksPage() {
           <div className="card mb-4 p-4">
             <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <select className="input" value={view} onChange={(e) => setView(e.target.value)}>
-                <option value="inbox">Inbox</option>
+                <option value="all">All</option>
                 <option value="today">Today</option>
                 <option value="week">This week</option>
                 <option value="upcoming">Upcoming</option>
@@ -98,7 +98,7 @@ export default function TasksPage() {
               ) : null}
             </div>
           </div>
-          {tasks.length === 0 ? (
+          {tasksLoading ? null : tasks.length === 0 ? (
             <EmptyState
               sentence="Everything you need to get done, research or not."
               primary={{ label: "Add a task", onClick: () => focusSection("task-quick-add") }}

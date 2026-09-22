@@ -77,8 +77,12 @@ function InsightsPageContent() {
       ) : null}
       {health ? (
         <section className="mb-4 card flex flex-wrap items-center gap-4 p-3 text-xs text-ink-500 dark:text-ink-400">
-          <span>Claude: {health.providers.claude.configured ? (health.providers.claude.open ? "circuit open" : "ready") : "not configured"}</span>
-          <span>Gemini: {health.providers.gemini.configured ? (health.providers.gemini.open ? "circuit open" : "ready") : "not configured"}</span>
+          <span>
+            Claude: {health.providers.claude.configured ? (health.providers.claude.open ? "paused after repeated failures, retrying automatically" : "ready") : "not configured"}
+          </span>
+          <span>
+            Gemini: {health.providers.gemini.configured ? (health.providers.gemini.open ? "paused after repeated failures, retrying automatically" : "ready") : "not configured"}
+          </span>
           <span>Ollama: {health.providers.ollama.enabled ? (health.providers.ollama.available ? "reachable" : "unreachable") : "disabled"}</span>
           <span>
             Budget: ${health.budget.spentUsd.toFixed(2)} / ${health.budget.capUsd.toFixed(2)} ({Math.round(health.budget.pct * 100)}%)
@@ -88,8 +92,8 @@ function InsightsPageContent() {
       {todayInsight ? (
         <section className="card p-5">
           <p className="label mb-2">
-            {todayInsight.provider} · {todayInsight.source === "cron" ? "generated automatically this morning" : "generated on demand"}
-            {todayInsight.degraded ? " · rule-based fallback" : ""}
+            {todayInsight.degraded ? "Rule-based" : todayInsight.provider} ·{" "}
+            {todayInsight.source === "cron" ? "generated automatically this morning" : "generated on demand"}
           </p>
           <p className="text-base">{todayInsight.summary}</p>
           <ul className="mt-4 space-y-2">
@@ -102,7 +106,8 @@ function InsightsPageContent() {
         </section>
       ) : (
         <div className="card p-8 text-center text-sm text-ink-500 dark:text-ink-400">
-          No insight yet for today. Click &ldquo;Regenerate&rdquo; or wait for the scheduled morning run (requires an AI provider key configured).
+          No insight yet for today. Click &ldquo;Regenerate&rdquo; or wait for the scheduled morning run — works either way, even without an AI
+          provider key configured (you&apos;ll get a rule-based summary instead of an AI-written one).
         </div>
       )}
       <section className="mt-6">

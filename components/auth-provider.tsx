@@ -27,6 +27,9 @@ interface AuthContextValue {
   isDemoMode: boolean;
   /** Custom-claim role (admin panel §2) — null until the first ID token is read, "member" for any signed-in account with no claim set yet. */
   role: UserRole | null;
+  /** Set when the bootstrap call rejects a brand-new signup under admin/settings.signupMode ("invite"/"closed") — the account was already signed out server-side by then. `/login` surfaces this and clears it once shown. */
+  signupBlockedMessage: string | null;
+  clearSignupBlockedMessage: () => void;
   signInWithGoogle: () => Promise<void>;
   signInAsGuest: () => Promise<void>;
   signUpWithEmail: (email: string, password: string) => Promise<void>;
@@ -41,6 +44,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [role, setRole] = useState<UserRole | null>(null);
+  const [signupBlockedMessage, setSignupBlockedMessage] = useState<string | null>(null);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -63,7 +67,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // token in case either just changed the role claim (admin panel §2).
         try {
           const token = await currentUser.getIdToken();
-          await fetch("/api/admin/bootstrap", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+          const response = await fetch("/api/admin/bootstrap", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+          if (response.status === 403) {
+            const body = await response.json().catch(() => ({}));
+            setSignupBlockedMessage(body.error || "New sign-ups are currently restricted.");
+            if (auth) await signOut(auth);
+            return;
+          }
         } catch {
           // Best-effort — a failed bootstrap call never blocks sign-in.
         }
@@ -103,6 +113,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       loading,
       role,
+      signupBlockedMessage,
+      clearSignupBlockedMessage: () => setSignupBlockedMessage(null),
       isDemoMode: !isFirebaseConfigured,
       signInWithGoogle: async () => {
         if (!auth) return;
@@ -129,7 +141,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (auth) await signOut(auth);
       }
     }),
-    [loading, user, role]
+    [loading, user, role, signupBlockedMessage]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

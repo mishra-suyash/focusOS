@@ -33,9 +33,33 @@ export const copy = {
     label: "Revision hours/week",
     hint: "Auto-creates a weekly \"Revise\" task sized to this many hours — clear it to stop. Also counts toward this course's share of your daily workload."
   },
+  bucketAssignmentBacklog: {
+    label: "Assignment / Backlog",
+    hint: "Bookkeeping only — tracked here and shown below, but (unlike Revision) doesn't create a task or count toward your daily workload."
+  },
+  bucketGoal: {
+    label: "Goal",
+    hint: "Hours from a Goal linked to this course — edit the target on the Goals page, not here."
+  },
+  weeklyBucket: {
+    label: "Weekly bucket",
+    hint: "Which of the course's weekly buckets this task counts toward. Only Revision affects your daily workload or auto-creates anything — Assignment and Backlog are just for tracking on the course page."
+  },
+  readingTime: {
+    label: "Reading time",
+    hint: "Total time spent in the reading window — separate from Progress, which only tracks Skim/Read/Deep dive completion. Time spent doesn't move the bar."
+  },
+  paperProgress: {
+    label: "Progress",
+    hint: "Tracks only Skim/Read/Deep dive completion, not time spent reading — see Reading time for that."
+  },
   skim: { label: "Skim", hint: "Read a paper in stages (Keshav's three-pass method); stop whenever you have enough" },
-  read: { label: "Read" },
-  deepDive: { label: "Deep dive" },
+  skimDropParkRate: {
+    label: "Skim drop/park rate",
+    hint: "All-time share of Skim-verdict papers you chose to Drop or Park, rather than continue to Read — not filtered to this week."
+  },
+  read: { label: "Read", hint: "Grasp the content — Pass 2 of Keshav's three-pass method, after Skim decides this paper is worth it" },
+  deepDive: { label: "Deep dive", hint: "Re-implement or reproduce the core idea — opt-in; most papers never need this pass" },
   keepReading: { label: "Keep reading" },
   saveForLater: { label: "Save for later", hint: "Brings the paper back in ~6 months" },
   notRelevant: { label: "Not relevant" },
@@ -54,6 +78,10 @@ export const copy = {
   noTerm: { label: "No term" },
   yourDay: { label: "Your day", hint: "Starting it builds today's plan and turns on reminders" },
   focusSession: { label: "Focus session" },
+  focusCycle: {
+    label: "Cycle",
+    hint: "Which focus session you're on since your last long break — every 4th cycle earns a long break instead of a short one."
+  },
   focusTimer: { label: "Focus timer" },
   howDidThatGo: { label: "How did that go?" },
   dailyWrapUp: { label: "Daily wrap-up" },

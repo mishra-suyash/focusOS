@@ -11,7 +11,7 @@ export const FLOATING_WIDGET_ITEMS: { id: FloatingWidgetItemId; label: string; d
   { id: "timer", label: "Focus timer", defaultOn: true },
   { id: "currentFocus", label: "Current focus", defaultOn: true },
   { id: "hydrationNudge", label: "Hydration & break nudges", defaultOn: true },
-  { id: "loadIndex", label: "Today's Load Index", defaultOn: true }
+  { id: "loadIndex", label: "Today's Workload", defaultOn: true }
 ];
 
 /** Absent `floatingWidgetItems` = each item's own `defaultOn`. An explicit list always wins, even an empty one — same convention as `lib/dashboard-widgets.ts`. */

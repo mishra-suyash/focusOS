@@ -76,7 +76,10 @@ export default function AdminOverviewPage() {
           <section className="card p-5">
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-500">Month-to-date AI spend</h2>
             <p className="text-2xl font-semibold">
-              ${data.budget.spentUsd.toFixed(2)} <span className="text-sm font-normal text-ink-500">/ ${data.budget.capUsd.toFixed(2)}</span>
+              ${data.budget.spentUsd.toFixed(2)} <span className="text-sm font-normal text-ink-500">/ ${data.budget.capUsd.toFixed(2)} estimated cap</span>
+            </p>
+            <p className="mt-1 text-xs text-ink-500">
+              Not enforced — actual per-user budgets are what limit spend. This is just spend against Settings → Budget estimate&apos;s assumption.
             </p>
           </section>
 

@@ -75,7 +75,7 @@ function WeeklyReviewPageContent() {
         <div className="card p-4"><p className="label">Today focus minutes</p><p className="mt-2 text-3xl font-semibold">{metrics.focusedMinutes}</p></div>
         <div className="card p-4"><p className="label flex items-center gap-1">On-track streak<InfoHint term="onTrackStreak" /></p><p className="mt-2 text-3xl font-semibold">{streak}d</p></div>
         <div className="card p-4"><p className="label flex items-center gap-1">Catch-up hours (14-day)<InfoHint term="catchUpHours" /></p><p className="mt-2 text-3xl font-semibold">{debtHours}h</p></div>
-        <div className="card p-4"><p className="label">Skim drop/park rate</p><p className="mt-2 text-3xl font-semibold">{pass1DropRate(papers)}%</p></div>
+        <div className="card p-4"><p className="label flex items-center gap-1">Skim drop/park rate (all-time)<InfoHint term="skimDropParkRate" /></p><p className="mt-2 text-3xl font-semibold">{pass1DropRate(papers)}%</p></div>
       </div>
 
       <section className="card mb-6 max-w-4xl p-5">

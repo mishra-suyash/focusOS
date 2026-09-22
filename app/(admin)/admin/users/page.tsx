@@ -4,11 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { adminFetch } from "@/lib/admin-client";
 import { SectionHeader } from "@/components/section-header";
-import type { UserProfile, UserRole, UserStatus } from "@/types";
+import { DEFAULT_TIER_LIMITS } from "@/lib/tier-defaults";
+import type { TierLimits, UserProfile, UserRole, UserStatus } from "@/types";
 
 interface Tier {
   id: string;
   name: string;
+  isDefault: boolean;
+  limits: TierLimits;
 }
 
 export default function AdminUsersPage() {
@@ -23,6 +26,7 @@ export default function AdminUsersPage() {
   const [confirmEmail, setConfirmEmail] = useState("");
   const [exportFirst, setExportFirst] = useState(true);
   const [deleteResult, setDeleteResult] = useState<string>("");
+  const [revokedUid, setRevokedUid] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -72,8 +76,13 @@ export default function AdminUsersPage() {
   async function revoke(uid: string) {
     if (!user) return;
     setBusyUid(uid);
+    setRevokedUid(null);
     try {
       await adminFetch(user, `/api/admin/users/${uid}/revoke`, { method: "POST" });
+      // No table field changes from this action, so a reload wouldn't show anything either —
+      // this transient confirmation is the only feedback that it actually happened.
+      setRevokedUid(uid);
+      setTimeout(() => setRevokedUid((current) => (current === uid ? null : current)), 4000);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Force sign-out failed.");
     } finally {
@@ -124,6 +133,10 @@ export default function AdminUsersPage() {
         </button>
       </div>
 
+      <p className="mb-2 text-xs text-ink-500">
+        Role and Status both offer &quot;disabled&quot; — they&apos;re mirrored server-side (setting either flips the other), not two
+        independent switches to keep in sync by hand.
+      </p>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-left text-sm">
           <thead className="text-xs uppercase tracking-wide text-ink-500">
@@ -184,13 +197,27 @@ export default function AdminUsersPage() {
                   />
                 </td>
                 <td className="py-2 text-xs text-ink-500">
-                  ${row.monthlyBudgetUsd ?? "-"} / {row.blobQuotaMb ?? "-"} MB
+                  {(() => {
+                    const tier = tiers.find((item) => item.id === row.tierId) ?? tiers.find((item) => item.isDefault);
+                    const limits = tier?.limits ?? DEFAULT_TIER_LIMITS;
+                    const budget = row.monthlyBudgetUsd ?? limits.aiMonthlyBudgetUsd;
+                    const quota = row.blobQuotaMb ?? limits.blobQuotaMb;
+                    return (
+                      <>
+                        ${budget} {row.monthlyBudgetUsd === undefined ? <span className="italic">(tier)</span> : null} / {quota} MB{" "}
+                        {row.blobQuotaMb === undefined ? <span className="italic">(tier)</span> : null}
+                      </>
+                    );
+                  })()}
                 </td>
                 <td className="py-2">
-                  <div className="flex gap-1">
+                  <div className="flex flex-col items-start gap-1">
                     <button className="btn-secondary px-2 py-1 text-xs" onClick={() => revoke(row.uid)} disabled={busyUid === row.uid}>
                       Sign out
                     </button>
+                    {revokedUid === row.uid ? <span className="text-xs text-moss-600 dark:text-moss-400">Signed out</span> : null}
+                  </div>
+                  <div className="mt-1 flex gap-1">
                     {row.role !== "owner" ? (
                       <button className="btn-secondary px-2 py-1 text-xs text-red-600" onClick={() => setDeleteTarget(row)}>
                         Delete

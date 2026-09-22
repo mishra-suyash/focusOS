@@ -5,7 +5,7 @@ import { Lock, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { MoreOptions } from "@/components/more-options";
 import { TypedTimeInput } from "@/components/plan/typed-time-input";
-import { isLockedSlot, minutesFromTime, slotTypeLabels, slotTypes } from "@/lib/schedule";
+import { isLockedSlot, minutesFromTime, slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
 import { categoryForSlotType, rangeOverlapsSlots } from "@/lib/timeline";
 import type { ScheduleSlot, ScheduleSlotType, Task } from "@/types";
 
@@ -90,8 +90,13 @@ export function BlockInspector({
         <TypedTimeInput value={slot.endTime} onChange={(endTime) => commitTime("endTime", endTime)} disabled={isLocked} />
       </div>
       {timeError ? <p className="text-xs text-red-600 dark:text-red-400">{timeError}</p> : null}
-      <select className="input" value={slot.type} onChange={(event) => onChange({ ...slot, type: event.target.value as ScheduleSlotType })}>
-        {slotTypes.map((type) => (
+      <select
+        className="input"
+        value={slot.type}
+        disabled={isLocked}
+        onChange={(event) => onChange({ ...slot, type: event.target.value as ScheduleSlotType })}
+      >
+        {userSelectableSlotTypes.map((type) => (
           <option key={type} value={type}>
             {slotTypeLabels[type]}
           </option>

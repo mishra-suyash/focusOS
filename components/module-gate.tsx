@@ -3,7 +3,7 @@
 import { useAuth } from "@/components/auth-provider";
 import { useFeatures } from "@/hooks/use-features";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { FEATURE_MODULES, withModuleToggled, type ModuleId } from "@/lib/features";
+import { FEATURE_MODULES, dashboardWidgetsAfterModuleToggle, withModuleToggled, type ModuleId } from "@/lib/features";
 
 /**
  * Wraps a page whose module can be turned off (plan §9.2). A disabled module's URL shows a
@@ -24,7 +24,16 @@ export function ModuleGate({ moduleId, children }: { moduleId: ModuleId; childre
       <h1 className="text-xl font-semibold">{moduleInfo.label} is turned off.</h1>
       <p className="mt-2 text-sm text-ink-500">{moduleInfo.description}</p>
       {user ? (
-        <button className="btn-primary mt-4" onClick={() => update({ enabledModules: withModuleToggled(settings, moduleId, true) })}>
+        <button
+          className="btn-primary mt-4"
+          onClick={() => {
+            const dashboardWidgets = dashboardWidgetsAfterModuleToggle(settings, moduleId, true);
+            update({
+              enabledModules: withModuleToggled(settings, moduleId, true),
+              ...(dashboardWidgets ? { dashboardWidgets } : {})
+            });
+          }}
+        >
           Turn it on?
         </button>
       ) : null}

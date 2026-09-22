@@ -81,7 +81,16 @@ export function TaskList({
                       {task.status !== "done" ? ` · ${Math.max(0, task.estimatedPomodoros - (task.completedPomodoros ?? 0))} left` : ""}
                     </span>
                   ) : null}
-                  <button className="hover:text-moss-700" onClick={() => onStatus(task, "in_progress")}>
+                  <button
+                    className={clsx(
+                      "rounded px-1.5 py-0.5 font-medium",
+                      task.status === "in_progress"
+                        ? "bg-moss-600/15 text-moss-700 dark:text-moss-400"
+                        : "text-ink-500 hover:text-moss-700"
+                    )}
+                    onClick={() => onStatus(task, task.status === "in_progress" ? "todo" : "in_progress")}
+                    aria-pressed={task.status === "in_progress"}
+                  >
                     In progress
                   </button>
                 </div>

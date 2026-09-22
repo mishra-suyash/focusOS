@@ -374,7 +374,9 @@ export function PlanTray({
                 }}
                 className="flex touch-none items-center gap-2 rounded-md border border-ink-200 px-2 py-1.5 text-xs dark:border-ink-800"
               >
-                <span className="flex-1 truncate">{task.title}</span>
+                <span className="flex-1 truncate">
+                  {task.title} · {taskBlockMinutes(task, workMinutes)}m
+                </span>
                 <button className="btn-secondary px-1.5 py-1 text-[11px]" onClick={() => scheduleTaskNow(task)} aria-label={`Schedule ${task.title}`}>
                   Schedule
                 </button>

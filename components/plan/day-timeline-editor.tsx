@@ -15,10 +15,23 @@ import { useDay } from "@/hooks/use-day";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { createDayTemplate, saveDayFields } from "@/lib/firestore";
-import { createSlot, formatMinutes, isLockedSlot, mergeMissingLockedSlots, minutesFromTime, minutesToTime, slotDuration, sortedSlots } from "@/lib/schedule";
+import {
+  createSlot,
+  formatMinutes,
+  isLockedSlot,
+  mergeMissingLockedSlots,
+  minutesFromTime,
+  minutesToTime,
+  scheduleFromTemplate,
+  slotDuration,
+  slotTypeLabels,
+  slotTypeStyles,
+  sortedSlots,
+  userSelectableSlotTypes
+} from "@/lib/schedule";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 import { MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay } from "@/lib/timeline";
-import type { DailySchedule, PomodoroSession, ScheduleSlot, Task } from "@/types";
+import type { DailySchedule, DayTemplate, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 const DEFAULT_SCROLL_MINUTE = 8 * 60;
 const DELETE_UNDO_WINDOW_MS = 6_000;
@@ -52,6 +65,7 @@ export function DayTimelineEditor({
   schedule,
   wantedLockedSlots,
   tasks,
+  templates,
   onSlotsChange
 }: {
   uid: string;
@@ -70,6 +84,11 @@ export function DayTimelineEditor({
    */
   wantedLockedSlots?: ScheduleSlot[];
   tasks: Task[];
+  /** plan/13 A18 — turning this editor on hid the classic aside's whole Templates panel, taking its
+   * only "Browse templates"/Apply action with it (this editor previously offered "Save as
+   * template" but nothing that pulled a template back onto the day). Passed in so that capability
+   * comes back without reopening the now-unreachable `TemplateGalleryDialog`. */
+  templates: DayTemplate[];
   onSlotsChange: (slots: ScheduleSlot[]) => void;
 }) {
   const isToday = dateKey === todayKey();
@@ -81,6 +100,9 @@ export function DayTimelineEditor({
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
+  const [applyTemplateOpen, setApplyTemplateOpen] = useState(false);
+  const [applyTemplateId, setApplyTemplateId] = useState("");
+  const [legendOpen, setLegendOpen] = useState(false);
   const [shiftMenuOpen, setShiftMenuOpen] = useState(false);
   const [shiftCustomMinutes, setShiftCustomMinutes] = useState("");
   const [announcement, setAnnouncement] = useState({ text: "", seq: 0 });
@@ -335,6 +357,18 @@ export function DayTimelineEditor({
     setSaveTemplateOpen(false);
   }
 
+  /** plan/13 A18 — the timeline editor's own "pull a template onto the day" action, mirroring the classic editor's `applyTemplate`. Re-merges `wantedLockedSlots` afterward so a class/routine block never gets clobbered by the template's own slots. */
+  function handleApplyTemplate() {
+    const template = templates.find((item) => item.id === applyTemplateId);
+    if (!template) return;
+    if (slots.length > 0 && !window.confirm(`Replace today's plan with "${template.name}"?`)) return;
+    const templateSlots = scheduleFromTemplate(template, dateKey).slots;
+    commitSlots(mergeMissingLockedSlots(templateSlots, wantedLockedSlots ?? []));
+    setApplyTemplateOpen(false);
+    setApplyTemplateId("");
+    announce(`Applied template "${template.name}".`);
+  }
+
   /** S1 "Running late? Shift rest of day" — the only place `Shift`-drag's ripple math is reachable without a pointer, and today-only (it anchors at `nowMinute`, which has no meaning on another date). */
   function handleShiftRestOfDay(minutesDelta: number) {
     setShiftMenuOpen(false);
@@ -436,8 +470,8 @@ export function DayTimelineEditor({
           <button
             className="btn-secondary py-1.5 text-xs"
             onClick={clearUnlockedSlots}
-            disabled={!slots.some((slot) => slot.type !== "class")}
-            title="Removes every block except classes"
+            disabled={!slots.some((slot) => !isLockedSlot(slot))}
+            title="Removes every block except classes and routine blocks"
           >
             <Eraser className="h-3.5 w-3.5" />
             Clear all
@@ -482,6 +516,33 @@ export function DayTimelineEditor({
             </div>
           ) : null}
           <div className="relative">
+            <button className="btn-secondary py-1.5 text-xs" onClick={() => setApplyTemplateOpen((open) => !open)} disabled={templates.length === 0}>
+              Apply template
+            </button>
+            {applyTemplateOpen ? (
+              <div className="absolute right-0 top-full z-20 mt-1 w-64 space-y-2 rounded-md border border-ink-200 bg-white p-3 shadow-lg dark:border-ink-700 dark:bg-ink-900">
+                <select className="input" value={applyTemplateId} onChange={(event) => setApplyTemplateId(event.target.value)}>
+                  <option value="" disabled>
+                    Select template
+                  </option>
+                  {templates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+                <div className="flex justify-end gap-2">
+                  <button className="btn-secondary py-1 text-xs" onClick={() => setApplyTemplateOpen(false)}>
+                    Cancel
+                  </button>
+                  <button className="btn-primary py-1 text-xs" onClick={handleApplyTemplate} disabled={!applyTemplateId}>
+                    Apply
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <div className="relative">
             <button className="btn-secondary py-1.5 text-xs" onClick={() => setSaveTemplateOpen((open) => !open)} disabled={slots.length === 0}>
               Save as template
             </button>
@@ -520,6 +581,23 @@ export function DayTimelineEditor({
         </div>
       ) : null}
 
+      <div className="mb-1 flex justify-end">
+        <div className="relative">
+          <button className="text-xs font-medium text-ink-500 underline-offset-2 hover:underline" onClick={() => setLegendOpen((open) => !open)}>
+            Block type colors
+          </button>
+          {legendOpen ? (
+            <div className="absolute right-0 top-full z-20 mt-1 grid w-56 grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-ink-200 bg-white p-3 text-xs shadow-lg dark:border-ink-700 dark:bg-ink-900">
+              {userSelectableSlotTypes.map((type) => (
+                <span key={type} className="inline-flex items-center gap-1.5">
+                  <span className={clsx("h-2.5 w-2.5 shrink-0 rounded-full border", slotTypeStyles[type])} />
+                  {slotTypeLabels[type]}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
       <DayStrip
         variant="full"
         slots={slots}

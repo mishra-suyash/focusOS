@@ -4,6 +4,7 @@ import { clsx } from "clsx";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import Link from "next/link";
 import { useFocusSession } from "@/components/focus-session-provider";
+import { InfoHint } from "@/components/info-hint";
 import { MoreOptions } from "@/components/more-options";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { categories } from "@/lib/options";
@@ -64,7 +65,16 @@ export function PomodoroTimer({
           <div className="h-full bg-moss-600 transition-all" style={{ width: `${progress}%` }} />
         </div>
         <div className={`${compact ? "text-5xl" : "text-6xl"} text-center font-semibold tabular-nums tracking-tight`}>{minutes}:{seconds}</div>
-        <p className="mt-2 text-center text-sm text-ink-500">Cycle {cycle} · {duration} minutes</p>
+        <p className="mt-2 flex items-center justify-center gap-1 text-center text-sm text-ink-500">
+          {mode === "work" ? (
+            <>
+              Cycle {cycle}
+              <InfoHint term="focusCycle" />· {duration} minutes
+            </>
+          ) : (
+            `${duration} minutes`
+          )}
+        </p>
       </div>
       {openTasks.length > 0 ? (
         <select

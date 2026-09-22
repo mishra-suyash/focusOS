@@ -6,7 +6,7 @@ import { SectionHeader } from "@/components/section-header";
 import { TypedTimeInput } from "@/components/plan/typed-time-input";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { DEFAULT_ROUTINE_BLOCKS } from "@/lib/routine";
-import { slotTypeLabels, slotTypes } from "@/lib/schedule";
+import { slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
 import type { RoutineBlock, ScheduleSlotType } from "@/types";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -14,7 +14,7 @@ const BUILTIN_IDS = new Set(DEFAULT_ROUTINE_BLOCKS.map((block) => block.id));
 // A routine block materializes as a locked slot alongside class blocks — "class" is reserved for
 // what `courseSlotsForDate` actually generates, so it's excluded here to avoid a routine block
 // that's indistinguishable from (and easily confused with) a real course meeting.
-const ROUTINE_SLOT_TYPES = slotTypes.filter((type) => type !== "class");
+const ROUTINE_SLOT_TYPES = userSelectableSlotTypes.filter((type) => type !== "class");
 
 /**
  * plan/07.FocusOS-v2-Routine-Blocks-and-AI-Templates.md §2.6 — Sleep/meals/Gym/custom recurring
@@ -73,9 +73,9 @@ export default function RoutineSettingsPage() {
                   </option>
                 ))}
               </select>
-              <TypedTimeInput className="input w-24" value={block.startTime} onChange={(time) => patch(block.id, { startTime: time })} />
+              <TypedTimeInput className="input w-24" value={block.startTime} onChange={(time) => patch(block.id, { startTime: time })} disabled={!block.enabled} />
               <span className="text-sm text-ink-500">to</span>
-              <TypedTimeInput className="input w-24" value={block.endTime} onChange={(time) => patch(block.id, { endTime: time })} />
+              <TypedTimeInput className="input w-24" value={block.endTime} onChange={(time) => patch(block.id, { endTime: time })} disabled={!block.enabled} />
               <label className="ml-auto flex items-center gap-1.5 text-sm">
                 <input type="checkbox" checked={block.enabled} onChange={(event) => patch(block.id, { enabled: event.target.checked })} />
                 Enabled
@@ -93,7 +93,8 @@ export default function RoutineSettingsPage() {
                   <button
                     key={day}
                     type="button"
-                    className={`rounded px-2 py-1 text-xs font-medium ${
+                    disabled={!block.enabled}
+                    className={`rounded px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
                       active ? "bg-moss-600/15 text-moss-700 dark:text-moss-400" : "bg-ink-100 text-ink-400 dark:bg-ink-800"
                     }`}
                     onClick={() => toggleDay(block, day)}

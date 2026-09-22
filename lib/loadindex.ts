@@ -75,7 +75,7 @@ export const loadIndexBandStyles: Record<LoadIndexBand, string> = {
   light: "bg-amberline/15 text-amber-700 dark:text-amber-300",
   on_track: "bg-moss-600/10 text-moss-700 dark:text-moss-400",
   ahead: "bg-sky-500/10 text-sky-700 dark:text-sky-300",
-  overrun: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+  overrun: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300"
 };
 
 /** Floors required at 30 minutes so a nearly-empty day doesn't divide-by-near-zero into a meaningless spike. */

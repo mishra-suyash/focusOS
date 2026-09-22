@@ -2,6 +2,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { InfoHint } from "@/components/info-hint";
 import { MoreOptions } from "@/components/more-options";
 import { dayOfWeekLabels } from "@/lib/courses";
 import type { CourseSession, NewCourse, Term } from "@/types";
@@ -74,7 +75,10 @@ export function CourseForm({ terms, onCreate }: { terms: Term[]; onCreate: (cour
             <input className="input mt-1" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} placeholder="Defaults to term end" />
           </label>
           <label className="text-xs text-ink-500">
-            Revision hours/week
+            <span className="inline-flex items-center gap-1">
+              Revision hours/week
+              <InfoHint term="revisionHoursPerWeek" />
+            </span>
             <input
               className="input mt-1"
               type="number"

@@ -60,6 +60,10 @@ export default function AdminUsagePage() {
 
           <section className="card p-5">
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-500">By task</h2>
+            <p className="mb-2 text-xs text-ink-500">
+              Internal AI task ids (from lib/ai/tasks.ts&apos;s registry) — no fixed expected volume per id, these are for spotting an
+              unexpected spike, not for reading at a glance.
+            </p>
             {Object.entries(report.byTask).map(([task, count]) => (
               <p key={task} className="text-sm">
                 {task}: {count}
@@ -69,6 +73,7 @@ export default function AdminUsagePage() {
 
           <section className="card p-5">
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-500">By provider</h2>
+            <p className="mb-2 text-xs text-ink-500">Which AI provider (Claude, Gemini, Ollama, or the rule-based fallback) actually served each call.</p>
             {Object.entries(report.byProvider).map(([provider, count]) => (
               <p key={provider} className="text-sm">
                 {provider}: {count}

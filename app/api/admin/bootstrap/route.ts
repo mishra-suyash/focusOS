@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { adminAuth } from "@/lib/firebase-admin";
-import { bootstrapOwnerIfNeeded } from "@/lib/admin-roles";
+import { bootstrapOwnerIfNeeded, enforceSignupMode } from "@/lib/admin-roles";
 import { claimInviteIfAny } from "@/lib/admin-invites";
 
 /**
@@ -20,6 +20,12 @@ export async function POST(request: Request) {
     const decoded = await adminAuth().verifyIdToken(token);
     const email = decoded.email ?? "";
     const bootstrapped = await bootstrapOwnerIfNeeded(decoded.uid, email);
+    if (!bootstrapped) {
+      const { allowed } = await enforceSignupMode(decoded.uid, email);
+      if (!allowed) {
+        return NextResponse.json({ error: "New sign-ups are currently restricted. Contact an admin for an invite." }, { status: 403 });
+      }
+    }
     await claimInviteIfAny(decoded.uid, email);
     return NextResponse.json({ bootstrapped });
   } catch {

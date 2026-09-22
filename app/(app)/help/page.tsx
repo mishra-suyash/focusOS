@@ -75,8 +75,9 @@ export default function HelpPage() {
             Turning features on or off
           </h2>
           <p className="text-sm text-ink-600 dark:text-ink-300">
-            Courses, Revise, Goals, Weekly check-in, Workload, and Analytics are optional — most packs start with only some
-            of them on. Turn any of them on or off any time, without losing anything already saved.
+            Paper tools, Courses, Revise, Goals, Weekly check-in, Workload, Analytics, AI Insights, and Plan&apos;s day-timeline
+            variant are optional — most packs start with only some of them on. Turn any of them on or off any time, without
+            losing anything already saved.
           </p>
           <Link href="/settings/features" className="btn-secondary mt-3 py-1.5 text-xs">
             Manage features

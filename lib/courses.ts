@@ -96,10 +96,17 @@ export function currentWeekDateKeys(date = new Date()): string[] {
 export function bucketWeeklyTarget(
   course: Pick<Course, "targetMinutesPerWeek" | "weeklyTargets">,
   bucket: TaskBucket,
-  linkedGoals: Pick<Goal, "targetHoursPerWeek">[]
+  linkedGoals: Pick<Goal, "targetHoursPerWeek" | "linked">[]
 ): number {
   if (bucket === "revision") return course.targetMinutesPerWeek ?? 0;
-  if (bucket === "goal") return linkedGoals.reduce((sum, goal) => sum + (goal.targetHoursPerWeek ?? 0) * 60, 0);
+  // plan/13 B5 — a goal's hours are shown once per linked course (not divided), so a 10h/week goal
+  // linked to 3 courses read as "10h/week" on each, easily mistaken for 30h total. Split evenly
+  // across however many courses that goal is linked to (`lib/goals.ts`'s `goalTargetMinutesForDay`
+  // already sums each goal only once, globally, for Workload — this only changes the per-course
+  // display, not the actual workload total).
+  if (bucket === "goal") {
+    return linkedGoals.reduce((sum, goal) => sum + ((goal.targetHoursPerWeek ?? 0) * 60) / Math.max(1, goal.linked.courseIds.length), 0);
+  }
   return course.weeklyTargets?.[bucket] ?? 0;
 }
 
