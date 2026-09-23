@@ -2,21 +2,33 @@ import crypto from "node:crypto";
 import { calendar_v3, google } from "googleapis";
 import { adminDb } from "@/lib/firebase-admin";
 import { effectiveCourseStatus } from "@/lib/courses";
-import { todayKey } from "@/lib/dates";
+import { addDaysToKey, todayKey } from "@/lib/dates";
+import { isLockedSlot } from "@/lib/schedule";
 import {
   DEFAULT_TIMEZONE,
   checkpointEventDraft,
   courseSessionEventDraft,
   googleEventIdForRefKey,
   hashEventDraft,
+  planBlockEventDraft,
+  planBlockRefKeyDateKey,
   planPushDiff,
   resolvePushEnabled,
   taskEventDraft,
   timedRecurringTemplateEventDraft,
   type GoogleCalendarLinkRecord,
-  type GoogleEventDraft
+  type GoogleEventDraft,
+  type PushPlanItem
 } from "@/lib/google-calendar";
-import type { Checkpoint, Course, GoogleCalendarConnection, GoogleCalendarLink, RecurringTaskTemplate, Task } from "@/types";
+import type { Checkpoint, Course, DailySchedule, GoogleCalendarConnection, GoogleCalendarLink, RecurringTaskTemplate, Task } from "@/types";
+
+/** §13 — how far ahead of today /plan/day blocks get pushed, mirroring the recurring-tasks cron's
+ * own rolling window (`addDaysToKey(today, 13)`): far enough to cover what a user has actually
+ * planned, not so far it pushes days that don't exist yet. A pushed link for a date outside this
+ * window (i.e. the day has since passed) is deliberately left alone rather than deleted — see
+ * `runGoogleCalendarPush`'s `consideredLinks` — so a day's calendar history survives after the day
+ * itself rolls out of the window. */
+const PLAN_BLOCK_WINDOW_DAYS = 13;
 
 /**
  * plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §3 — the narrowest scope set that covers Phase 1
@@ -189,9 +201,14 @@ export async function disconnect(uid: string) {
   await patchConnection(uid, { connected: false });
 }
 
+/** Thrown by both `calendarClientForUser` and `runGoogleCalendarPush`'s own guard — a shared
+ * constant so `runGoogleCalendarSync`'s catch can recognize "never connected" by identity rather
+ * than duplicating the string and risking the two drifting apart. */
+const NOT_CONNECTED_ERROR = "Not connected to Google Calendar.";
+
 async function calendarClientForUser(uid: string) {
   const refreshToken = await getRefreshToken(uid);
-  if (!refreshToken) throw new Error("Not connected to Google Calendar.");
+  if (!refreshToken) throw new Error(NOT_CONNECTED_ERROR);
   const client = newOAuthClient();
   client.setCredentials({ refresh_token: refreshToken });
   return google.calendar({ version: "v3", auth: client });
@@ -241,6 +258,19 @@ async function fetchPushableTasks(uid: string): Promise<Task[]> {
     .filter((task) => Boolean(task.dueDate) && !task.seriesId && task.status !== "done");
 }
 
+/** §13 — every DailySchedule in the push window, in one range query on `dateKey` (a plain string
+ * field, so a single-field range filter needs no composite index). */
+async function fetchPlanBlockSchedules(uid: string, fromDateKey: string, toDateKey: string): Promise<DailySchedule[]> {
+  const snapshot = await adminDb()
+    .collection("users")
+    .doc(uid)
+    .collection("dailySchedules")
+    .where("dateKey", ">=", fromDateKey)
+    .where("dateKey", "<=", toDateKey)
+    .get();
+  return snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as DailySchedule);
+}
+
 async function fetchExistingLinks(uid: string): Promise<GoogleCalendarLinkRecord[]> {
   const snapshot = await adminDb().collection("users").doc(uid).collection("googleCalendarLinks").get();
   return snapshot.docs.map((item) => {
@@ -254,6 +284,7 @@ function buildDesiredEvents(
   checkpoints: Array<Checkpoint & { courseLabel: string }>,
   templates: RecurringTaskTemplate[],
   tasks: Task[],
+  planBlockSchedules: DailySchedule[],
   pushEnabled: ReturnType<typeof resolvePushEnabled>,
   timezone: string
 ): GoogleEventDraft[] {
@@ -320,6 +351,31 @@ function buildDesiredEvents(
     }
   }
 
+  if (pushEnabled.planBlocks) {
+    for (const schedule of planBlockSchedules) {
+      for (const slot of schedule.slots) {
+        // Excludes class (already covered by courseSessionEventDraft), locked routine anchors
+        // (sleep/meal/gym — materialized into every day's slots by mergeMissingLockedSlots, so
+        // pushing them would mean the same block every day forever), and external (a slot pulled
+        // *from* Google in a future Phase 2 — pushing it back would be an immediate sync loop).
+        // `isLockedSlot` is exactly this set — see plan/13 A3 for why a hand-rolled equivalent of
+        // it drifts.
+        if (isLockedSlot(slot)) continue;
+        drafts.push(
+          planBlockEventDraft({
+            dateKey: schedule.dateKey,
+            slotId: slot.id,
+            title: slot.title,
+            note: slot.note,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            timezone
+          })
+        );
+      }
+    }
+  }
+
   return drafts;
 }
 
@@ -331,89 +387,133 @@ function buildDesiredEvents(
 export async function runGoogleCalendarPush(uid: string): Promise<{ created: number; updated: number; deleted: number }> {
   const connection = await getConnection(uid);
   if (!connection?.connected || !connection.focusOsCalendarId) {
-    throw new Error("Not connected to Google Calendar.");
+    throw new Error(NOT_CONNECTED_ERROR);
   }
 
   const pushEnabled = resolvePushEnabled(connection.pushEnabled);
   const timezone = (await adminDb().collection("users").doc(uid).collection("meta").doc("settings").get()).data()?.timezone ?? DEFAULT_TIMEZONE;
 
+  const today = todayKey();
+  const planBlockToDateKey = addDaysToKey(today, PLAN_BLOCK_WINDOW_DAYS);
+
   const courses = await fetchActiveCourses(uid);
-  const [checkpoints, templates, tasks, records] = await Promise.all([
+  const [checkpoints, templates, tasks, planBlockSchedules, records] = await Promise.all([
     fetchCheckpointsForCourses(uid, courses),
     fetchTimedActiveTemplates(uid),
     // Skipped entirely (not just filtered out later) when the toggle is off — no reason to read
     // every task on every sync for the common case where this category is disabled.
     pushEnabled.tasksWithDueDate ? fetchPushableTasks(uid) : Promise.resolve([]),
+    pushEnabled.planBlocks ? fetchPlanBlockSchedules(uid, today, planBlockToDateKey) : Promise.resolve([]),
     fetchExistingLinks(uid)
   ]);
 
-  const desired = buildDesiredEvents(courses, checkpoints, templates, tasks, pushEnabled, timezone);
-  const plan = planPushDiff(desired, records);
+  const desired = buildDesiredEvents(courses, checkpoints, templates, tasks, planBlockSchedules, pushEnabled, timezone);
+
+  // §13 — a planBlock link for a date outside the current window is left out of consideration
+  // entirely (not just "not desired"), so it's neither updated nor deleted: once a plan day rolls
+  // past the window, its pushed events are frozen as calendar history rather than auto-deleted the
+  // next cycle. Every other category has no such window and is always considered.
+  const consideredLinks = records.filter((link) => {
+    const blockDateKey = planBlockRefKeyDateKey(link.refKey);
+    if (blockDateKey === undefined) return true;
+    return blockDateKey >= today && blockDateKey <= planBlockToDateKey;
+  });
+
+  const plan = planPushDiff(desired, consideredLinks);
 
   const calendar = await calendarClientForUser(uid);
   const linksCollection = adminDb().collection("users").doc(uid).collection("googleCalendarLinks");
-  let created = 0;
-  let updated = 0;
-  let deleted = 0;
 
-  for (const item of plan) {
-    if (item.action === "create") {
-      // A deterministic id (googleEventIdForRefKey), not whatever id Google's response happens to
-      // return, is what makes this idempotent: if a prior sync crashed after `events.insert`
-      // succeeded but before the link doc below got written, this retry computes the exact same id
-      // and gets a 409 on an event that already exists — instead of Google minting a second,
-      // duplicate event this app has no record of.
-      const eventId = googleEventIdForRefKey(item.refKey);
-      try {
-        await calendar.events.insert({
-          calendarId: connection.focusOsCalendarId,
-          requestBody: { id: eventId, ...toEventRequestBody(item.draft) }
-        });
-      } catch (error) {
-        if (!isGoogleConflictError(error)) throw error;
-        // The 409 only proves an event already exists at this deterministic id — not that its
-        // content matches `item.draft`. If the link doc for this refKey was ever lost independently
-        // of the Google event (e.g. deleted out from under this collection without also deleting
-        // the event), this "create" is really the first sync to notice, and the event could still
-        // hold whatever content it had the last time a link *did* exist. Converge it explicitly
-        // rather than assuming it's already right — the same call the "update" branch below makes.
-        await calendar.events.update({
-          calendarId: connection.focusOsCalendarId,
-          eventId,
-          requestBody: toEventRequestBody(item.draft)
-        });
-      }
-      await linksCollection.doc(item.refKey).set({
-        googleEventId: eventId,
-        contentHash: hashEventDraft(item.draft),
-        updatedAt: new Date().toISOString()
+  // Bounded concurrency, not a plain sequential loop: a first sync (or one after a long gap) can
+  // carry 100+ items once planBlocks' up-to-14-day window is in the mix, and one `await` per item
+  // in series risks the route's own maxDuration. Google's per-user Calendar API rate limit has
+  // headroom for a handful of requests in flight at once.
+  const APPLY_CONCURRENCY = 5;
+  const outcomes: Array<"created" | "updated" | "deleted"> = [];
+  for (let index = 0; index < plan.length; index += APPLY_CONCURRENCY) {
+    const batch = plan.slice(index, index + APPLY_CONCURRENCY);
+    const batchOutcomes = await Promise.all(batch.map((item) => applyPushPlanItem(item, calendar, connection.focusOsCalendarId!, linksCollection)));
+    outcomes.push(...batchOutcomes);
+  }
+
+  return {
+    created: outcomes.filter((outcome) => outcome === "created").length,
+    updated: outcomes.filter((outcome) => outcome === "updated").length,
+    deleted: outcomes.filter((outcome) => outcome === "deleted").length
+  };
+}
+
+async function applyPushPlanItem(
+  item: PushPlanItem,
+  calendar: calendar_v3.Calendar,
+  calendarId: string,
+  linksCollection: FirebaseFirestore.CollectionReference
+): Promise<"created" | "updated" | "deleted"> {
+  if (item.action === "create") {
+    // A deterministic id (googleEventIdForRefKey), not whatever id Google's response happens to
+    // return, is what makes this idempotent: if a prior sync crashed after `events.insert`
+    // succeeded but before the link doc below got written, this retry computes the exact same id
+    // and gets a 409 on an event that already exists — instead of Google minting a second,
+    // duplicate event this app has no record of.
+    const eventId = googleEventIdForRefKey(item.refKey);
+    try {
+      await calendar.events.insert({
+        calendarId,
+        requestBody: { id: eventId, ...toEventRequestBody(item.draft) }
       });
-      created += 1;
-    } else if (item.action === "update") {
+    } catch (error) {
+      if (!isGoogleConflictError(error)) throw error;
+      // The 409 only proves an event already exists at this deterministic id — not that its
+      // content matches `item.draft`. If the link doc for this refKey was ever lost independently
+      // of the Google event (e.g. deleted out from under this collection without also deleting
+      // the event), this "create" is really the first sync to notice, and the event could still
+      // hold whatever content it had the last time a link *did* exist. Converge it explicitly
+      // rather than assuming it's already right — the same call the "update" branch below makes.
       await calendar.events.update({
-        calendarId: connection.focusOsCalendarId,
+        calendarId,
+        eventId,
+        requestBody: toEventRequestBody(item.draft)
+      });
+    }
+    await linksCollection.doc(item.refKey).set({
+      googleEventId: eventId,
+      contentHash: hashEventDraft(item.draft),
+      updatedAt: new Date().toISOString()
+    });
+    return "created";
+  }
+  if (item.action === "update") {
+    try {
+      await calendar.events.update({
+        calendarId,
         eventId: item.googleEventId,
         requestBody: toEventRequestBody(item.draft)
       });
-      await linksCollection.doc(item.refKey).set(
-        { googleEventId: item.googleEventId, contentHash: hashEventDraft(item.draft), updatedAt: new Date().toISOString() },
-        { merge: true }
-      );
-      updated += 1;
-    } else {
-      // A 404 here means the event was already removed on Google's side (e.g. the user deleted it
-      // by hand) — the link doc is stale either way, so it's still cleaned up below.
-      try {
-        await calendar.events.delete({ calendarId: connection.focusOsCalendarId, eventId: item.googleEventId });
-      } catch (error) {
-        if (!isGoogleNotFoundError(error)) throw error;
-      }
+    } catch (error) {
+      if (!isGoogleNotFoundError(error)) throw error;
+      // The event was removed on Google's side independently of this app (e.g. deleted by hand) —
+      // the link doc is stale, not this whole sync: clean it up and let the next cycle's diff see
+      // this refKey as unlinked and recreate it fresh, the same recovery the delete branch below
+      // already relies on. Left unhandled, this throw would abort every remaining batch in
+      // `runGoogleCalendarPush`'s `Promise.all`, wedging sync on one stale event indefinitely.
       await linksCollection.doc(item.refKey).delete();
-      deleted += 1;
+      return "deleted";
     }
+    await linksCollection.doc(item.refKey).set(
+      { googleEventId: item.googleEventId, contentHash: hashEventDraft(item.draft), updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
+    return "updated";
   }
-
-  return { created, updated, deleted };
+  // A 404 here means the event was already removed on Google's side (e.g. the user deleted it by
+  // hand) — the link doc is stale either way, so it's still cleaned up below.
+  try {
+    await calendar.events.delete({ calendarId, eventId: item.googleEventId });
+  } catch (error) {
+    if (!isGoogleNotFoundError(error)) throw error;
+  }
+  await linksCollection.doc(item.refKey).delete();
+  return "deleted";
 }
 
 function toEventRequestBody(draft: GoogleEventDraft): calendar_v3.Schema$Event {
@@ -453,6 +553,12 @@ export async function runGoogleCalendarSync(uid: string): Promise<{ created: num
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Sync failed.";
+    // A never-connected (or already-disconnected) uid has no connection doc to report into, and
+    // writing one here would create users/{uid}/integrations/googleCalendar for a user who never
+    // connected at all — a real risk now that this fires on every /plan/day autosave (§13's
+    // fire-and-forget push), not just a manual "Sync now" click from someone already on the
+    // Settings page.
+    if (message === NOT_CONNECTED_ERROR) throw error;
     // invalid_grant is Google's error when the user revoked access outside this app (plan §10) —
     // surfaced distinctly so Settings can tell the user to reconnect rather than just "try again".
     const revoked = message.toLowerCase().includes("invalid_grant");

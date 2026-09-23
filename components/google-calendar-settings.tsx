@@ -12,7 +12,8 @@ const PUSH_CATEGORY_LABELS: Record<keyof NonNullable<GoogleCalendarConnection["p
   courseSessions: "Course class times",
   checkpoints: "Assessment due dates",
   timedCommitments: "Timed recurring commitments (TA meets, office hours...)",
-  tasksWithDueDate: "Hand-created tasks with a due date"
+  tasksWithDueDate: "Hand-created tasks with a due date",
+  planBlocks: "Your /plan/day timeline blocks (next 14 days)"
 };
 
 /**
@@ -112,8 +113,9 @@ export function GoogleCalendarSettings() {
       {!isConnected ? (
         <div className="space-y-3">
           <p className="text-sm text-ink-600 dark:text-ink-300">
-            Pushes your class times, assessment due dates, and any timed recurring commitment onto a dedicated &ldquo;FocusOS&rdquo; calendar in
-            your Google account — it never touches your personal calendars.
+            Pushes your class times, assessment due dates, any timed recurring commitment, and the blocks on your /plan/day timeline (next 14
+            days) onto a dedicated &ldquo;FocusOS&rdquo; calendar in your Google account — it never touches your personal calendars. Syncs
+            automatically shortly after you edit, plus a daily reconciliation pass; &ldquo;Sync now&rdquo; is there if you want it sooner.
           </p>
           <button className="btn-primary" onClick={connect} disabled={connecting}>
             {connecting ? "Connecting..." : "Connect Google Calendar"}
@@ -142,10 +144,13 @@ export function GoogleCalendarSettings() {
               </label>
             ))}
           </div>
-          <button className="btn-secondary py-1.5 text-xs" onClick={syncNow} disabled={syncing}>
-            <RefreshCw className={syncing ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
-            {syncing ? "Syncing..." : "Sync now"}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button className="btn-secondary py-1.5 text-xs" onClick={syncNow} disabled={syncing}>
+              <RefreshCw className={syncing ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
+              {syncing ? "Syncing..." : "Sync now"}
+            </button>
+            <span className="text-xs text-ink-500">Also syncs on its own — shortly after you edit, plus once daily.</span>
+          </div>
           {lastSyncResult ? <p className="text-xs text-ink-500">{lastSyncResult}</p> : null}
         </div>
       )}

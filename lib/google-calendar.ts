@@ -14,7 +14,10 @@ export const DEFAULT_PUSH_ENABLED: NonNullable<GoogleCalendarConnection["pushEna
   courseSessions: true,
   checkpoints: true,
   timedCommitments: true,
-  tasksWithDueDate: false
+  tasksWithDueDate: false,
+  // Defaults on, unlike tasksWithDueDate: this category exists specifically because users expect
+  // the /plan/day timeline they actively edit to show up on their calendar without an extra step.
+  planBlocks: true
 };
 
 /** §4.2 — never dereference `connection.pushEnabled.courseSessions` directly; always through this. */
@@ -44,6 +47,24 @@ export function recurringTemplateRefKey(templateId: string): string {
 
 export function taskRefKey(taskId: string): string {
   return `task:${taskId}`;
+}
+
+/**
+ * §13 reconsideration — an individual /plan/day timeline block. Keyed on the slot's own stable
+ * `id` (unlike `CourseSession.id`, a `ScheduleSlot.id` doesn't get re-minted on save — see
+ * `mergeMissingLockedSlots`, which matches slots by `id` across edits), plus the day it belongs to
+ * so the same slot id reused on a different date can never collide.
+ */
+export function planBlockRefKey(dateKey: string, slotId: string): string {
+  return `planBlock:${dateKey}:${slotId}`;
+}
+
+/** Extracts the dateKey a planBlock ref key was built for, or `undefined` for any other category's
+ * ref key — lets the caller window-bound this one category without needing a separate field on the
+ * `GoogleCalendarLink` doc. */
+export function planBlockRefKeyDateKey(refKey: string): string | undefined {
+  if (!refKey.startsWith("planBlock:")) return undefined;
+  return refKey.split(":")[1];
 }
 
 /**
@@ -191,6 +212,29 @@ export function taskEventDraft(params: { taskId: string; title: string; dueDate:
     summary: title,
     start: { date: dueDate },
     end: { date: todayKeyPlusOne(dueDate) }
+  };
+}
+
+/** §13 — a single /plan/day timeline block, on the date it's scheduled. One event per slot (not
+ * one event per day) so each block's own start/end time shows up on the calendar the way the
+ * timeline itself shows it. Non-recurring: a plan day's blocks are edited freely and don't repeat
+ * by construction, unlike a course session or recurring commitment. */
+export function planBlockEventDraft(params: {
+  dateKey: string;
+  slotId: string;
+  title: string;
+  note?: string;
+  startTime: string;
+  endTime: string;
+  timezone: string;
+}): GoogleEventDraft {
+  const { dateKey, slotId, title, note, startTime, endTime, timezone } = params;
+  return {
+    refKey: planBlockRefKey(dateKey, slotId),
+    summary: title,
+    description: note,
+    start: { dateTime: `${dateKey}T${startTime}:00`, timeZone: timezone },
+    end: { dateTime: `${dateKey}T${endTime}:00`, timeZone: timezone }
   };
 }
 

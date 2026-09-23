@@ -2,11 +2,51 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { saveDailySchedule } from "@/lib/firestore";
+import { auth } from "@/lib/firebase";
 import type { ScheduleSlot } from "@/types";
 
 export type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error";
 
 const DEBOUNCE_MS = 1000;
+
+// Module-level, not a ref: a full push takes seconds and autosaves can land roughly a second apart,
+// so without this, back-to-back saves fire overlapping pushes that read the same `GoogleCalendarLink`
+// snapshot and race on the same docs (worst case, a stale-event 404 mid-update aborts one sync while
+// another is already mutating the same links). One in-flight push at a time, with at most one more
+// queued to catch whatever changed while it ran — same shape as this file's own `savingRef`/`pendingRef`
+// debounce-coalescing, just for the push instead of the save.
+let pushInFlight = false;
+let pushPending = false;
+
+/**
+ * plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §13 — the near-real-time half of "auto sync" for
+ * /plan/day blocks. Deliberately hangs off `writeNow`'s own success path rather than adding a
+ * second debounce layer: `scheduleSave`'s 1s timer already is "after the committed gesture settles,"
+ * so a push fired here happens once per autosave, never from inside a drag handler (this hook's own
+ * "zero writes during drag" guarantee extends to this call for the same reason). Best-effort and
+ * silent — a user with the integration off or disconnected just gets a fast, harmless 401/500 here,
+ * and any real failure is still visible next time they open Settings or the daily cron catches it.
+ */
+function triggerGoogleCalendarPush() {
+  if (pushInFlight) {
+    pushPending = true;
+    return;
+  }
+  const user = auth?.currentUser;
+  if (!user) return;
+  pushInFlight = true;
+  void user
+    .getIdToken()
+    .then((token) => fetch("/api/integrations/google-calendar/sync-now", { method: "POST", headers: { Authorization: `Bearer ${token}` } }))
+    .catch(() => undefined)
+    .finally(() => {
+      pushInFlight = false;
+      if (pushPending) {
+        pushPending = false;
+        triggerGoogleCalendarPush();
+      }
+    });
+}
 
 /**
  * plan/05.FocusOS-v2-Plan-Day-Timeline.md §6, DP2 — option B (autosave per committed gesture,
@@ -44,6 +84,7 @@ export function useDayAutosave({ uid, dateKey, templateId, remoteUpdatedAt }: { 
         const { updatedAt } = await saveDailySchedule(uid, { dateKey, templateId, slots });
         baselineUpdatedAtRef.current = updatedAt;
         setStatus("saved");
+        triggerGoogleCalendarPush();
       } catch {
         if (pendingRef.current === null) pendingRef.current = slots;
         setStatus("error");

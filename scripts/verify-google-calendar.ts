@@ -13,6 +13,9 @@ import {
   firstOccurrenceOnOrAfter,
   googleEventIdForRefKey,
   hashEventDraft,
+  planBlockEventDraft,
+  planBlockRefKey,
+  planBlockRefKeyDateKey,
   planPushDiff,
   recurringTemplateRefKey,
   resolvePushEnabled,
@@ -48,6 +51,9 @@ const SUN = "2026-09-06"; // Sunday
   check("checkpointRefKey", checkpointRefKey("ckpt1") === "checkpoint:ckpt1");
   check("recurringTemplateRefKey", recurringTemplateRefKey("t1") === "recurringTemplate:t1");
   check("taskRefKey", taskRefKey("task1") === "task:task1");
+  check("planBlockRefKey embeds date and slot id", planBlockRefKey("2026-09-10", "slot1") === "planBlock:2026-09-10:slot1");
+  check("planBlockRefKeyDateKey round-trips the date out of a planBlock ref key", planBlockRefKeyDateKey(planBlockRefKey("2026-09-10", "slot1")) === "2026-09-10");
+  check("planBlockRefKeyDateKey returns undefined for any other category's ref key", planBlockRefKeyDateKey(checkpointRefKey("ckpt1")) === undefined);
 }
 
 {
@@ -108,6 +114,22 @@ const SUN = "2026-09-06"; // Sunday
 {
   const draft = taskEventDraft({ taskId: "task1", title: "Renew visa", dueDate: "2026-11-01" });
   check("task draft is all-day with an exclusive end", "date" in draft.start && draft.start.date === "2026-11-01" && "date" in draft.end && draft.end.date === "2026-11-02");
+}
+
+{
+  const draft = planBlockEventDraft({
+    dateKey: "2026-09-10",
+    slotId: "slot1",
+    title: "Deep work — thesis ch.3",
+    note: "focus block",
+    startTime: "09:00",
+    endTime: "11:00",
+    timezone: "Asia/Kolkata"
+  });
+  check("plan block draft carries the date+slot ref key", draft.refKey === "planBlock:2026-09-10:slot1");
+  check("plan block draft is a single timed event on its own date", "dateTime" in draft.start && draft.start.dateTime === "2026-09-10T09:00:00" && "dateTime" in draft.end && draft.end.dateTime === "2026-09-10T11:00:00");
+  check("plan block draft has no recurrence — a plan day's blocks don't repeat", draft.recurrence === undefined);
+  check("plan block draft carries the slot's note as its description", draft.description === "focus block");
 }
 
 {

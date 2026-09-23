@@ -949,7 +949,7 @@ export interface GoogleCalendarConnection {
   /** Which of the user's own calendars to pull from. Absent = not yet chosen. Phase 1 (push-only)
    * never reads this — reserved for Phase 2's pull direction. */
   importCalendarIds?: string[];
-  pushEnabled?: { courseSessions: boolean; checkpoints: boolean; timedCommitments: boolean; tasksWithDueDate: boolean };
+  pushEnabled?: { courseSessions: boolean; checkpoints: boolean; timedCommitments: boolean; tasksWithDueDate: boolean; planBlocks: boolean };
   /** Reserved for Phase 2 — Phase 1 has no pull direction to enable/disable. */
   pullEnabled?: boolean;
   /** Per importCalendarIds entry — Google's incremental-sync cursor. Reserved for Phase 2. */
