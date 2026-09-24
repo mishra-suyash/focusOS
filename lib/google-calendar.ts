@@ -1,6 +1,46 @@
 import { addDays, getDay, parseISO } from "date-fns";
 import { todayKey } from "@/lib/dates";
-import type { GoogleCalendarConnection } from "@/types";
+import type { GoogleCalendarConnection, ScheduleSlotType } from "@/types";
+
+/**
+ * Google Calendar's fixed 11-color event palette (the same "Event color" picker Google Calendar's
+ * own UI shows) — `colorId` on an Event resource accepts only these string keys, "1"–"11". Named
+ * here once so every draft builder below points at a name instead of a bare digit.
+ */
+export const GOOGLE_EVENT_COLOR_IDS = {
+  lavender: "1",
+  sage: "2",
+  grape: "3",
+  flamingo: "4",
+  banana: "5",
+  tangerine: "6",
+  peacock: "7",
+  graphite: "8",
+  blueberry: "9",
+  basil: "10",
+  tomato: "11"
+} as const;
+
+/**
+ * §13 — one color per /plan/day slot type, chosen to echo `slotTypeStyles`' own hues (lib/schedule.ts)
+ * as closely as Google's fixed 11-color palette allows, so the calendar and the in-app timeline read
+ * as "the same colors" even though they're two different color systems. Deliberately has no entry
+ * for "class" or "external": both are excluded from the plan-block push by `isLockedSlot` before a
+ * draft is ever built for them (class is already its own category via `courseSessionEventDraft`;
+ * external is a future pull-direction placeholder), so no color would ever be looked up for them.
+ */
+const PLAN_BLOCK_COLOR_BY_TYPE: Partial<Record<ScheduleSlotType, string>> = {
+  deep_work: GOOGLE_EVENT_COLOR_IDS.basil,
+  reading: GOOGLE_EVENT_COLOR_IDS.peacock,
+  meal: GOOGLE_EVENT_COLOR_IDS.banana,
+  free: GOOGLE_EVENT_COLOR_IDS.graphite,
+  admin: GOOGLE_EVENT_COLOR_IDS.lavender,
+  break: GOOGLE_EVENT_COLOR_IDS.sage,
+  commute: GOOGLE_EVENT_COLOR_IDS.grape,
+  sleep: GOOGLE_EVENT_COLOR_IDS.blueberry,
+  gym: GOOGLE_EVENT_COLOR_IDS.flamingo,
+  custom: GOOGLE_EVENT_COLOR_IDS.tangerine
+};
 
 /**
  * plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.1 — the app's long-standing implicit
@@ -117,6 +157,8 @@ export interface GoogleEventDraft {
   end: GoogleEventTime;
   /** RRULE lines, e.g. `["RRULE:FREQ=WEEKLY;BYDAY=MO,WE"]`. Absent = a single, non-recurring event. */
   recurrence?: string[];
+  /** One of `GOOGLE_EVENT_COLOR_IDS`. Absent = Google's calendar-default color. */
+  colorId?: string;
 }
 
 /**
@@ -144,7 +186,8 @@ export function courseSessionEventDraft(params: {
     location,
     start: { dateTime: `${anchorDate}T${startTime}:00`, timeZone: timezone },
     end: { dateTime: `${anchorDate}T${endTime}:00`, timeZone: timezone },
-    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=${RRULE_BYDAY[dayOfWeek]}`]
+    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=${RRULE_BYDAY[dayOfWeek]}`],
+    colorId: GOOGLE_EVENT_COLOR_IDS.grape
   };
 }
 
@@ -159,7 +202,10 @@ export function checkpointEventDraft(params: { checkpointId: string; title: stri
     // Google's all-day event `end.date` is exclusive (per the Events resource), so a one-day event
     // needs end = start + 1 day, not end = start.
     start: { date: dueAt },
-    end: { date: nextDay }
+    end: { date: nextDay },
+    // Tomato — reserved for this category alone (no plan-block type uses it) so an assessment
+    // deadline always stands out as the one red thing on the calendar.
+    colorId: GOOGLE_EVENT_COLOR_IDS.tomato
   };
 }
 
@@ -200,7 +246,8 @@ export function timedRecurringTemplateEventDraft(params: {
     location,
     start: { dateTime: `${dtStartDate}T${startTime}:00`, timeZone: timezone },
     end: { dateTime: `${dtStartDate}T${endTime}:00`, timeZone: timezone },
-    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=${byDay}${interval}`]
+    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=${byDay}${interval}`],
+    colorId: GOOGLE_EVENT_COLOR_IDS.blueberry
   };
 }
 
@@ -211,7 +258,8 @@ export function taskEventDraft(params: { taskId: string; title: string; dueDate:
     refKey: taskRefKey(taskId),
     summary: title,
     start: { date: dueDate },
-    end: { date: todayKeyPlusOne(dueDate) }
+    end: { date: todayKeyPlusOne(dueDate) },
+    colorId: GOOGLE_EVENT_COLOR_IDS.banana
   };
 }
 
@@ -226,21 +274,30 @@ export function planBlockEventDraft(params: {
   note?: string;
   startTime: string;
   endTime: string;
+  type: ScheduleSlotType;
   timezone: string;
 }): GoogleEventDraft {
-  const { dateKey, slotId, title, note, startTime, endTime, timezone } = params;
+  const { dateKey, slotId, title, note, startTime, endTime, type, timezone } = params;
   return {
     refKey: planBlockRefKey(dateKey, slotId),
     summary: title,
     description: note,
     start: { dateTime: `${dateKey}T${startTime}:00`, timeZone: timezone },
-    end: { dateTime: `${dateKey}T${endTime}:00`, timeZone: timezone }
+    end: { dateTime: `${dateKey}T${endTime}:00`, timeZone: timezone },
+    colorId: PLAN_BLOCK_COLOR_BY_TYPE[type]
   };
 }
 
 /** A deterministic fingerprint of the fields that matter for "has this changed since we last
  * pushed it" — stored on the `GoogleCalendarLink` doc so `planPushDiff` can skip a no-op
- * `events.update` call instead of re-writing identical content every cron cycle. */
+ * `events.update` call instead of re-writing identical content every cron cycle.
+ *
+ * Adding `colorId` here (event color coding, added after Phase 1 shipped) means every
+ * already-linked event's stored `contentHash` stops matching on the very next sync after this
+ * change deploys — that's what makes the new colors apply retroactively to events pushed before
+ * this existed, but it also means that one sync issues an `events.update` for every previously
+ * pushed event across every category, not just plan blocks. Expected and self-resolving (each
+ * update's fresh hash won't mismatch again), not a sign anything is broken. */
 export function hashEventDraft(draft: GoogleEventDraft): string {
   return JSON.stringify({
     summary: draft.summary,
@@ -248,7 +305,8 @@ export function hashEventDraft(draft: GoogleEventDraft): string {
     location: draft.location,
     start: draft.start,
     end: draft.end,
-    recurrence: draft.recurrence
+    recurrence: draft.recurrence,
+    colorId: draft.colorId
   });
 }
 

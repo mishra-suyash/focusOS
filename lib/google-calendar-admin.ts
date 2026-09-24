@@ -369,6 +369,7 @@ function buildDesiredEvents(
             note: slot.note,
             startTime: slot.startTime,
             endTime: slot.endTime,
+            type: slot.type,
             timezone
           })
         );
@@ -524,6 +525,7 @@ function toEventRequestBody(draft: GoogleEventDraft): calendar_v3.Schema$Event {
     start: draft.start,
     end: draft.end,
     recurrence: draft.recurrence,
+    colorId: draft.colorId,
     extendedProperties: { private: { focusOsRef: draft.refKey } }
   };
 }

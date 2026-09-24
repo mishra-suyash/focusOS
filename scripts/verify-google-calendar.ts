@@ -6,6 +6,7 @@
  */
 import {
   DEFAULT_PUSH_ENABLED,
+  GOOGLE_EVENT_COLOR_IDS,
   checkpointEventDraft,
   checkpointRefKey,
   courseSessionEventDraft,
@@ -124,12 +125,22 @@ const SUN = "2026-09-06"; // Sunday
     note: "focus block",
     startTime: "09:00",
     endTime: "11:00",
+    type: "deep_work",
     timezone: "Asia/Kolkata"
   });
   check("plan block draft carries the date+slot ref key", draft.refKey === "planBlock:2026-09-10:slot1");
   check("plan block draft is a single timed event on its own date", "dateTime" in draft.start && draft.start.dateTime === "2026-09-10T09:00:00" && "dateTime" in draft.end && draft.end.dateTime === "2026-09-10T11:00:00");
   check("plan block draft has no recurrence — a plan day's blocks don't repeat", draft.recurrence === undefined);
   check("plan block draft carries the slot's note as its description", draft.description === "focus block");
+  check("plan block draft colors deep_work as basil", draft.colorId === GOOGLE_EVENT_COLOR_IDS.basil);
+
+  const readingDraft = planBlockEventDraft({ dateKey: "2026-09-10", slotId: "slot2", title: "Reading", startTime: "12:00", endTime: "13:00", type: "reading", timezone: "Asia/Kolkata" });
+  check("plan block draft colors a different slot type a different color", readingDraft.colorId !== draft.colorId);
+}
+
+{
+  const draft = checkpointEventDraft({ checkpointId: "ck1", title: "Midterm", typeLabel: "Midsem", courseLabel: "CS 201", dueAt: "2026-10-05" });
+  check("checkpoint draft is colored tomato — reserved for this category alone", draft.colorId === GOOGLE_EVENT_COLOR_IDS.tomato);
 }
 
 {
@@ -138,6 +149,7 @@ const SUN = "2026-09-06"; // Sunday
   const c = checkpointEventDraft({ checkpointId: "ck1", title: "Midterm (rescheduled)", typeLabel: "Midsem", courseLabel: "CS 201", dueAt: "2026-10-05" });
   check("hashEventDraft is deterministic for identical content", hashEventDraft(a) === hashEventDraft(b));
   check("hashEventDraft changes when content changes", hashEventDraft(a) !== hashEventDraft(c));
+  check("hashEventDraft changes when only colorId changes", hashEventDraft(a) !== hashEventDraft({ ...a, colorId: GOOGLE_EVENT_COLOR_IDS.sage }));
 }
 
 {
