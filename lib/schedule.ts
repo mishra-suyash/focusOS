@@ -204,7 +204,9 @@ export function createSlot(partial: Partial<ScheduleSlot> = {}): ScheduleSlot {
     assignedTaskIds: partial.assignedTaskIds ?? [],
     note: partial.note ?? "",
     status: partial.status ?? "upcoming",
-    color: partial.color
+    color: partial.color,
+    courseId: partial.courseId,
+    bucket: partial.bucket
   };
 }
 

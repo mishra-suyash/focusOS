@@ -4,6 +4,7 @@
  * (plan/10.FocusOS-v2-Connected-Flow-Plan.md §4.1/§4.3) — same pattern as scripts/verify-routine.ts,
  * since this repo has no test runner.
  */
+import { taskFromTemplate } from "../lib/admin-recurring-tasks";
 import { dateKeysInRange, isTemplateDueOn, planRevisionTemplateSync, recurringTaskInstanceId } from "../lib/recurring-tasks";
 import type { Course, RecurringTaskTemplate } from "../types";
 
@@ -93,6 +94,7 @@ function course(partial: Partial<Course> & Pick<Course, "id" | "name">): Pick<Co
   if (plan.action === "create") {
     check("created template is linked to the course", plan.template.courseId === "c1");
     check("created template is marked auto-generated", plan.template.generatedFrom === "courseRevisionTarget");
+    check("created template is tagged for the revision bucket", plan.template.bucket === "revision");
     check("90min / 25min-per-pomodoro rounds to 4 pomodoros", plan.template.estimatedPomodoros === 4, `got ${plan.template.estimatedPomodoros}`);
     check("created template defaults to Sunday", plan.template.daysOfWeek.length === 1 && plan.template.daysOfWeek[0] === 0);
     // The whole reason "create" carries a deterministic templateId (revisionTemplateId) rather
@@ -121,9 +123,18 @@ function course(partial: Partial<Course> & Pick<Course, "id" | "name">): Pick<Co
 }
 
 {
+  const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", estimatedPomodoros: 4, generatedFrom: "courseRevisionTarget", bucket: "revision" });
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 100 }), existing, 25);
+  check("same pomodoro count after rounding, bucket already set: no-op, not a spurious write", plan.action === "none");
+}
+
+{
+  // L2 (plan/14 §2.4) — a template created before `bucket` existed must get backfilled, not left
+  // generating tasks the Revision row's own filter can never see.
   const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", estimatedPomodoros: 4, generatedFrom: "courseRevisionTarget" });
   const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 100 }), existing, 25);
-  check("same pomodoro count after rounding: no-op, not a spurious write", plan.action === "none");
+  check("an existing template with no bucket is patched to add one", plan.action === "update");
+  if (plan.action === "update") check("...specifically to revision", plan.patch.bucket === "revision");
 }
 
 {
@@ -144,6 +155,22 @@ function course(partial: Partial<Course> & Pick<Course, "id" | "name">): Pick<Co
   const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 120 }), existing, 25);
   check("a manual pause is never force-reactivated by an hours edit", plan.action !== "pause");
   if (plan.action === "update") check("...only resized, active untouched", !("active" in plan.patch));
+}
+
+{
+  // L2's other half (plan/14 §2.4/§11) — generation itself must copy `bucket`, not just the
+  // create-vs-patch sync logic above; this is what makes a *freshly* generated instance visible to
+  // `tasksDueThisWeek`'s bucket filter from the start.
+  const t = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", generatedFrom: "courseRevisionTarget", bucket: "revision", courseId: "c1" });
+  const task = taskFromTemplate(t, "2026-09-27");
+  check("taskFromTemplate copies the template's bucket onto the generated task", task.bucket === "revision");
+  check("...and its seriesId, for the L2 backfill to find it again later", task.seriesId === "auto1");
+}
+
+{
+  const t = template({ id: "t2", daysOfWeek: [2], cadence: "weekly" }); // no bucket set
+  const task = taskFromTemplate(t, "2026-09-22");
+  check("a template with no bucket generates a task with no bucket", task.bucket === undefined);
 }
 
 if (failures.length > 0) {

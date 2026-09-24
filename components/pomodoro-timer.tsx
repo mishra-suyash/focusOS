@@ -41,6 +41,8 @@ export function PomodoroTimer({
     setCategory,
     setTaskId,
     setSlotId,
+    setCourseId,
+    setBucket,
     setLength,
     applyPreset,
     toggleRunning,
@@ -91,6 +93,14 @@ export function PomodoroTimer({
             if (linkedTask) {
               setCategory(linkedTask.category);
               setLabel(linkedTask.title);
+              // plan/14 §6.2/§6.4 — a manually-picked task still carries its own course/bucket
+              // attribution; a picked task with neither clears the slot's (courseId/bucket are
+              // otherwise sticky from whichever block was active before the dropdown was touched).
+              setCourseId(linkedTask.courseId);
+              setBucket(linkedTask.bucket);
+            } else {
+              setCourseId(undefined);
+              setBucket(undefined);
             }
           }}
           aria-label="Working on"

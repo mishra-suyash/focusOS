@@ -34,6 +34,7 @@ import {
 import { todayKey } from "@/lib/dates";
 import { computeCourseCoverage, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import { taskBucketLabels, taskBuckets } from "@/lib/options";
+import { isBreakMode } from "@/lib/terms";
 import {
   createCheckpoint,
   createCourse,
@@ -59,6 +60,7 @@ import type {
   NewCourse,
   NewTerm,
   Paper,
+  PomodoroSession,
   RecurringTaskTemplate,
   RevisionItem,
   Task,
@@ -85,6 +87,9 @@ function CoursesPageContent() {
   const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
+  // plan/14 §6.4 — completedMinutesThisWeek now measures real session minutes instead of a
+  // pomodoro-count estimate, so it needs every session, not just this course's tasks.
+  const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
 
   /** A new course's revision hours (if set at creation) get their auto "Revise" template the same
    * turn it's created — `createCourse` returns the new id specifically so this doesn't need a
@@ -129,6 +134,7 @@ function CoursesPageContent() {
                 recurringTemplates={recurringTemplates.filter((item) => item.courseId === course.id)}
                 papers={papers.filter((item) => item.relatedCourseId === course.id)}
                 courseTasks={tasks.filter((item) => item.courseId === course.id)}
+                sessions={sessions}
                 openTasks={tasks.filter((item) => item.courseId === course.id && item.status !== "done")}
                 linkedGoals={goals.filter((item) => item.linked.courseIds.includes(course.id))}
               />
@@ -156,7 +162,7 @@ function TermsPanel({ terms, onCreate, onDelete }: { terms: Term[]; onCreate: (t
   }
 
   return (
-    <section className="card p-5">
+    <section id="term-add" className="card p-5">
       <h2 className="mb-3 text-lg font-semibold">Terms</h2>
       <div className="mb-3 flex flex-wrap gap-2">
         {terms.map((term) => (
@@ -198,7 +204,8 @@ function CourseCard({
   papers,
   courseTasks,
   openTasks,
-  linkedGoals
+  linkedGoals,
+  sessions
 }: {
   course: Course;
   terms: Term[];
@@ -212,6 +219,8 @@ function CourseCard({
   courseTasks: Task[];
   openTasks: Task[];
   linkedGoals: Goal[];
+  /** Every session in the app — `completedMinutesThisWeek` (plan/14 §6.4) filters to this course/bucket itself. */
+  sessions: PomodoroSession[];
 }) {
   const { user } = useAuth();
   const [editingSessions, setEditingSessions] = useState(false);
@@ -227,6 +236,12 @@ function CourseCard({
   const status = effectiveCourseStatus(course, today);
   const term = terms.find((item) => item.id === course.termId);
   const coverage = computeCourseCoverage(topics, revisionItems, course.id);
+  // L4 (plan/14 §2.4) — "Active" on a course meant only "not dropped/completed," which said
+  // nothing about whether its classes will actually materialize on the timeline: with no term
+  // covering today, `courseSlotsForDate` is never called for this course at all. `/plan/calendar`
+  // and `/plan/day` already warn about this; the course card — the one page where the sessions were
+  // configured — showed no warning and actively contradicted them with an ACTIVE badge.
+  const classesWontShow = status === "active" && course.sessions.length > 0 && isBreakMode(terms, today);
 
   useEffect(() => {
     if (!user) return;
@@ -346,13 +361,21 @@ function CourseCard({
       {editingSessions ? (
         <CourseSessionsEditor initialSessions={course.sessions} onSave={saveSessions} onCancel={() => setEditingSessions(false)} />
       ) : null}
+      {classesWontShow ? (
+        <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+          &ldquo;Active&rdquo; here means the course isn&apos;t dropped or completed — it doesn&apos;t mean its classes are on the timeline. No term covers today, so these sessions won&apos;t show on Plan → Day or Calendar until one does.{" "}
+          <Link href="/courses#term-add" className="font-medium underline">
+            Add a term
+          </Link>
+        </p>
+      ) : null}
 
       <div className="mt-3 space-y-1.5">
         <p className="label mb-1">This week&apos;s buckets</p>
         {taskBuckets.map((bucket) => {
           const target = bucketWeeklyTarget(course, bucket, linkedGoals);
           const scheduled = scheduledMinutesThisWeek(courseTasks, course.id, bucket, workMinutes);
-          const done = completedMinutesThisWeek(courseTasks, course.id, bucket, workMinutes);
+          const done = completedMinutesThisWeek(sessions, courseTasks, course.id, bucket);
           if (bucket === "goal") {
             return (
               <BucketRow

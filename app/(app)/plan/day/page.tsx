@@ -278,6 +278,7 @@ function DayPlannerContent() {
                 schedule={schedule ?? null}
                 wantedLockedSlots={wantedLockedSlots}
                 tasks={tasks}
+                courses={courses}
                 templates={templates}
                 onSlotsChange={setSlots}
               />

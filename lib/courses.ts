@@ -3,7 +3,7 @@ import { weekDates, weekStartKey } from "@/lib/dates";
 import { fetchCollection, saveDailySchedule, setRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/firestore";
 import { planRevisionTemplateSync } from "@/lib/recurring-tasks";
 import { sortedSlots } from "@/lib/schedule";
-import type { Course, CourseStatus, DailySchedule, Goal, RecurringTaskTemplate, ScheduleSlot, Task, TaskBucket } from "@/types";
+import type { Course, CourseStatus, DailySchedule, Goal, PomodoroSession, RecurringTaskTemplate, ScheduleSlot, Task, TaskBucket } from "@/types";
 
 /** `status` as stored can go stale (nobody flips it when a course's end date passes) — derive the real one. */
 export function effectiveCourseStatus(course: Course, dateKey: string): CourseStatus {
@@ -29,7 +29,10 @@ export function courseSlotsForDate(courses: Course[], dateKey: string): Schedule
         endTime: session.endTime,
         note: session.location,
         status: "upcoming",
-        color: course.color
+        color: course.color,
+        // plan/14 §6.1 — lets a class block credit its course (Class time, §6.3) without matching
+        // on the title string. Not paired with a `bucket`: class time isn't a planned bucket.
+        courseId: course.id
       });
     }
   }
@@ -110,7 +113,7 @@ export function bucketWeeklyTarget(
   return course.weeklyTargets?.[bucket] ?? 0;
 }
 
-type BucketedTask = Pick<Task, "courseId" | "bucket" | "dueDate" | "estimatedPomodoros" | "completedPomodoros">;
+type BucketedTask = Pick<Task, "id" | "courseId" | "bucket" | "dueDate" | "estimatedPomodoros" | "completedPomodoros">;
 
 function tasksDueThisWeek(tasks: BucketedTask[], courseId: string, bucket: TaskBucket, weekDateKeys: string[]): BucketedTask[] {
   return tasks.filter((task) => task.courseId === courseId && task.bucket === bucket && task.dueDate && weekDateKeys.includes(task.dueDate));
@@ -132,17 +135,32 @@ export function scheduledMinutesThisWeek(
   return tasksDueThisWeek(tasks, courseId, bucket, weekDateKeys).reduce((sum, task) => sum + (task.estimatedPomodoros ?? 1) * workMinutes, 0);
 }
 
+type BucketedSession = Pick<PomodoroSession, "mode" | "minutes" | "completedAt" | "courseId" | "bucket" | "taskId">;
+
 /**
- * Minutes actually done this week for one course/bucket — the same task set as
- * `scheduledMinutesThisWeek`, sized by completed focus sessions (`Task.completedPomodoros`, kept
- * current by `finalizeSession` in components/focus-session-provider.tsx) instead of the estimate.
+ * Minutes actually done this week for one course/bucket — real `PomodoroSession.minutes` (plan/14
+ * §6.4), not `Task.completedPomodoros × workMinutes` (a 6-minute session and a 25-minute session
+ * used to add exactly the same amount; this is the fix for that). A session counts if it carries
+ * `courseId`/`bucket` directly (set at finalize time by `FocusSessionProvider`, §6.2 — a block or a
+ * course-tagged task started it) or, for a session that predates that field or was started with no
+ * block context, if its `taskId` resolves to a task carrying them.
  */
 export function completedMinutesThisWeek(
+  sessions: BucketedSession[],
   tasks: BucketedTask[],
   courseId: string,
   bucket: TaskBucket,
-  workMinutes: number,
   weekDateKeys: string[] = currentWeekDateKeys()
 ): number {
-  return tasksDueThisWeek(tasks, courseId, bucket, weekDateKeys).reduce((sum, task) => sum + (task.completedPomodoros ?? 0) * workMinutes, 0);
+  const taskById = new Map(tasks.map((task) => [task.id, task] as const));
+  return sessions.reduce((sum, session) => {
+    if (session.mode !== "work") return sum;
+    const dateKey = session.completedAt.slice(0, 10);
+    if (!weekDateKeys.includes(dateKey)) return sum;
+    const linkedTask = session.taskId ? taskById.get(session.taskId) : undefined;
+    const sessionCourseId = session.courseId ?? linkedTask?.courseId;
+    const sessionBucket = session.bucket ?? linkedTask?.bucket;
+    if (sessionCourseId !== courseId || sessionBucket !== bucket) return sum;
+    return sum + session.minutes;
+  }, 0);
 }

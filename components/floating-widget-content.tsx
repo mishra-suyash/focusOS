@@ -1,8 +1,10 @@
 "use client";
 
+import { format } from "date-fns";
 import { Droplets, Pause, Play, X } from "lucide-react";
 import { useFocusSession } from "@/components/focus-session-provider";
 import { useWorkdaySession } from "@/components/workday-session-provider";
+import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { useLiveLoadIndex } from "@/hooks/use-live-load-index";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { todayKey } from "@/lib/dates";
@@ -21,6 +23,11 @@ export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
   const { modeLabel, secondsLeft, running, progress, label, toggleRunning } = useFocusSession();
   const { reminder, acknowledgeReminder, dismissReminder } = useWorkdaySession();
   const loadIndex = useLiveLoadIndex(todayKey());
+  // §10 — re-derived off the same minute-tick hook the day's "now" markers already use, so this
+  // needs no interval of its own; the PiP portal shares the parent document's React tree, so the
+  // hook works here unchanged.
+  useCurrentMinute();
+  const dayTimeLabel = format(new Date(), "EEE · HH:mm");
 
   const minutes = Math.floor(secondsLeft / 60)
     .toString()
@@ -56,7 +63,10 @@ export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
 
       {items.has("currentFocus") ? (
         <section className="card p-3 text-sm">
-          <p className="label">{running ? "Focusing on" : "Last focus"}</p>
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="label">{running ? "Focusing on" : "Last focus"}</p>
+            <span className="text-[11px] tabular-nums text-ink-500 dark:text-ink-400">{dayTimeLabel}</span>
+          </div>
           <p className="mt-0.5 truncate font-medium">{label || "No session yet"}</p>
         </section>
       ) : null}

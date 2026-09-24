@@ -12,6 +12,7 @@ import {
   endWorkdaySession,
   fetchCollection,
   fetchCourseCheckpoints,
+  fetchCourseClassLogs,
   recordBreak,
   recordHydration,
   saveDailySchedule,
@@ -24,6 +25,7 @@ import { buildLoadIndexSnapshot } from "@/lib/loadindex";
 import { getActiveSlot, minutesFromTime, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePackWorkdayTemplate } from "@/lib/templates/builtin";
 import { isBreakMode } from "@/lib/terms";
+import { slotAutoStatus } from "@/lib/tracking";
 import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term } from "@/types";
 
 function slotsOverlap(a: ScheduleSlot, b: ScheduleSlot) {
@@ -122,8 +124,15 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     if (!user || starting) return;
     setStarting(true);
     try {
+      // L1 (plan/14 §2.4) — this used to be `await`ed as the first statement, so a permission
+      // dialog the user never answers (dismissed by clicking away, or suppressed by the browser)
+      // left the promise unsettled forever and Start day stuck on "Starting…" with no schedule
+      // written. Reminders already degrade gracefully without permission (`fireReminder` only
+      // calls `new Notification` when `Notification.permission === "granted"`), so there is nothing
+      // downstream in this function that actually needs the prompt to have resolved — fire it and
+      // move on immediately instead of gating the day on it.
       if (typeof Notification !== "undefined" && Notification.permission === "default") {
-        await Notification.requestPermission();
+        void Notification.requestPermission();
       }
       const existingSchedule = await fetchCollection<DailySchedule>(user.uid, "dailySchedules", [orderBy("updatedAt", "desc")]);
       const todaySchedule = existingSchedule.find((item) => item.dateKey === today);
@@ -202,11 +211,47 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       ]);
       const checkpoints = (await Promise.all(courses.map((course) => fetchCourseCheckpoints(user.uid, course.id)))).flat();
       const todaySchedule = schedules.find((item) => item.dateKey === today);
+
+      // §6.5 — before computing the Workload snapshot, flip every uncovered-by-the-clock-alone
+      // block that real work has actually covered: a deep-work/reading/admin block once sessions
+      // logged against its slotId cover at least 60% of it, a class block once today's attendance
+      // log says attended/self-studied. This is what makes `completedDeepWork` below (and every
+      // other reader of today's schedule) non-zero on a day where planned deep work happened —
+      // never from the clock alone (13.FocusOS-v2-UI-Coherence-Audit.md A9's own fix stays intact).
+      let todaySlots = todaySchedule?.slots ?? [];
+      if (todaySchedule) {
+        const classLogsByCourse = await Promise.all(courses.map((course) => fetchCourseClassLogs(user.uid, course.id)));
+        const attendedCourseIds = new Set(
+          courses
+            .filter((course, index) => {
+              const log = classLogsByCourse[index].find((item) => item.date === today);
+              return log && (log.attendance === "attended" || log.attendance === "self_study");
+            })
+            .map((course) => course.id)
+        );
+        // Recurring class/routine slots reuse the same id on every date they materialize on
+        // (`course-${courseId}-${sessionId}`, `routineSlotsForDate`'s own ids) — coverage must only
+        // ever look at today's own sessions, or a session logged against last Thursday's identical
+        // slot id would silently count toward today's.
+        const todaySessions = sessions.filter((session) => session.completedAt.startsWith(today));
+        let changed = false;
+        todaySlots = todaySchedule.slots.map((slot) => {
+          if (slot.status === "completed") return slot;
+          const classAttended = slot.type === "class" && slot.courseId ? attendedCourseIds.has(slot.courseId) : false;
+          if (slotAutoStatus(slot, todaySessions, classAttended) !== "completed") return slot;
+          changed = true;
+          return { ...slot, status: "completed" as const };
+        });
+        if (changed) {
+          await saveDailySchedule(user.uid, { dateKey: today, templateId: todaySchedule.templateId, slots: todaySlots });
+        }
+      }
+
       const focusedMinutes = sessions
         .filter((item) => item.mode === "work" && item.completedAt.startsWith(today))
         .reduce((sum, item) => sum + item.minutes, 0);
       const snapshot = buildLoadIndexSnapshot({
-        scheduledDeepWorkMinutes: scheduleSummary(todaySchedule?.slots ?? []).plannedDeepWork,
+        scheduledDeepWorkMinutes: scheduleSummary(todaySlots).plannedDeepWork,
         revisionDueCount: dueItems.length,
         revisionsCompletedCount: reviewedToday.length,
         checkpoints,

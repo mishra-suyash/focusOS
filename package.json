@@ -23,7 +23,8 @@
     "verify:undo-stack": "tsx scripts/verify-undo-stack.ts",
     "verify:routine": "tsx scripts/verify-routine.ts",
     "verify:recurring-tasks": "tsx scripts/verify-recurring-tasks.ts",
-    "verify:google-calendar": "tsx scripts/verify-google-calendar.ts"
+    "verify:google-calendar": "tsx scripts/verify-google-calendar.ts",
+    "verify:tracking": "tsx scripts/verify-tracking.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

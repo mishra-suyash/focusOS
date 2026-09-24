@@ -330,7 +330,11 @@ export function createTaskBlock(task: Task, workMinutes: number, startMinutes: n
     type: slotTypeForCategory(task.category),
     startTime: minutesToTime(startMinutes),
     endTime: minutesToTime(startMinutes + duration),
-    assignedTaskIds: [task.id]
+    assignedTaskIds: [task.id],
+    // plan/14 §6.1 — lets a focus session started inside this block attribute itself to the
+    // course/bucket the task already carries, without the user touching the timer's dropdown.
+    courseId: task.courseId,
+    bucket: task.bucket
   });
 }
 

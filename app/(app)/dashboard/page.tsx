@@ -121,7 +121,9 @@ function DashboardContent() {
     // A block linked to exactly one task should credit that task's focus-session count — a block
     // with zero or several linked tasks is ambiguous, so it's left uncredited as before.
     const linkedTaskIds = slotId ? dailySchedule?.slots.find((slot) => slot.id === slotId)?.assignedTaskIds ?? [] : [];
-    startFocus({ label, category, slotId, taskId: linkedTaskIds.length === 1 ? linkedTaskIds[0] : undefined });
+    const courseId = searchParams.get("courseId") ?? undefined;
+    const bucket = (searchParams.get("bucket") as Task["bucket"] | null) ?? undefined;
+    startFocus({ label, category, slotId, taskId: linkedTaskIds.length === 1 ? linkedTaskIds[0] : undefined, courseId, bucket });
     router.replace("/dashboard", { scroll: false });
   }, [searchParams, dailySchedule, dailySchedulesLoading]);
 

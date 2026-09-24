@@ -5,9 +5,10 @@ import { Lock, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { MoreOptions } from "@/components/more-options";
 import { TypedTimeInput } from "@/components/plan/typed-time-input";
+import { taskBucketLabels, taskBuckets } from "@/lib/options";
 import { isLockedSlot, minutesFromTime, slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
 import { categoryForSlotType, rangeOverlapsSlots } from "@/lib/timeline";
-import type { ScheduleSlot, ScheduleSlotType, Task } from "@/types";
+import type { Course, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
 
 /**
  * plan/05.FocusOS-v2-Plan-Day-Timeline.md §4.3 — opens for whichever block is selected in TimeGrid.
@@ -26,6 +27,7 @@ export function BlockInspector({
   slot,
   allSlots,
   tasks,
+  courses,
   onChange,
   onDelete,
   autoFocusTitle = false
@@ -34,6 +36,9 @@ export function BlockInspector({
   /** Every block on this day, including `slot` itself — needed to check "no overlap" on a typed time edit. */
   allSlots: ScheduleSlot[];
   tasks: Task[];
+  /** Phase 1 (plan/14 §11) — gates the course/bucket picker below: only rendered when the user has
+   *  courses at all, the same conditional `TaskForm`'s course select already uses. */
+  courses: Course[];
   onChange: (slot: ScheduleSlot) => void;
   onDelete: () => void;
   /** Create → type → done (§4.3) — the parent should give this component `key={slot.id}` so a fresh selection remounts it and this one-time mount effect fires again. */
@@ -116,6 +121,47 @@ export function BlockInspector({
             <option value="skipped">Skipped</option>
           </select>
         </div>
+        {courses.length > 0 ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="text-xs text-ink-500">
+              Course
+              <select
+                className="input mt-1"
+                value={slot.courseId ?? ""}
+                onChange={(event) => {
+                  const courseId = event.target.value || undefined;
+                  // plan/14 §6.1 — a hand-made block tagged with a course/bucket attributes itself
+                  // for the rest of the week the same way a weekly-planner-proposed block does; no
+                  // course selected means no bucket either.
+                  onChange({ ...slot, courseId, bucket: courseId ? slot.bucket : undefined });
+                }}
+              >
+                <option value="">No course</option>
+                {courses.map((course) => (
+                  <option key={course.id} value={course.id}>
+                    {course.code ? `${course.code} · ${course.name}` : course.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs text-ink-500">
+              Bucket
+              <select
+                className="input mt-1"
+                value={slot.bucket ?? ""}
+                disabled={!slot.courseId}
+                onChange={(event) => onChange({ ...slot, bucket: (event.target.value || undefined) as ScheduleSlot["bucket"] })}
+              >
+                <option value="">No bucket</option>
+                {taskBuckets.map((bucket) => (
+                  <option key={bucket} value={bucket}>
+                    {taskBucketLabels[bucket]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        ) : null}
         <div>
           <p className="label mb-2">Assigned tasks</p>
           <div className="grid max-h-44 gap-2 overflow-auto rounded-md bg-ink-50 p-3 dark:bg-ink-800 sm:grid-cols-2">
@@ -140,7 +186,14 @@ export function BlockInspector({
         </div>
       </MoreOptions>
       <Link
-        href={`/dashboard?${new URLSearchParams({ startFocus: "1", label: slot.title, category: categoryForSlotType(slot.type), slotId: slot.id }).toString()}`}
+        href={`/dashboard?${new URLSearchParams({
+          startFocus: "1",
+          label: slot.title,
+          category: categoryForSlotType(slot.type),
+          slotId: slot.id,
+          ...(slot.courseId ? { courseId: slot.courseId } : {}),
+          ...(slot.bucket ? { bucket: slot.bucket } : {})
+        }).toString()}`}
         className="btn-secondary w-full py-1.5 text-xs"
       >
         <Play className="h-3.5 w-3.5" />

@@ -192,6 +192,10 @@ export interface PomodoroSession {
   /** Set when this session was a paper-reading pass timer (category "reading"). */
   paperId?: string;
   passNo?: 1 | 2 | 3;
+  /** Copied from the block/task this session was started against, at finalize time (plan/14 §6.2,
+   *  §6.4) — the field that turns `completedMinutesThisWeek` from an estimate into a measurement. */
+  courseId?: string;
+  bucket?: TaskBucket;
 }
 
 export interface ScheduleSlot {
@@ -211,6 +215,14 @@ export interface ScheduleSlot {
    * event's id, so a later sync finds-and-updates or removes this exact slot instead of creating a
    * duplicate. Absent on every FocusOS-authored slot. */
   sourceGoogleEventId?: string;
+  /** Which course this block belongs to (plan/14 §4). Set by `courseSlotsForDate` on a class block
+   *  and copied onto a task-derived block by `createTaskBlock`. Absent on every block that isn't
+   *  course work — what lets a focus session started inside the block credit the course without
+   *  matching on the title string. */
+  courseId?: string;
+  /** Which of the course's four weekly planning buckets this block counts against. Only meaningful
+   *  alongside `courseId`; absent on a class block (class time is not a planned bucket — see §6.3). */
+  bucket?: TaskBucket;
 }
 
 /**
@@ -335,6 +347,11 @@ export interface RecurringTaskTemplate {
   endDate?: string;
   /** Set only for the one template `lib/recurring-tasks.ts`'s `planRevisionTemplateSync` creates and keeps in sync with a course's `targetMinutesPerWeek` — lets that sync find "the" auto revision template for a course without guessing from its title, and lets the UI treat it differently from a hand-added commitment (e.g. hide its delete button in favor of "clear the hours to stop it"). Unset on every manually-created template. */
   generatedFrom?: "courseRevisionTarget";
+  /** Which of the course's four weekly planning buckets a task generated from this template should
+   *  land in (plan/14 §4/L2). `planRevisionTemplateSync` sets this to "revision" on the auto
+   *  template it creates; `taskFromTemplate` copies it onto every generated task so
+   *  `tasksDueThisWeek`'s `bucket` filter can see it. Unset on a template with no bucket meaning. */
+  bucket?: TaskBucket;
   createdAt: string;
   updatedAt: string;
 }

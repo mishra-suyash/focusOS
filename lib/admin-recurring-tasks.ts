@@ -11,7 +11,9 @@ function isAlreadyExistsError(error: unknown): boolean {
   return code === 6 || error.message.toLowerCase().includes("already exists");
 }
 
-function taskFromTemplate(template: RecurringTaskTemplate, dateKey: string): NewTask {
+/** Exported for scripts/verify-recurring-tasks.ts — the other half of L2 (plan/14 §2.4): the
+ * generate-time copy that gets a fresh instance's `bucket` right from the start. */
+export function taskFromTemplate(template: RecurringTaskTemplate, dateKey: string): NewTask {
   return {
     title: template.title,
     description: template.description,
@@ -21,6 +23,7 @@ function taskFromTemplate(template: RecurringTaskTemplate, dateKey: string): New
     dueDate: dateKey,
     estimatedPomodoros: template.estimatedPomodoros,
     courseId: template.courseId,
+    bucket: template.bucket,
     seriesId: template.id
   };
 }
@@ -36,33 +39,43 @@ function taskFromTemplate(template: RecurringTaskTemplate, dateKey: string): New
  * now" overlapping the next cron tick — just throws-and-ignores on every date already materialized,
  * and because `.create()` never touches an existing doc, a generated instance is immutable after
  * creation: editing one is always just editing that one task by hand.
+ *
+ * L2 backfill (plan/14 §2.4/§11) — that immutability is exactly why the `bucket` fix in
+ * `planRevisionTemplateSync`/`taskFromTemplate` can't reach an instance this function already
+ * created before either of those existed (or before this template had a `bucket` at all): the
+ * ALREADY_EXISTS branch below used to just swallow and move on. It now patches `bucket` onto that
+ * existing instance directly whenever the template has one it's missing, so a course whose auto
+ * revision template already generated this week's task self-heals on the very next "Generate now"
+ * or cron tick, instead of only ever fixing tasks generated from here on.
  */
-export async function generateRecurringTaskInstances(uid: string, fromDateKey: string, toDateKey: string): Promise<{ created: number }> {
+export async function generateRecurringTaskInstances(uid: string, fromDateKey: string, toDateKey: string): Promise<{ created: number; backfilled: number }> {
   const snapshot = await adminDb().collection("users").doc(uid).collection("recurringTaskTemplates").where("active", "==", true).get();
   const templates = snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as RecurringTaskTemplate);
-  if (templates.length === 0) return { created: 0 };
+  if (templates.length === 0) return { created: 0, backfilled: 0 };
 
   const dateKeys = dateKeysInRange(fromDateKey, toDateKey);
   const createdAt = new Date().toISOString();
   let created = 0;
+  let backfilled = 0;
 
   for (const template of templates) {
     for (const dateKey of dateKeys) {
       if (!isTemplateDueOn(template, dateKey)) continue;
-      const id = recurringTaskInstanceId(template.id, dateKey);
+      const ref = adminDb().collection("users").doc(uid).collection("tasks").doc(recurringTaskInstanceId(template.id, dateKey));
       try {
-        await adminDb()
-          .collection("users")
-          .doc(uid)
-          .collection("tasks")
-          .doc(id)
-          .create({ ...taskFromTemplate(template, dateKey), createdAt, updatedAt: createdAt });
+        await ref.create({ ...taskFromTemplate(template, dateKey), createdAt, updatedAt: createdAt });
         created += 1;
       } catch (error) {
         if (!isAlreadyExistsError(error)) throw error;
+        if (!template.bucket) continue;
+        const existing = await ref.get();
+        if (existing.exists && existing.data()?.bucket !== template.bucket) {
+          await ref.update({ bucket: template.bucket, updatedAt: createdAt });
+          backfilled += 1;
+        }
       }
     }
   }
 
-  return { created };
+  return { created, backfilled };
 }

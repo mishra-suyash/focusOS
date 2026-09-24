@@ -31,7 +31,7 @@ import {
 } from "@/lib/schedule";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 import { MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay } from "@/lib/timeline";
-import type { DailySchedule, DayTemplate, PomodoroSession, ScheduleSlot, Task } from "@/types";
+import type { Course, DailySchedule, DayTemplate, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 const DEFAULT_SCROLL_MINUTE = 8 * 60;
 const DELETE_UNDO_WINDOW_MS = 6_000;
@@ -65,6 +65,7 @@ export function DayTimelineEditor({
   schedule,
   wantedLockedSlots,
   tasks,
+  courses,
   templates,
   onSlotsChange
 }: {
@@ -84,6 +85,9 @@ export function DayTimelineEditor({
    */
   wantedLockedSlots?: ScheduleSlot[];
   tasks: Task[];
+  /** Phase 1 (plan/14 §11) — only used to gate `BlockInspector`'s course/bucket picker (rendered
+   *  only when the user has courses at all), the same conditional `TaskForm`'s course select uses. */
+  courses: Course[];
   /** plan/13 A18 — turning this editor on hid the classic aside's whole Templates panel, taking its
    * only "Browse templates"/Apply action with it (this editor previously offered "Save as
    * template" but nothing that pulled a template back onto the day). Passed in so that capability
@@ -661,6 +665,7 @@ export function DayTimelineEditor({
               slot={selectedSlot}
               allSlots={slots}
               tasks={tasks}
+              courses={courses}
               onChange={updateSlot}
               onDelete={() => deleteSelected(selectedSlot.id)}
               autoFocusTitle={selectedSlot.id === justCreatedId}

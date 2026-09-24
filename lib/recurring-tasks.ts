@@ -112,7 +112,8 @@ export function planRevisionTemplateSync(
         active: true,
         startDate: course.startDate,
         endDate: course.endDate,
-        generatedFrom: "courseRevisionTarget"
+        generatedFrom: "courseRevisionTarget",
+        bucket: "revision"
       }
     };
   }
@@ -121,6 +122,9 @@ export function planRevisionTemplateSync(
   if (existing.estimatedPomodoros !== estimatedPomodoros) patch.estimatedPomodoros = estimatedPomodoros;
   if (existing.startDate !== course.startDate) patch.startDate = course.startDate;
   if (existing.endDate !== course.endDate) patch.endDate = course.endDate;
+  // L2 (plan/14 §2.4) — a template created before `bucket` existed generates tasks the Revision
+  // row's own filter can never see; patch it in for every existing auto template, not just new ones.
+  if (existing.bucket !== "revision") patch.bucket = "revision";
   if (Object.keys(patch).length === 0) return { action: "none" };
   return { action: "update", templateId: existing.id, patch };
 }
