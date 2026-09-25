@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { EveningRollupCard } from "@/components/evening-rollup-card";
+import { UncoveredBlocksReview } from "@/components/uncovered-blocks-review";
 import { useAuth } from "@/components/auth-provider";
 import { useDay } from "@/hooks/use-day";
 import { saveDayFields } from "@/lib/firestore";
@@ -66,7 +67,10 @@ export default function DailyReviewPage() {
         </div>
       </section>
       {date === todayKey() ? (
-        <EveningRollupCard date={date} rollup={day?.rollup} />
+        <>
+          <UncoveredBlocksReview date={date} />
+          <EveningRollupCard date={date} rollup={day?.rollup} />
+        </>
       ) : (
         <p className="mb-4 text-xs text-ink-500">Suggestions for tomorrow only appear when reviewing today.</p>
       )}

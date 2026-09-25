@@ -12,13 +12,12 @@ import type { ModuleId } from "@/lib/features";
 const DESTINATIONS: { href: string; label: string; description: string; moduleId?: ModuleId }[] = [
   { href: "/dashboard", label: "Today", description: "Your day at a glance — up next, tasks, focus timer, Workload." },
   { href: "/tasks", label: "Tasks", description: "Everything you need to get done. Filter by Today, This week, Upcoming, or Completed." },
-  { href: "/plan/day", label: "Plan", description: "Your day, block by block — templates live here, and a Calendar tab shows the month." },
+  { href: "/plan/week", label: "Plan", description: "Week, Day, and Calendar tabs — the weekly planning session, templates, and the month grid." },
   { href: "/papers", label: "Papers", description: "Papers you want to read, are reading, or have read. Skim / Read / Deep dive." },
   { href: "/courses", label: "Courses", description: "Your classes, assessments, and what each lecture covered.", moduleId: "courses" },
   { href: "/review", label: "Revise", description: "Topics and papers come back at growing intervals as you revise them.", moduleId: "revise" },
   { href: "/goals", label: "Goals", description: "Long-term aims like a chapter, an exam, or a submission.", moduleId: "goals" },
   { href: "/reviews/daily", label: "Daily wrap-up", description: "Close out the day and carry things over to tomorrow." },
-  { href: "/reviews/weekly", label: "Weekly check-in", description: "A short weekly review of long-running goals.", moduleId: "weeklyCheckin" },
   { href: "/analytics", label: "Analytics", description: "Trends across tasks, focus sessions, and load.", moduleId: "analytics" },
   { href: "/insights", label: "AI Insights", description: "AI-generated daily insight summaries.", moduleId: "insights" }
 ];

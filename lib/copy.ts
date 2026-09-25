@@ -41,6 +41,10 @@ export const copy = {
     label: "Goal",
     hint: "Hours from a Goal linked to this course — edit the target on the Goals page, not here."
   },
+  classTime: {
+    label: "Class time",
+    hint: "Minutes from attended or self-studied classes this week — not a focus bucket, so it has no target. Log a class to count it; an unlogged class counts zero."
+  },
   weeklyBucket: {
     label: "Weekly bucket",
     hint: "Which of the course's weekly buckets this task counts toward. Only Revision affects your daily workload or auto-creates anything — Assignment and Backlog are just for tracking on the course page."

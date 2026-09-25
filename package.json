@@ -24,7 +24,9 @@
     "verify:routine": "tsx scripts/verify-routine.ts",
     "verify:recurring-tasks": "tsx scripts/verify-recurring-tasks.ts",
     "verify:google-calendar": "tsx scripts/verify-google-calendar.ts",
-    "verify:tracking": "tsx scripts/verify-tracking.ts"
+    "verify:tracking": "tsx scripts/verify-tracking.ts",
+    "verify:weekplan": "tsx scripts/verify-weekplan.ts",
+    "verify:next-action": "tsx scripts/verify-next-action.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

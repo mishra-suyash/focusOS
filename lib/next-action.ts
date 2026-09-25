@@ -1,7 +1,8 @@
 import type { ModuleId } from "@/lib/features";
-import type { Checkpoint, Task } from "@/types";
+import { minutesFromTime } from "@/lib/schedule";
+import type { Checkpoint, ScheduleSlot, Task } from "@/types";
 
-export type NextActionKind = "checkpoint-prep" | "revision" | "task" | "rest";
+export type NextActionKind = "checkpoint-prep" | "revision" | "task" | "rest" | "block";
 
 export interface NextAction {
   kind: NextActionKind;
@@ -10,6 +11,13 @@ export interface NextAction {
   href: string;
   /** DP5 S5 "Schedule it" — set only for `kind: "task"`, the one case with a concrete Task to size a block from (`lib/timeline.ts`'s `createTaskBlock`). The other kinds still get a plain default-duration block from just their `title`. */
   taskId?: string;
+  /** plan/14 §7.1 — set only for `kind: "block"`: the active or imminent `ScheduleSlot` itself, so
+   *  the card can pre-arm the focus timer (§6.2) or offer "Log this class" without the caller
+   *  having to re-look it up. */
+  slot?: ScheduleSlot;
+  /** True when `slot` is the day's *next* block (starts within 15 minutes) rather than the one
+   *  active right now — changes the card's wording from "Now" to "Next: X at HH:MM". */
+  upcoming?: boolean;
 }
 
 function daysBetween(laterKey: string, earlierKey: string): number {
@@ -18,9 +26,10 @@ function daysBetween(laterKey: string, earlierKey: string): number {
 
 /**
  * A deterministic priority cascade — no model call, no decision left for the
- * user to make at the moment their willpower is lowest. Order: an urgent
- * checkpoint's prep window, the revision queue, the top open task due this
- * week, or an explicit "you're already ahead" rest suggestion.
+ * user to make at the moment their willpower is lowest. plan/14 §7.1 gave this cascade a new
+ * first branch: if a block is active right now (or starts within 15 minutes), that block IS the
+ * next action — the plan for right now beats any of the four content-priority branches below it,
+ * which fall through unchanged when there's no schedule or a gap in it.
  */
 export function pickNextAction({
   checkpoints,
@@ -29,7 +38,10 @@ export function pickNextAction({
   loadIndexValue,
   todayKey,
   weekEndKey,
-  enabledModules
+  enabledModules,
+  activeSlot,
+  nextSlot,
+  minute
 }: {
   checkpoints: Checkpoint[];
   dueRevisionCount: number;
@@ -39,8 +51,39 @@ export function pickNextAction({
   weekEndKey: string;
   /** Plan §9.2: "Up next" must never recommend an action in a disabled module. Omitted = every module counts as enabled (existing callers, tests). */
   enabledModules?: Set<ModuleId>;
+  /** plan/14 §7.1 — today's active block (`getActiveSlot`), if any. Omitted = the cascade behaves
+   *  exactly as it did before this branch existed (existing callers, tests). */
+  activeSlot?: ScheduleSlot;
+  /** Today's next block (`getNextSlot`), checked against `minute` for the "starts within 15
+   *  minutes" branch. */
+  nextSlot?: ScheduleSlot;
+  /** Minutes since midnight — required whenever `nextSlot` is given, to know how soon it starts. */
+  minute?: number;
 }): NextAction | null {
   const enabled = (id: ModuleId) => !enabledModules || enabledModules.has(id);
+
+  if (activeSlot) {
+    return {
+      kind: "block",
+      title: activeSlot.title,
+      why: activeSlot.type === "class" ? "In progress" : "Active now",
+      href: "/dashboard",
+      slot: activeSlot
+    };
+  }
+  if (nextSlot && minute != null) {
+    const minutesUntil = minutesFromTime(nextSlot.startTime) - minute;
+    if (minutesUntil >= 0 && minutesUntil <= 15) {
+      return {
+        kind: "block",
+        title: nextSlot.title,
+        why: `Starts in ${minutesUntil} minute${minutesUntil === 1 ? "" : "s"}`,
+        href: "/dashboard",
+        slot: nextSlot,
+        upcoming: true
+      };
+    }
+  }
 
   const urgent =
     enabled("courses") &&

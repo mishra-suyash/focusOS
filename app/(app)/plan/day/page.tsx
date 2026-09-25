@@ -40,6 +40,7 @@ import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { isBreakMode } from "@/lib/terms";
 import { rangeOverlapsSlots } from "@/lib/timeline";
 import { friendlyDate, todayKey } from "@/lib/dates";
+import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
 import type { Course, DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotType, Task, Term } from "@/types";
 
@@ -76,8 +77,11 @@ function DayPlannerContent() {
     const routineSlots = routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, dateKey).filter(
       (slot) => !rangeOverlapsSlots(minutesFromTime(slot.startTime), minutesFromTime(slot.endTime), classSlots)
     );
-    return [...classSlots, ...routineSlots];
-  }, [terms, courses, settings.routineBlocks, dateKey]);
+    // plan/14 §5.6 — the fixed weekly-planning anchor, merged in the same "always present, never
+    // overwritten once saved" way as class/routine blocks.
+    const weeklyPlanningSlot = weeklyPlanningSlotForDate(settings.weeklyPlanning, dateKey);
+    return weeklyPlanningSlot ? [...classSlots, ...routineSlots, weeklyPlanningSlot] : [...classSlots, ...routineSlots];
+  }, [terms, courses, settings.routineBlocks, settings.weeklyPlanning, dateKey]);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [templateName, setTemplateName] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
@@ -166,7 +170,7 @@ function DayPlannerContent() {
       {needsTerm ? (
         <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
           <span>You have courses, but no active term — class blocks won&apos;t show here until one covers this date.</span>
-          <Link href="/courses" className="btn-secondary py-1 text-xs">
+          <Link href="/settings#term-add" className="btn-secondary py-1 text-xs">
             Set up a term
           </Link>
         </div>

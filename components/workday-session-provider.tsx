@@ -5,7 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from "@/components/auth-provider";
 import { useDay } from "@/hooks/use-day";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { todayKey } from "@/lib/dates";
+import { todayKey, weekStartKey } from "@/lib/dates";
 import { courseSlotsForDate } from "@/lib/courses";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import {
@@ -26,7 +26,8 @@ import { getActiveSlot, minutesFromTime, scheduleFromTemplate, scheduleSummary, 
 import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePackWorkdayTemplate } from "@/lib/templates/builtin";
 import { isBreakMode } from "@/lib/terms";
 import { slotAutoStatus } from "@/lib/tracking";
-import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term } from "@/types";
+import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
+import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term, WeeklyReview } from "@/types";
 
 function slotsOverlap(a: ScheduleSlot, b: ScheduleSlot) {
   return minutesFromTime(a.startTime) < minutesFromTime(b.endTime) && minutesFromTime(b.startTime) < minutesFromTime(a.endTime);
@@ -51,8 +52,12 @@ interface WorkdaySessionContextValue {
   reminder: ReminderEvent | null;
   acknowledgeReminder: () => void;
   dismissReminder: () => void;
-  /** One-time notice from the day-start flow (F1 built-in fallback used, F3 class-overlap blocks skipped). */
+  /** One-time notice from the day-start flow (F1 built-in fallback used, F3 class-overlap blocks
+   *  skipped, or plan/14 §7.3's "no weekly plan" prompt). */
   startDayNotice: string | null;
+  /** plan/14 §7.3 S5 — set alongside `startDayNotice` only for the "no weekly plan" prompt, so the
+   *  banner can offer a one-click way to fix it rather than just naming the problem. */
+  startDayLink: { href: string; label: string } | null;
   dismissStartDayNotice: () => void;
   hydrationMinutes: number;
   breakMinutes: number;
@@ -71,7 +76,9 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
   const [schedule, setSchedule] = useState<DailySchedule | null>(null);
   const [reminder, setReminder] = useState<ReminderEvent | null>(null);
   const [startDayNotice, setStartDayNotice] = useState<string | null>(null);
+  const [startDayLink, setStartDayLink] = useState<{ href: string; label: string } | null>(null);
   const lastHydrationRef = useRef<number>(0);
+  const lastActiveSlotIdRef = useRef<string | null>(null);
   const lastBreakRef = useRef<number>(0);
 
   const session = day?.session ?? null;
@@ -102,8 +109,28 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
 
   useEffect(() => {
     if (!active) return;
+    // Seed with whatever's active right now — otherwise the ref's initial `null` would make the
+    // very first tick treat an already-in-progress block as "just starting" and fire a spurious
+    // notification for it.
+    lastActiveSlotIdRef.current = schedule ? (getActiveSlot(sortedSlots(schedule.slots))?.id ?? null) : null;
     const id = window.setInterval(() => {
       const now = Date.now();
+
+      // plan/14 §7.3 — block transitions: when the active block changes, fire a notification for
+      // the new one. Deliberately just the notification here, not a live re-run of §6.5's
+      // `slotAutoStatus` on the block that just ended — that already runs at two points
+      // (`FocusSessionProvider`'s finalize, and `end()` below), and the day wrap-up's "Blocks that
+      // timed out" card (components/uncovered-blocks-review.tsx) catches anything still uncovered.
+      if (schedule) {
+        const currentActive = getActiveSlot(sortedSlots(schedule.slots));
+        if (currentActive && currentActive.id !== lastActiveSlotIdRef.current) {
+          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            new Notification("FocusOS", { body: `${currentActive.title} starting.` });
+          }
+        }
+        lastActiveSlotIdRef.current = currentActive?.id ?? null;
+      }
+
       if (now - lastHydrationRef.current >= settings.hydrationMinutes * 60 * 1000) {
         fireReminder("hydration", "Time for a water break. Stay hydrated.");
         return;
@@ -170,7 +197,10 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         const routineSlots = routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, today).filter(
           (slot) => !classSlots.some((classSlot) => slotsOverlap(slot, classSlot))
         );
-        const lockedSlots = [...classSlots, ...routineSlots];
+        // plan/14 §5.6 — the fixed weekly-planning anchor, merged in the same "always present"
+        // way as the class and routine layers above.
+        const weeklyPlanningSlot = weeklyPlanningSlotForDate(settings.weeklyPlanning, today);
+        const lockedSlots = weeklyPlanningSlot ? [...classSlots, ...routineSlots, weeklyPlanningSlot] : [...classSlots, ...routineSlots];
         // F3: class/routine blocks always win — skip any template block that overlaps one, rather
         // than silently colliding (Plan/Save day would reject the overlap outright otherwise).
         const nonOverlapping = baseSlots.filter((slot) => !lockedSlots.some((lockedSlot) => slotsOverlap(slot, lockedSlot)));
@@ -183,6 +213,19 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         const notices: string[] = [];
         if (usedFallbackName) notices.push(`Used the ${usedFallbackName} template. Change it in Plan → Templates.`);
         if (skippedTitles.length > 0) notices.push(`Skipped ${skippedTitles.length} template block${skippedTitles.length > 1 ? "s" : ""} that overlapped a class or routine block: ${skippedTitles.join(", ")}.`);
+
+        // plan/14 §7.3 S5 — "No plan for today" is honest about *why* today fell back to a
+        // template: the weekly planning session for the current week was never committed. Checked
+        // only in this no-schedule branch, since a day that already has a saved schedule didn't
+        // run the fallback logic above in the first place.
+        const reviews = await fetchCollection<WeeklyReview>(user.uid, "weeklyReviews", [orderBy("weekStart", "desc")]);
+        const currentWeekPlanned = reviews.find((review) => review.weekStart === weekStartKey())?.plan?.completedAt;
+        if (!currentWeekPlanned) {
+          const lastPlanned = reviews.find((review) => review.plan?.completedAt)?.plan?.completedAt;
+          const daysSince = lastPlanned ? Math.round((Date.now() - new Date(lastPlanned).getTime()) / 86_400_000) : null;
+          notices.push(daysSince == null ? "No plan for today. You haven't run a weekly planning session yet." : `No plan for today. Your last weekly planning session was ${daysSince} day${daysSince === 1 ? "" : "s"} ago.`);
+          setStartDayLink({ href: "/plan/week", label: "Plan this week" });
+        }
         if (notices.length > 0) setStartDayNotice(notices.join(" "));
       }
       await startWorkdaySession(user.uid, today);
@@ -191,7 +234,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     } finally {
       setStarting(false);
     }
-  }, [user, starting, today, settings.breakTemplateId, settings.packId]);
+  }, [user, starting, today, settings.breakTemplateId, settings.packId, settings.weeklyPlanning]);
 
   const end = useCallback(async () => {
     if (!user) return;
@@ -296,7 +339,10 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
 
   const setHydrationMinutes = useCallback((minutes: number) => updateSettings({ hydrationMinutes: minutes }), [updateSettings]);
   const setBreakMinutes = useCallback((minutes: number) => updateSettings({ breakMinutes: minutes }), [updateSettings]);
-  const dismissStartDayNotice = useCallback(() => setStartDayNotice(null), []);
+  const dismissStartDayNotice = useCallback(() => {
+    setStartDayNotice(null);
+    setStartDayLink(null);
+  }, []);
 
   const value = useMemo<WorkdaySessionContextValue>(
     () => ({
@@ -310,6 +356,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       acknowledgeReminder,
       dismissReminder,
       startDayNotice,
+      startDayLink,
       dismissStartDayNotice,
       hydrationMinutes: settings.hydrationMinutes,
       breakMinutes: settings.breakMinutes,
@@ -327,6 +374,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       acknowledgeReminder,
       dismissReminder,
       startDayNotice,
+      startDayLink,
       dismissStartDayNotice,
       settings.hydrationMinutes,
       settings.breakMinutes,

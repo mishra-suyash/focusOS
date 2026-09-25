@@ -69,7 +69,6 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/review", label: "Revise", icon: BrainCircuit, moduleId: "revise", group: "primary" },
   { href: "/goals", label: "Goals", icon: Flag, moduleId: "goals", group: "primary" },
   { href: "/reviews/daily", label: "Daily wrap-up", icon: ClipboardList, group: "more" },
-  { href: "/reviews/weekly", label: "Weekly check-in", icon: ClipboardList, moduleId: "weeklyCheckin", group: "more" },
   { href: "/analytics", label: "Analytics", icon: BarChart3, moduleId: "analytics", group: "more" },
   { href: "/insights", label: "AI Insights", icon: Sparkles, moduleId: "insights", group: "more" }
 ];

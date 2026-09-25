@@ -19,9 +19,11 @@ import { useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
+import { useUserSettings } from "@/hooks/use-user-settings";
 import { courseSlotsForDate } from "@/lib/courses";
 import { todayKey } from "@/lib/dates";
 import { isBreakMode } from "@/lib/terms";
+import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { Course, DailySchedule, Task, Term } from "@/types";
 
 export default function CalendarPage() {
@@ -31,6 +33,7 @@ export default function CalendarPage() {
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { allCheckpoints } = useCourseCheckpoints(courses);
   const { items: schedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
+  const { settings } = useUserSettings();
 
   const days = eachDayOfInterval({
     start: startOfWeek(startOfMonth(month), { weekStartsOn: 1 }),
@@ -58,7 +61,7 @@ export default function CalendarPage() {
           <span>
             You have courses, but no active term — class blocks won&apos;t show on Calendar or Plan/Day until one covers today.
           </span>
-          <Link href="/courses" className="btn-secondary py-1 text-xs">
+          <Link href="/settings#term-add" className="btn-secondary py-1 text-xs">
             Set up a term
           </Link>
         </div>
@@ -92,6 +95,7 @@ export default function CalendarPage() {
             const dueTasks = tasks.filter((task) => task.dueDate === dateKey);
             const dueCheckpoints = allCheckpoints.filter((checkpoint) => checkpoint.dueAt === dateKey);
             const hasSchedule = schedules.some((schedule) => schedule.dateKey === dateKey && schedule.slots.length > 0);
+            const weeklyPlanningSlot = weeklyPlanningSlotForDate(settings.weeklyPlanning, dateKey);
             return (
               <Link
                 key={dateKey}
@@ -109,6 +113,9 @@ export default function CalendarPage() {
                   {hasSchedule ? <span className="h-1.5 w-1.5 rounded-full bg-moss-500" title="Schedule planned" aria-label="Schedule planned" /> : null}
                 </div>
                 <div className="mt-1 space-y-0.5">
+                  {weeklyPlanningSlot ? (
+                    <p className="truncate rounded bg-moss-500/10 px-1 py-0.5 text-moss-700 dark:text-moss-300">Weekly planning</p>
+                  ) : null}
                   {classes.slice(0, 2).map((slot) => (
                     <p key={slot.id} className="truncate rounded bg-fuchsia-500/10 px-1 py-0.5 text-fuchsia-700 dark:text-fuchsia-300">
                       {slot.title}

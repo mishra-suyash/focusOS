@@ -84,6 +84,27 @@ function cleanValue(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Turns dot-path keys (`"session.startedAt"`) into a real nested object (`{session: {startedAt}}`)
+ * — the shape a brand-new document needs, since `updateDoc`'s dot-path parsing (what actually
+ * treats a dotted key as a field path — see `saveDayFields`'s doc comment) only works on a
+ * document that already exists.
+ */
+function expandDotPaths(fields: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    const parts = key.split(".");
+    let node = result;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const part = parts[i];
+      if (typeof node[part] !== "object" || node[part] === null) node[part] = {};
+      node = node[part] as Record<string, unknown>;
+    }
+    node[parts[parts.length - 1]] = value;
+  }
+  return result;
+}
+
 export function userCollection(uid: string, name: string) {
   if (!db) throw new Error("Firebase is not configured.");
   return collection(db, "users", uid, name);
@@ -245,13 +266,34 @@ export async function savePomodoro(uid: string, session: Omit<PomodoroSession, "
 /**
  * Writes fields onto the merged `days/{date}` document. Pass dot-path keys
  * (e.g. `"review.focusRating"`, `"session.startedAt"`) to update a nested
- * field without clobbering its siblings — Firestore's `merge: true` treats a
- * dotted top-level key as a field path, and `setDoc` creates the doc if it
- * doesn't exist yet, so callers never need to check existence first.
+ * field without clobbering its siblings.
+ *
+ * Bug fixed live (plan/14 §12): a dotted key passed to `setDoc(ref, data, {merge: true})` is
+ * **not** parsed as a field path by this SDK — it silently creates a literal top-level field
+ * whose name contains a dot (verified directly: after `startWorkdaySession`, the `Day` document
+ * held sibling fields `"session.startedAt"`, `"session.hydrationCount"` etc., not a nested
+ * `session` object), so `day.session?.startedAt` stayed `undefined` forever and "Start day" could
+ * never flip to "End day". Only `updateDoc()` actually treats a dotted key as a field path — but
+ * it throws if the document doesn't exist yet, so this checks existence first: `updateDoc` on an
+ * existing doc (the common case), `setDoc` with the dotted keys expanded into a real nested object
+ * (`expandDotPaths`) to create one fresh. Callers still never need to check existence themselves.
+ * The create branch keeps `{merge: true}` even though the doc was just observed missing — the
+ * `getDoc` above and this write aren't atomic, so something else (the morning-brief cron, another
+ * tab, `day-timeline-editor.tsx`'s own `saveDayFields` calls) can create it in between; `merge`
+ * makes that a harmless overlap instead of a clobber, and it's required for `deleteField()`
+ * (`undoEndWorkdaySession`) to be legal at all on a `setDoc`.
  */
 export async function saveDayFields(uid: string, date: string, fields: Record<string, unknown>) {
+  const ref = doc(userCollection(uid, "days"), date);
+  const payload = withoutUndefined({ updatedAt: now(), ...fields });
+  const existing = await getDoc(ref);
+  trackRead(1);
   trackWrite();
-  await setDoc(doc(userCollection(uid, "days"), date), withoutUndefined({ date, updatedAt: now(), ...fields }), { merge: true });
+  if (existing.exists()) {
+    await updateDoc(ref, payload);
+  } else {
+    await setDoc(ref, { date, ...expandDotPaths(payload) }, { merge: true });
+  }
 }
 
 export async function saveWeeklyReview(uid: string, review: Omit<WeeklyReview, "id" | "updatedAt">) {
@@ -259,6 +301,30 @@ export async function saveWeeklyReview(uid: string, review: Omit<WeeklyReview, "
   await setDoc(doc(userCollection(uid, "weeklyReviews"), review.weekStart), withoutUndefined({ ...review, updatedAt: now() }), {
     merge: true
   });
+}
+
+/**
+ * plan/14 §5.5 — field writes onto `weeklyReviews/{weekStart}`. Lets `/plan/week`'s Steps 3-5 write
+ * `plan` without ever touching `wins`/`missedGoals`/etc. — the `saveWeeklyReview` call above always
+ * requires the full review shape, so it's the wrong tool for a plan-only write and would clobber
+ * the review text with empty strings if used for one. Top-level `merge: true` genuinely does leave
+ * sibling top-level fields alone (verified), so a plain key like `"plan"` or `"wins"` is enough —
+ * callers should pass whole nested values (e.g. the complete `plan` object) rather than dot-path
+ * keys like `"plan.completedAt"`: those don't nest (see `saveDayFields`'s doc comment for what that
+ * actually does), so this uses the same existence-check-then-`updateDoc`-or-`setDoc` fix as a
+ * defensive measure in case a dotted key ever reaches this function anyway.
+ */
+export async function saveWeeklyReviewFields(uid: string, weekStart: string, fields: Record<string, unknown>) {
+  const ref = doc(userCollection(uid, "weeklyReviews"), weekStart);
+  const payload = withoutUndefined({ weekStart, updatedAt: now(), ...fields });
+  const existing = await getDoc(ref);
+  trackRead(1);
+  trackWrite();
+  if (existing.exists()) {
+    await updateDoc(ref, payload);
+  } else {
+    await setDoc(ref, expandDotPaths(payload), { merge: true });
+  }
 }
 
 export async function createDayTemplate(uid: string, template: NewDayTemplate): Promise<string> {

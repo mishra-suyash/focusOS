@@ -274,7 +274,30 @@ export interface WeeklyReview {
   blockers: string;
   nextWeekPriorities: string;
   averageFocusRating: number;
+  /** plan/14 §4/§5.5 — the forward half of the document: what was committed for `weekStart`'s own
+   *  week. `weeklyReviews/{weekStart}` is already keyed by the Monday of its week, so the plan for a
+   *  week and the review of it belong on one document. `saveWeeklyReview` writes with `merge: true`,
+   *  so saving the review fields above never clobbers this and vice versa. */
+  plan?: WeekPlan;
   updatedAt: string;
+}
+
+/**
+ * plan/14 §4/§5 — `/plan/week`'s Step 3 (targets) through Step 5 (commit) written onto one week's
+ * `WeeklyReview`. `targets` is a snapshot taken at commit time (plan/13 §13 decision: kept separate
+ * from the live `Course.targetMinutesPerWeek`/`weeklyTargets`, so editing a course's hours in a later
+ * week never silently rewrites what an earlier week appears to have targeted). `proposedBlocks` is an
+ * array field — a Firestore `merge: true` write replaces it wholesale, so a caller must always send
+ * the complete list, never a delta. `blockDecisions` is a map and merges per-key, the same
+ * `EveningRollup.slotDecisions` pattern, so a re-opened planner never re-offers a handled proposal.
+ */
+export interface WeekPlan {
+  targets: { courseId: string; bucket: TaskBucket; minutes: number }[];
+  /** Capacity numbers as computed at commit time (§5.3) — kept so a later Look back can compare plan to reality. */
+  capacity: { freeMinutes: number; committedMinutes: number };
+  proposedBlocks: (ProposedSlot & { dateKey: string; courseId?: string; bucket?: TaskBucket })[];
+  blockDecisions?: Record<string, ProposalDecision>;
+  completedAt?: string;
 }
 
 export interface CourseSession {
@@ -840,6 +863,20 @@ export interface UserSettings {
    * schedules) an explicit, overridable setting, since every timed Google Calendar event needs a
    * real IANA timezone (plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.1). */
   timezone?: string;
+  /** plan/14 §5.6/§4 — when the weekly planning session happens. Absent = the feature is off and
+   *  `weeklyPlanningSlotForDate` (lib/weekplan.ts) materializes nothing, the same "absent means the
+   *  default" convention `routineBlocks` already uses. */
+  weeklyPlanning?: {
+    enabled: boolean;
+    /** 0 (Sun) – 6 (Sat) — same convention as `RoutineBlock.daysOfWeek` and `CourseSession.dayOfWeek`. */
+    dayOfWeek: number;
+    startTime: string;
+    endTime: string;
+  };
+  /** plan/14 §4/§5.3 — the hours the user actually intends to work. Absent = `DEFAULT_WORKING_WINDOW`
+   *  (lib/weekplan.ts). Read by the weekly planner's capacity meter and its block placement bounds —
+   *  without it, "free time" means every waking minute, which is not a number anyone plans against. */
+  workingWindow?: { startTime: string; endTime: string; daysOfWeek: number[] };
   updatedAt: string;
 }
 

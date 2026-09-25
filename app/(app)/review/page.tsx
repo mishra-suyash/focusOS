@@ -2,11 +2,12 @@
 
 /**
  * NOTE for maintainers: this route (`/review`, singular — the spaced-repetition "Revise" queue)
- * is unrelated to `/reviews/daily` and `/reviews/weekly` (plural — the Daily wrap-up / Weekly
- * check-in reflection pages). Also unrelated to a course's "Revision hours/week" field, which
- * creates a plain recurring Task rather than feeding this queue. See plan/13's T5 — a real naming
- * collision across three independent features, kept distinct in nav copy but not in route/code
- * naming. Don't assume shared logic between these just because the names rhyme.
+ * is unrelated to `/reviews/daily` (plural — the Daily wrap-up reflection page) or `/plan/week`
+ * (whose Step 1 absorbed the old `/reviews/weekly` "Weekly check-in", plan/14 §5.1). Also
+ * unrelated to a course's "Revision hours/week" field, which creates a plain recurring Task rather
+ * than feeding this queue. See plan/13's T5 — a real naming collision across independent features,
+ * kept distinct in nav copy but not in route/code naming. Don't assume shared logic between these
+ * just because the names rhyme.
  */
 import { orderBy } from "firebase/firestore";
 import { Sparkles } from "lucide-react";

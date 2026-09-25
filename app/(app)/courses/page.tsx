@@ -1,7 +1,7 @@
 "use client";
 
 import { orderBy } from "firebase/firestore";
-import { RefreshCw, Sparkles, Star, Trash2 } from "lucide-react";
+import { Sparkles, Star, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { CheckpointForm, checkpointTypeLabels } from "@/components/checkpoint-form";
@@ -11,8 +11,6 @@ import { CourseSessionsEditor } from "@/components/course-sessions-editor";
 import { EmptyState, focusSection } from "@/components/empty-state";
 import { InfoHint } from "@/components/info-hint";
 import { ModuleGate } from "@/components/module-gate";
-import { RecurringCommitmentForm } from "@/components/recurring-commitment-form";
-import { RecurringCommitmentRow } from "@/components/recurring-commitment-row";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -24,6 +22,7 @@ import { saveClassLogEntry } from "@/lib/classlog";
 import {
   bucketWeeklyTarget,
   completedMinutesThisWeek,
+  courseSlotsForDate,
   currentWeekDateKeys,
   dayOfWeekLabels,
   effectiveCourseStatus,
@@ -31,6 +30,7 @@ import {
   scheduledMinutesThisWeek,
   syncRevisionTemplate
 } from "@/lib/courses";
+import { classMinutesForWeek } from "@/lib/tracking";
 import { todayKey } from "@/lib/dates";
 import { computeCourseCoverage, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import { taskBucketLabels, taskBuckets } from "@/lib/options";
@@ -38,11 +38,8 @@ import { isBreakMode } from "@/lib/terms";
 import {
   createCheckpoint,
   createCourse,
-  createRecurringTaskTemplate,
-  createTerm,
   deleteCheckpoint,
   deleteCourse,
-  deleteTerm,
   subscribeCourseClassLogs,
   subscribeCourseTopics,
   updateCheckpoint,
@@ -58,14 +55,12 @@ import type {
   CourseSession,
   Goal,
   NewCourse,
-  NewTerm,
   Paper,
   PomodoroSession,
   RecurringTaskTemplate,
   RevisionItem,
   Task,
   Term,
-  TermKind,
   Topic
 } from "@/types";
 
@@ -108,9 +103,8 @@ function CoursesPageContent() {
 
   return (
     <>
-      <SectionHeader title="Courses" eyebrow="Terms, coursework, and class schedule" />
-      <TermsPanel terms={terms} onCreate={(term) => createTerm(user!.uid, term)} onDelete={(id) => deleteTerm(user!.uid, id)} />
-      <div className="mt-6 grid gap-6 xl:grid-cols-[380px_1fr]">
+      <SectionHeader title="Courses" eyebrow="Coursework and class schedule" />
+      <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
         <section id="course-add" className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Add a course</h2>
           <CourseForm terms={terms} onCreate={handleCreateCourse} />
@@ -143,53 +137,6 @@ function CoursesPageContent() {
         </section>
       </div>
     </>
-  );
-}
-
-function TermsPanel({ terms, onCreate, onDelete }: { terms: Term[]; onCreate: (term: NewTerm) => Promise<void>; onDelete: (id: string) => void }) {
-  const [name, setName] = useState("");
-  const [kind, setKind] = useState<TermKind>("semester");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!name.trim() || !startDate || !endDate) return;
-    await onCreate({ name: name.trim(), kind, startDate, endDate });
-    setName("");
-    setStartDate("");
-    setEndDate("");
-  }
-
-  return (
-    <section id="term-add" className="card p-5">
-      <h2 className="mb-3 text-lg font-semibold">Terms</h2>
-      <div className="mb-3 flex flex-wrap gap-2">
-        {terms.map((term) => (
-          <span key={term.id} className="flex items-center gap-2 rounded-md bg-ink-50 px-2.5 py-1.5 text-xs dark:bg-ink-800">
-            <span className="font-medium">{term.name}</span>
-            <span className="text-ink-500">
-              {term.kind} · {term.startDate} to {term.endDate}
-            </span>
-            <button className="text-ink-400 hover:text-red-600" onClick={() => onDelete(term.id)} aria-label="Delete term">
-              <Trash2 className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-        {terms.length === 0 ? <p className="text-sm text-ink-500">No terms yet — courses without a term are always treated as active.</p> : null}
-      </div>
-      <form onSubmit={submit} className="grid gap-2 sm:grid-cols-[1fr_130px_150px_150px_auto]">
-        <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Term name (e.g. Sem 3)" />
-        <select className="input" value={kind} onChange={(e) => setKind(e.target.value as TermKind)}>
-          <option value="semester">Semester</option>
-          <option value="break">Break</option>
-          <option value="none">None</option>
-        </select>
-        <input className="input" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-        <input className="input" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-        <button className="btn-secondary">Add term</button>
-      </form>
-    </section>
   );
 }
 
@@ -226,13 +173,6 @@ function CourseCard({
   const [editingSessions, setEditingSessions] = useState(false);
   const [logs, setLogs] = useState<ClassLog[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
-  const [generating, setGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState("");
-  const [revisionHours, setRevisionHours] = useState(course.targetMinutesPerWeek ? String(course.targetMinutesPerWeek / 60) : "");
-  const [savingRevisionHours, setSavingRevisionHours] = useState(false);
-  const [assignmentHours, setAssignmentHours] = useState(course.weeklyTargets?.assignment ? String(course.weeklyTargets.assignment / 60) : "");
-  const [backlogHours, setBacklogHours] = useState(course.weeklyTargets?.backlog ? String(course.weeklyTargets.backlog / 60) : "");
-  const [savingBucket, setSavingBucket] = useState<"assignment" | "backlog" | null>(null);
   const status = effectiveCourseStatus(course, today);
   const term = terms.find((item) => item.id === course.termId);
   const coverage = computeCourseCoverage(topics, revisionItems, course.id);
@@ -242,6 +182,20 @@ function CourseCard({
   // and `/plan/day` already warn about this; the course card — the one page where the sessions were
   // configured — showed no warning and actively contradicted them with an ACTIVE badge.
   const classesWontShow = status === "active" && course.sessions.length > 0 && isBreakMode(terms, today);
+
+  // plan/14 §6.3 — Class time is real course time but not focus time, so it's summed separately
+  // from the buckets above rather than folded into `completedMinutesThisWeek`. Gated by
+  // `isBreakMode` per date the same way `/plan/day` and `/plan/calendar` gate `courseSlotsForDate`
+  // (§6.1's comment on that function), so a course mid-break correctly shows 0 rather than phantom
+  // class blocks the day itself will never materialize.
+  const weekDateKeys = currentWeekDateKeys();
+  const courseSlotsByDate: Record<string, { startTime: string; endTime: string }[]> = {};
+  for (const dateKey of weekDateKeys) {
+    courseSlotsByDate[dateKey] = isBreakMode(terms, dateKey) ? [] : courseSlotsForDate([course], dateKey);
+  }
+  const heldDates = weekDateKeys.filter((dateKey) => courseSlotsByDate[dateKey].length > 0);
+  const loggedDates = new Set(logs.filter((log) => weekDateKeys.includes(log.date)).map((log) => log.date));
+  const classMinutes = classMinutesForWeek(courseSlotsByDate, logs, weekDateKeys);
 
   useEffect(() => {
     if (!user) return;
@@ -272,50 +226,6 @@ function CourseCard({
     await Promise.all(
       recurringTemplates.filter((template) => template.active).map((template) => updateRecurringTaskTemplate(user.uid, template.id, { active: false }))
     );
-  }
-
-  /** "number of hours can be set by user in the course" — stores 0 rather than `undefined` when
-   * cleared, since `updateCourse`'s patch runs through `withoutUndefined` and an `undefined` value
-   * would just get silently dropped instead of clearing the field in Firestore. */
-  async function saveRevisionHours() {
-    if (!user) return;
-    setSavingRevisionHours(true);
-    const targetMinutesPerWeek = revisionHours ? Math.round(Number(revisionHours) * 60) : 0;
-    await updateCourse(user.uid, course.id, { targetMinutesPerWeek });
-    await syncRevisionTemplate(
-      user.uid,
-      { id: course.id, name: course.name, targetMinutesPerWeek, startDate: course.startDate, endDate: course.endDate },
-      recurringTemplates,
-      workMinutes
-    );
-    setSavingRevisionHours(false);
-  }
-
-  /** Same "0 rather than undefined on clear" reasoning as `saveRevisionHours` above — `weeklyTargets` is patched wholesale so clearing one bucket never resurrects the other from a stale merge. */
-  async function saveBucketTarget(bucket: "assignment" | "backlog", hours: string) {
-    if (!user) return;
-    setSavingBucket(bucket);
-    const minutes = hours ? Math.round(Number(hours) * 60) : 0;
-    await updateCourse(user.uid, course.id, { weeklyTargets: { ...course.weeklyTargets, [bucket]: minutes } });
-    setSavingBucket(null);
-  }
-
-  async function generateNow() {
-    if (!user) return;
-    setGenerating(true);
-    setGenerateError("");
-    try {
-      const token = await user.getIdToken();
-      const response = await fetch("/api/daily-loop/recurring-tasks", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error || "Failed to generate recurring tasks.");
-      }
-    } catch (err) {
-      setGenerateError(err instanceof Error ? err.message : "Failed to generate recurring tasks.");
-    } finally {
-      setGenerating(false);
-    }
   }
 
   return (
@@ -364,29 +274,26 @@ function CourseCard({
       {classesWontShow ? (
         <p className="mt-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
           &ldquo;Active&rdquo; here means the course isn&apos;t dropped or completed — it doesn&apos;t mean its classes are on the timeline. No term covers today, so these sessions won&apos;t show on Plan → Day or Calendar until one does.{" "}
-          <Link href="/courses#term-add" className="font-medium underline">
+          <Link href="/settings#term-add" className="font-medium underline">
             Add a term
           </Link>
         </p>
       ) : null}
 
       <div className="mt-3 space-y-1.5">
-        <p className="label mb-1">This week&apos;s buckets</p>
+        <div className="mb-1 flex items-center justify-between">
+          <p className="label">This week&apos;s buckets</p>
+          <Link href="/plan/week" className="text-xs font-medium text-moss-700 hover:underline dark:text-moss-400">
+            Change in weekly planning
+          </Link>
+        </div>
         {taskBuckets.map((bucket) => {
           const target = bucketWeeklyTarget(course, bucket, linkedGoals);
           const scheduled = scheduledMinutesThisWeek(courseTasks, course.id, bucket, workMinutes);
           const done = completedMinutesThisWeek(sessions, courseTasks, course.id, bucket);
           if (bucket === "goal") {
             return (
-              <BucketRow
-                key={bucket}
-                label={taskBucketLabels[bucket]}
-                infoHint="bucketGoal"
-                target={target}
-                scheduled={scheduled}
-                done={done}
-                linkedGoals={linkedGoals}
-              />
+              <BucketRow key={bucket} label={taskBucketLabels[bucket]} infoHint="bucketGoal" target={target} scheduled={scheduled} done={done} linkedGoals={linkedGoals} />
             );
           }
           if (bucket === "revision") {
@@ -394,37 +301,27 @@ function CourseCard({
             return (
               <BucketRow
                 key={bucket}
-                id={`revision-hours-${course.id}`}
                 label={taskBucketLabels[bucket]}
                 infoHint="revisionHoursPerWeek"
                 target={target}
                 scheduled={scheduled}
                 done={done}
                 paused={Boolean(revisionTemplate && !revisionTemplate.active)}
-                editableHours={revisionHours}
-                onEditableHoursChange={setRevisionHours}
-                onSave={saveRevisionHours}
-                saving={savingRevisionHours}
               />
             );
           }
-          const hours = bucket === "assignment" ? assignmentHours : backlogHours;
-          const setHours = bucket === "assignment" ? setAssignmentHours : setBacklogHours;
-          return (
-            <BucketRow
-              key={bucket}
-              label={taskBucketLabels[bucket]}
-              infoHint="bucketAssignmentBacklog"
-              target={target}
-              scheduled={scheduled}
-              done={done}
-              editableHours={hours}
-              onEditableHoursChange={setHours}
-              onSave={() => saveBucketTarget(bucket, hours)}
-              saving={savingBucket === bucket}
-            />
-          );
+          return <BucketRow key={bucket} label={taskBucketLabels[bucket]} infoHint="bucketAssignmentBacklog" target={target} scheduled={scheduled} done={done} />;
         })}
+        <div className="flex flex-wrap items-center gap-2 rounded-md bg-ink-50 px-2 py-1.5 text-xs dark:bg-ink-800">
+          <span className="inline-flex w-20 shrink-0 items-center gap-1 font-medium">
+            Class time
+            <InfoHint term="classTime" />
+          </span>
+          <span className="ml-auto rounded px-1.5 py-0.5 font-medium text-ink-500">
+            {formatHours(classMinutes)} done
+            {heldDates.length > 0 ? ` · ${loggedDates.size} of ${heldDates.length} logged` : ""}
+          </span>
+        </div>
       </div>
 
       <div className="mt-4">
@@ -446,31 +343,22 @@ function CourseCard({
       <div className="mt-4">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <p className="label flex items-center gap-1">Recurring commitments</p>
-          <button
-            className="btn-secondary py-1 text-xs"
-            onClick={generateNow}
-            disabled={generating}
-            title="Generates due tasks for every recurring commitment across all your courses, not just this one — the daily cron does this automatically."
-          >
-            <RefreshCw className={generating ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
-            {generating ? "Generating..." : "Generate now"}
-          </button>
+          <Link href="/tasks" className="text-xs font-medium text-moss-700 hover:underline dark:text-moss-400">
+            Manage in Tasks
+          </Link>
         </div>
-        <p className="mb-2 text-xs text-ink-500">Generates due tasks for every course&apos;s recurring commitments, not just this one.</p>
-        {generateError ? <p className="mb-2 text-xs text-red-600 dark:text-red-400">{generateError}</p> : null}
-        <div className="space-y-2">
-          {recurringTemplates.map((template) => (
-            <RecurringCommitmentRow key={template.id} uid={user!.uid} template={template} />
-          ))}
-          {recurringTemplates.length === 0 ? <p className="text-sm text-ink-500">No recurring commitments yet — a TA meeting, office hours, or a problem set due every week.</p> : null}
-        </div>
-        <div className="mt-2">
-          <RecurringCommitmentForm
-            courseStartDate={course.startDate}
-            courseEndDate={course.endDate}
-            onCreate={(template) => createRecurringTaskTemplate(user!.uid, { ...template, courseId: course.id })}
-          />
-        </div>
+        {recurringTemplates.length === 0 ? (
+          <p className="text-sm text-ink-500">No recurring commitments yet — add one from Tasks.</p>
+        ) : (
+          <div className="space-y-1">
+            {recurringTemplates.map((template) => (
+              <p key={template.id} className={`truncate rounded-md bg-ink-50 px-2 py-1 text-xs dark:bg-ink-800 ${template.active ? "text-ink-600 dark:text-ink-300" : "text-ink-400 line-through"}`}>
+                {template.title} · {dayOfWeekLabels[template.daysOfWeek[0]]?.slice(0, 3) ?? ""}
+                {template.daysOfWeek.length > 1 ? ` +${template.daysOfWeek.length - 1}` : ""} · {template.cadence === "biweekly" ? "every 2 weeks" : "every week"}
+              </p>
+            ))}
+          </div>
+        )}
       </div>
 
       {papers.length > 0 || openTasks.length > 0 || linkedGoals.length > 0 ? (
@@ -574,56 +462,31 @@ function BucketRow({
   target,
   scheduled,
   done,
-  editableHours,
-  onEditableHoursChange,
-  onSave,
-  saving,
   linkedGoals,
-  paused,
-  id
+  paused
 }: {
-  id?: string;
   label: string;
   infoHint?: "revisionHoursPerWeek" | "bucketAssignmentBacklog" | "bucketGoal";
   target: number;
   scheduled: number;
   done: number;
-  editableHours?: string;
-  onEditableHoursChange?: (value: string) => void;
-  onSave?: () => void;
-  saving?: boolean;
-  /** plan/13 B6 — only meaningful for the read-only "goal" row, so the target/hours can link straight to the goal(s) it comes from instead of leaving a user to hunt for it on /goals. */
+  /** plan/13 B6 — only meaningful for the read-only "goal" row, so the target can link straight to the goal(s) it comes from instead of leaving a user to hunt for it on /goals. */
   linkedGoals?: Goal[];
   /** plan/13 B10 — the Revision row's own auto-generated task can be paused by hand without the hours target changing, which otherwise leaves this row looking like it's still being pursued. */
   paused?: boolean;
 }) {
   const band = target > 0 ? loadIndexBand(scheduled / target) : null;
   return (
-    <div id={id} className="flex flex-wrap items-center gap-2 rounded-md bg-ink-50 px-2 py-1.5 text-xs dark:bg-ink-800">
+    <div className="flex flex-wrap items-center gap-2 rounded-md bg-ink-50 px-2 py-1.5 text-xs dark:bg-ink-800">
       <span className="inline-flex w-20 shrink-0 items-center gap-1 font-medium">
         {label}
         {infoHint ? <InfoHint term={infoHint} /> : null}
       </span>
       {paused ? <span className="text-amber-700 dark:text-amber-400">(auto-task paused)</span> : null}
-      {onEditableHoursChange && onSave ? (
-        <>
-          <input
-            className="input w-16 py-1"
-            type="number"
-            min={0}
-            step={0.5}
-            value={editableHours}
-            onChange={(e) => onEditableHoursChange(e.target.value)}
-            aria-label={`${label} hours/week`}
-          />
-          <button className="btn-secondary py-1 text-xs" onClick={onSave} disabled={saving}>
-            {saving ? "Saving..." : "Save"}
-          </button>
-        </>
-      ) : target > 0 ? (
+      {linkedGoals && linkedGoals.length > 0 ? (
         <span className="text-ink-500">
-          {formatHours(target)}/week (from{" "}
-          {(linkedGoals ?? []).map((goal, index) => (
+          from{" "}
+          {linkedGoals.map((goal, index) => (
             <span key={goal.id}>
               {index > 0 ? ", " : ""}
               <Link href={`/goals#goal-${goal.id}`} className="underline hover:text-moss-700 dark:hover:text-moss-400">
@@ -632,11 +495,10 @@ function BucketRow({
               {goal.linked.courseIds.length > 1 ? ` (shared with ${goal.linked.courseIds.length - 1} other course${goal.linked.courseIds.length - 1 === 1 ? "" : "s"})` : ""}
             </span>
           ))}
-          )
         </span>
-      ) : (
+      ) : linkedGoals ? (
         <span className="text-ink-500">No linked goals</span>
-      )}
+      ) : null}
       <span className={`ml-auto rounded px-1.5 py-0.5 font-medium ${band ? loadIndexBandStyles[band] : "text-ink-500"}`}>
         {band ? `${loadIndexBandLabels[band]} · ` : ""}
         {formatHours(done)} done · {formatHours(scheduled)} scheduled{target > 0 ? ` · ${formatHours(target)} target` : ""}

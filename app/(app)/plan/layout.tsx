@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
 
 const TABS = [
+  { href: "/plan/week", label: "Week" },
   { href: "/plan/day", label: "Day" },
   { href: "/plan/calendar", label: "Calendar" }
 ];

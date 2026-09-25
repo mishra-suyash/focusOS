@@ -1,7 +1,6 @@
 "use client";
 
 import { orderBy } from "firebase/firestore";
-import { RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { EmptyState, focusSection } from "@/components/empty-state";
 import { RecurringCommitmentForm } from "@/components/recurring-commitment-form";
@@ -126,44 +125,17 @@ export default function TasksPage() {
  * personal routine, not tied to any course. Lists every template the user has, not just the
  * course-linked ones, so this doubles as the one place to see all of them at a glance.
  */
+/** plan/14 §8 — the standalone "Generate now" button that used to sit here is gone: the daily cron
+ *  and the weekly planner (`/plan/week` Step 4) both already cover generation, so a manual trigger
+ *  has nothing left to reveal that the weekly session doesn't already show. */
 function RecurringCommitmentsPanel({ courses, templates }: { courses: Course[]; templates: RecurringTaskTemplate[] }) {
   const { user } = useAuth();
-  const [generating, setGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState("");
-
-  async function generateNow() {
-    if (!user) return;
-    setGenerating(true);
-    setGenerateError("");
-    try {
-      const token = await user.getIdToken();
-      const response = await fetch("/api/daily-loop/recurring-tasks", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.error || "Failed to generate recurring tasks.");
-      }
-    } catch (err) {
-      setGenerateError(err instanceof Error ? err.message : "Failed to generate recurring tasks.");
-    } finally {
-      setGenerating(false);
-    }
-  }
 
   return (
     <section className="card p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">Recurring commitments</h2>
-        <button
-          className="btn-secondary py-1 text-xs"
-          onClick={generateNow}
-          disabled={generating || !user}
-          title="Generates due tasks for every recurring commitment — the daily cron does this automatically."
-        >
-          <RefreshCw className={generating ? "h-3 w-3 animate-spin" : "h-3 w-3"} />
-          {generating ? "Generating..." : "Generate now"}
-        </button>
       </div>
-      {generateError ? <p className="mb-2 text-xs text-red-600 dark:text-red-400">{generateError}</p> : null}
       <div className="mb-3 space-y-2">
         {templates.map((tmpl) => (
           <RecurringCommitmentRow key={tmpl.id} uid={user!.uid} template={tmpl} courseName={courses.find((c) => c.id === tmpl.courseId)?.name} />

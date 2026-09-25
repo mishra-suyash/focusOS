@@ -6,6 +6,11 @@ import { InfoHint } from "@/components/info-hint";
 import type { NextAction } from "@/lib/next-action";
 
 export function NextActionCard({ action, onScheduleIt }: { action: NextAction | null; onScheduleIt?: () => void }) {
+  // plan/14 §7.1 — `kind: "block"` means a block is active or about to start; the Now card
+  // (components/now-card.tsx) already shows that block with its own primary action, elapsed bar,
+  // and assigned tasks. Rendering it again here would be the "second card" §7.1 explicitly says
+  // this replacement is not — so this card steps aside rather than duplicate it.
+  if (action?.kind === "block") return null;
   if (!action) {
     return (
       <section className="card p-4">

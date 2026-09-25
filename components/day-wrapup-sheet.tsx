@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useAuth } from "@/components/auth-provider";
 import { InfoHint } from "@/components/info-hint";
+import { UncoveredBlocksReview } from "@/components/uncovered-blocks-review";
 import { useDay } from "@/hooks/use-day";
 import { appendProposedSlotToSchedule, createTask, saveDayFields } from "@/lib/firestore";
 import { todayKey } from "@/lib/dates";
@@ -155,6 +156,8 @@ export function DayWrapupSheet({
           </button>
           {saved ? <p className="text-sm text-moss-700 dark:text-moss-400">Saved.</p> : null}
         </div>
+
+        <UncoveredBlocksReview date={date} embedded />
 
         <div className="mb-2 flex items-center justify-between">
           <p className="label flex items-center gap-1">

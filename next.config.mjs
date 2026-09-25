@@ -10,7 +10,9 @@ const nextConfig = {
       { source: "/planner/day", destination: "/plan/day", permanent: false },
       { source: "/planner", destination: "/plan/day", permanent: false },
       { source: "/calendar", destination: "/plan/calendar", permanent: false },
-      { source: "/plan", destination: "/plan/day", permanent: false }
+      { source: "/plan", destination: "/plan/day", permanent: false },
+      // plan/14 §5.1 — /reviews/weekly absorbed as /plan/week's Step 1 (Look back).
+      { source: "/reviews/weekly", destination: "/plan/week", permanent: false }
     ];
   }
 };

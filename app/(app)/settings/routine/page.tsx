@@ -7,7 +7,7 @@ import { TypedTimeInput } from "@/components/plan/typed-time-input";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { DEFAULT_ROUTINE_BLOCKS } from "@/lib/routine";
 import { slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
-import type { RoutineBlock, ScheduleSlotType } from "@/types";
+import type { RoutineBlock, ScheduleSlotType, UserSettings } from "@/types";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const BUILTIN_IDS = new Set(DEFAULT_ROUTINE_BLOCKS.map((block) => block.id));
@@ -22,9 +22,16 @@ const ROUTINE_SLOT_TYPES = userSelectableSlotTypes.filter((type) => type !== "cl
  * show up locked on every matching day (`lib/routine.ts`'s `routineSlotsForDate`, wired into
  * `/plan/day` and `WorkdaySessionProvider.start()`).
  */
+const DEFAULT_WEEKLY_PLANNING: NonNullable<UserSettings["weeklyPlanning"]> = { enabled: false, dayOfWeek: 0, startTime: "18:00", endTime: "18:30" };
+
 export default function RoutineSettingsPage() {
   const { settings, update } = useUserSettings();
   const blocks = settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS;
+  const weeklyPlanning = settings.weeklyPlanning ?? DEFAULT_WEEKLY_PLANNING;
+
+  function patchWeeklyPlanning(changes: Partial<NonNullable<UserSettings["weeklyPlanning"]>>) {
+    update({ weeklyPlanning: { ...weeklyPlanning, ...changes } });
+  }
 
   function patch(id: string, changes: Partial<RoutineBlock>) {
     update({ routineBlocks: blocks.map((block) => (block.id === id ? { ...block, ...changes } : block)) });
@@ -57,6 +64,48 @@ export default function RoutineSettingsPage() {
         Sleep, meals, gym, or anything else recurring. Whichever are on appear locked on every matching day in Plan — Day — a
         template applied on top never displaces them.
       </p>
+      <div className="card mb-4 space-y-2 p-4">
+        <p className="label">Weekly planning</p>
+        <p className="text-sm text-ink-500">
+          A fixed time each week for the weekly planning session (<Link href="/plan/week" className="underline hover:text-moss-700 dark:hover:text-moss-400">Plan → Week</Link>) —
+          shows up locked on that day the same way a routine block does.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={weeklyPlanning.enabled}
+              onChange={(event) => patchWeeklyPlanning({ enabled: event.target.checked })}
+            />
+            Enabled
+          </label>
+          <select
+            className="input w-32"
+            value={weeklyPlanning.dayOfWeek}
+            disabled={!weeklyPlanning.enabled}
+            onChange={(event) => patchWeeklyPlanning({ dayOfWeek: Number(event.target.value) })}
+          >
+            {DAY_LABELS.map((label, day) => (
+              <option key={day} value={day}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <TypedTimeInput
+            className="input w-24"
+            value={weeklyPlanning.startTime}
+            onChange={(time) => patchWeeklyPlanning({ startTime: time })}
+            disabled={!weeklyPlanning.enabled}
+          />
+          <span className="text-sm text-ink-500">to</span>
+          <TypedTimeInput
+            className="input w-24"
+            value={weeklyPlanning.endTime}
+            onChange={(time) => patchWeeklyPlanning({ endTime: time })}
+            disabled={!weeklyPlanning.enabled}
+          />
+        </div>
+      </div>
       <div className="card divide-y divide-ink-100 dark:divide-ink-800">
         {blocks.map((block) => (
           <div key={block.id} className="space-y-2 p-4">

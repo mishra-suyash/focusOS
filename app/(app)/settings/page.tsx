@@ -8,6 +8,7 @@ import { useAuth } from "@/components/auth-provider";
 import { FloatingWidgetCustomizeDialog } from "@/components/floating-widget-customize-dialog";
 import { GoogleCalendarSettings } from "@/components/google-calendar-settings";
 import { InfoHint } from "@/components/info-hint";
+import { TermsPanel } from "@/components/terms-panel";
 import { useTheme } from "@/components/theme-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
@@ -75,6 +76,7 @@ export default function SettingsPage() {
           <p className="mb-3 text-xs text-ink-500">Sleep, meals, gym, or a custom recurring block — whichever are on appear locked on every matching day.</p>
           <Link href="/settings/routine" className="btn-secondary py-1.5 text-xs">Manage routine</Link>
         </section>
+        <TermsPanel />
         <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Preferences</h2>
           <div className="space-y-3">

@@ -8,13 +8,13 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { clsx } from "clsx";
 import { AlertsBanner } from "@/components/alerts-banner";
 import { NudgeBanner } from "@/components/nudge-banner";
-import { DailyScheduleWidget } from "@/components/daily-schedule-widget";
 import { DashboardCustomizeDialog } from "@/components/dashboard-customize";
 import { useFocusSession } from "@/components/focus-session-provider";
 import { GettingStartedChecklist } from "@/components/getting-started-checklist";
 import { LoadIndexWidget } from "@/components/load-index-widget";
 import { MorningBriefCard } from "@/components/morning-brief-card";
 import { NextActionCard } from "@/components/next-action-card";
+import { NowCard } from "@/components/now-card";
 import { PomodoroTimer } from "@/components/pomodoro-timer";
 import { ReadingNowCard } from "@/components/reading-now-card";
 import { useAuth } from "@/components/auth-provider";
@@ -33,7 +33,7 @@ import { todayMetrics } from "@/lib/analytics";
 import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak } from "@/lib/loadindex";
 import { pickNextAction } from "@/lib/next-action";
 import { downloadDailyFramePdf } from "@/lib/pdf";
-import { createSlot, currentMinute, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
+import { createSlot, currentMinute, getActiveSlot, getNextSlot, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { createTaskBlock, nearestFreeGap, taskBlockMinutes } from "@/lib/timeline";
 import { isBreakMode } from "@/lib/terms";
 import type { Course, DailySchedule, Day, Goal, Paper, PomodoroSession, ScheduleSlotType, Task, Term } from "@/types";
@@ -90,6 +90,8 @@ function DashboardContent() {
   const debtHours = computeDebtHours(chronologicalLI.map((d) => d.loadIndex!));
   const liStreak = computeLoadIndexStreak(chronologicalLI.map((d) => d.loadIndex!));
   const weekEnd = weekDates(weekStartKey())[6];
+  const scheduleMinute = currentMinute();
+  const scheduleSlots = sortedSlots(dailySchedule?.slots ?? []);
   const nextAction = pickNextAction({
     checkpoints: allCheckpoints,
     dueRevisionCount: dueCount,
@@ -97,7 +99,10 @@ function DashboardContent() {
     loadIndexValue: loadIndex.value,
     todayKey: today,
     weekEndKey: weekEnd,
-    enabledModules
+    enabledModules,
+    activeSlot: getActiveSlot(scheduleSlots, scheduleMinute),
+    nextSlot: getNextSlot(scheduleSlots, scheduleMinute),
+    minute: scheduleMinute
   });
 
   const { startFocus } = useFocusSession();
@@ -220,7 +225,7 @@ function DashboardContent() {
       <AlertsBanner />
       <NudgeBanner data={{ tasks, sessions, papers, courses, goals, recentDays }} />
       <GettingStartedChecklist data={{ tasks, sessions, papers, courses, goals, recentDays }} />
-      {widgets.has("morningOverview") ? <MorningBriefCard brief={day?.brief} /> : null}
+      {widgets.has("morningOverview") ? <MorningBriefCard brief={day?.brief} schedule={dailySchedule} /> : null}
       <NextActionCard action={nextAction} onScheduleIt={scheduleAction} />
       {widgets.has("metricsStrip") ? (
         <section className="card p-3">
@@ -321,7 +326,7 @@ function DashboardContent() {
         </div>
 
         <div className="space-y-4">
-          <DailyScheduleWidget schedule={dailySchedule} tasks={tasks} compact />
+          <NowCard schedule={dailySchedule} tasks={tasks} courses={courses} />
         </div>
 
         <div className="space-y-4">
