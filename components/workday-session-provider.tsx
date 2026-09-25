@@ -163,7 +163,12 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       }
       const existingSchedule = await fetchCollection<DailySchedule>(user.uid, "dailySchedules", [orderBy("updatedAt", "desc")]);
       const todaySchedule = existingSchedule.find((item) => item.dateKey === today);
-      if (!todaySchedule) {
+      // plan/15 §5.1 — a day marked off skips the fallback generation below entirely: there's no
+      // point building a full template-derived day for a day nobody intends to work. `startDayNotice`
+      // says so plainly instead of silently doing nothing, matching every other Start day notice.
+      if (day?.dayOff) {
+        setStartDayNotice(day.dayOff.reason ? `Marked as a day off: ${day.dayOff.reason}` : "Marked as a day off.");
+      } else if (!todaySchedule) {
         const [templates, courses, terms] = await Promise.all([
           fetchCollection<DayTemplate>(user.uid, "dayTemplates", [orderBy("createdAt", "desc")]),
           fetchCollection<Course>(user.uid, "courses", [orderBy("createdAt", "desc")]),
@@ -234,7 +239,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     } finally {
       setStarting(false);
     }
-  }, [user, starting, today, settings.breakTemplateId, settings.packId, settings.weeklyPlanning]);
+  }, [user, starting, today, settings.breakTemplateId, settings.packId, settings.weeklyPlanning, day]);
 
   const end = useCallback(async () => {
     if (!user) return;
@@ -302,7 +307,8 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         goals,
         terms,
         focusedMinutes,
-        todayKey: today
+        todayKey: today,
+        isDayOff: Boolean(day?.dayOff)
       });
       await saveDayFields(user.uid, today, { loadIndex: snapshot });
     } catch {
@@ -310,7 +316,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     }
     await endWorkdaySession(user.uid, today);
     setReminder(null);
-  }, [user, today]);
+  }, [user, today, day]);
 
   const undoEnd = useCallback(async () => {
     if (!user) return;

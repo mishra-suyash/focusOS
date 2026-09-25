@@ -84,7 +84,8 @@ function DashboardContent() {
     goals,
     terms,
     focusedMinutes: metrics.focusedMinutes,
-    todayKey: today
+    todayKey: today,
+    isDayOff: Boolean(day?.dayOff)
   });
   const chronologicalLI = [...recentDays].filter((d) => d.loadIndex).sort((a, b) => (a.date < b.date ? -1 : 1));
   const debtHours = computeDebtHours(chronologicalLI.map((d) => d.loadIndex!));
@@ -102,7 +103,8 @@ function DashboardContent() {
     enabledModules,
     activeSlot: getActiveSlot(scheduleSlots, scheduleMinute),
     nextSlot: getNextSlot(scheduleSlots, scheduleMinute),
-    minute: scheduleMinute
+    minute: scheduleMinute,
+    isDayOff: Boolean(day?.dayOff)
   });
 
   const { startFocus } = useFocusSession();
@@ -326,12 +328,12 @@ function DashboardContent() {
         </div>
 
         <div className="space-y-4">
-          <NowCard schedule={dailySchedule} tasks={tasks} courses={courses} />
+          <NowCard date={today} schedule={dailySchedule} tasks={tasks} courses={courses} dayOff={day?.dayOff} />
         </div>
 
         <div className="space-y-4">
           {widgets.has("workload") ? (
-            <LoadIndexWidget snapshot={loadIndex} debtHours={widgets.has("catchUpHours") ? debtHours : undefined} streak={liStreak} />
+            <LoadIndexWidget snapshot={loadIndex} debtHours={widgets.has("catchUpHours") ? debtHours : undefined} streak={liStreak} dayOff={Boolean(day?.dayOff)} />
           ) : null}
           <ReadingNowCard papers={papers} onBreak={isBreakMode(terms, today)} />
           {widgets.has("scratchpad") ? (

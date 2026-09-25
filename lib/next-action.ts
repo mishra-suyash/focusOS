@@ -2,7 +2,7 @@ import type { ModuleId } from "@/lib/features";
 import { minutesFromTime } from "@/lib/schedule";
 import type { Checkpoint, ScheduleSlot, Task } from "@/types";
 
-export type NextActionKind = "checkpoint-prep" | "revision" | "task" | "rest" | "block";
+export type NextActionKind = "checkpoint-prep" | "revision" | "task" | "rest" | "block" | "day-off";
 
 export interface NextAction {
   kind: NextActionKind;
@@ -41,7 +41,8 @@ export function pickNextAction({
   enabledModules,
   activeSlot,
   nextSlot,
-  minute
+  minute,
+  isDayOff
 }: {
   checkpoints: Checkpoint[];
   dueRevisionCount: number;
@@ -59,9 +60,16 @@ export function pickNextAction({
   nextSlot?: ScheduleSlot;
   /** Minutes since midnight — required whenever `nextSlot` is given, to know how soon it starts. */
   minute?: number;
+  /** plan/15 §5.1 — today is marked off (`Day.dayOff`). Checked first, ahead of even an active
+   *  block — a day off is a decision that overrides whatever's still sitting on the schedule from
+   *  before it was marked, not one more thing competing with it. */
+  isDayOff?: boolean;
 }): NextAction | null {
   const enabled = (id: ModuleId) => !enabledModules || enabledModules.has(id);
 
+  if (isDayOff) {
+    return { kind: "day-off", title: "Day off", why: "Marked as a day off", href: "/dashboard" };
+  }
   if (activeSlot) {
     return {
       kind: "block",

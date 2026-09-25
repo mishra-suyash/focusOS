@@ -173,6 +173,12 @@ export interface Task {
   bucket?: TaskBucket;
   /** Count of completed work-mode focus sessions linked to this task via PomodoroSession.taskId (components/focus-session-provider.tsx). "Sessions left" is always derived as estimatedPomodoros - completedPomodoros, never stored. */
   completedPomodoros?: number;
+  /** plan/15 §5.3 — 0 (Sun) – 6 (Sat), same convention as `RoutineBlock.daysOfWeek`. Only meaningful
+   *  for an undated backlog task (no `dueDate`, or a past one) offered in `/plan/week` Step 4: when
+   *  set, its proposed block(s) are spread across the days leading up to that weekday within the
+   *  week being planned, the same lead-time pattern checkpoint prep already uses, instead of landing
+   *  wherever the general placement search finds room. Absent = today's floating behavior, unchanged. */
+  weeklyTargetDay?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -552,6 +558,11 @@ export interface Paper {
   relatedTaskId?: string;
   citationKey?: string;
   readAt?: string;
+  /** plan/15 §5.3 — 0 (Sun) – 6 (Sat), same convention as `Task.weeklyTargetDay`. Only meaningful
+   *  for a paper offered as a stale-reading candidate in `/plan/week` Step 4: when set, its reading
+   *  time is spread across the days leading up to that weekday, landing by it, instead of one
+   *  floating 45-minute block placed wherever the general search finds room. */
+  weeklyTargetDay?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -756,6 +767,16 @@ export interface Day {
   loadIndex?: LoadIndexSnapshot;
   brief?: MorningBrief;
   rollup?: EveningRollup;
+  /** plan/15 §4 — this date is a day off, marked in advance or reported after the fact. Absent
+   *  (the default, same convention every other optional `Day` field uses) means an ordinary day.
+   *  Read by the weekly planner (excluded from placement and from the capacity meter's `free` term
+   *  for that date), Workload (`computeRequiredMinutes` returns 0), Up next, and Start day. */
+  dayOff?: {
+    reason?: string;
+    /** Distinguishes "marked in advance" from "reported after the fact" only for display (Look
+     *  back's "Days off" stat) — both work identically everywhere else. */
+    markedAt: string;
+  };
   updatedAt: string;
 }
 

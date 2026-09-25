@@ -15,17 +15,24 @@ import { useUserSettings } from "@/hooks/use-user-settings";
 import { averageFocusRating } from "@/lib/analytics";
 import { bucketWeeklyTarget, completedMinutesThisWeek, courseSlotsForDate, effectiveCourseStatus, scheduledMinutesThisWeek, syncRevisionTemplate } from "@/lib/courses";
 import { addDaysToKey, todayKey, weekDates, weekStartKey } from "@/lib/dates";
-import { fetchCourseClassLogs, saveDailySchedule, saveWeeklyReviewFields, updateCourse, updateGoal } from "@/lib/firestore";
+import { clearDayOff, fetchCourseClassLogs, saveDailySchedule, saveWeeklyReviewFields, setDayOff, updateCourse, updateGoal, updatePaper, updateTask } from "@/lib/firestore";
 import { isGoalActiveForDate } from "@/lib/goals";
 import { computeDebtHours, computeLoadIndexStreak, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import { taskBucketLabels } from "@/lib/options";
 import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, estimatedReviewMinutes } from "@/lib/revision";
 import { isTemplateDueOn } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
-import { minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
+import { sortedSlots, validateSlots } from "@/lib/schedule";
 import { isBreakMode } from "@/lib/terms";
 import { taskBlockMinutes } from "@/lib/timeline";
-import { DEFAULT_WORKING_WINDOW, placeInWindow, weekCapacity, weeklyPlanningSlotForDate } from "@/lib/weekplan";
+import {
+  DEFAULT_WORKING_WINDOW,
+  placeProposals,
+  weekCapacity,
+  weeklyPlanningSlotForDate,
+  type WeekProposal,
+  type WeekProposalCandidate
+} from "@/lib/weekplan";
 import type {
   ClassLog,
   Checkpoint,
@@ -39,7 +46,6 @@ import type {
   RecurringTaskTemplate,
   RevisionItem,
   ScheduleSlot,
-  ScheduleSlotType,
   Task,
   TaskBucket,
   Term,
@@ -67,66 +73,6 @@ function defaultWeekStart(todayK: string): string {
   return weekStartKey(parseISO(todayK));
 }
 
-interface WeekProposalCandidate {
-  title: string;
-  type: ScheduleSlotType;
-  durationMinutes: number;
-  /** Fixed day this candidate must land on (checkpoint prep); absent = pick the week's least-loaded working day. */
-  dateKey?: string;
-  courseId?: string;
-  bucket?: TaskBucket;
-  taskId?: string;
-  refType?: "checkpoint" | "revision";
-  refId?: string;
-}
-
-interface WeekProposal extends WeekProposalCandidate {
-  key: string;
-  dateKey: string;
-  startTime: string;
-  endTime: string;
-  fits: boolean;
-}
-
-function totalClaimedMinutes(slots: Pick<ScheduleSlot, "startTime" | "endTime">[]): number {
-  return slots.reduce((sum, slot) => sum + Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime)), 0);
-}
-
-/** plan/14 §5.4 — places each candidate in the nearest-fitting gap inside the working window,
- *  least-loaded working day first for a floating candidate, so course-bucket/backlog/paper chunks
- *  spread across the week instead of stacking on day one. A candidate whose fixed `dateKey` (or
- *  every working day, for a floating one) has no room comes back with `fits: false` — never
- *  silently dropped, so the caller can list it under "Didn't fit". */
-function placeProposals(
-  candidates: WeekProposalCandidate[],
-  weekDateKeys: string[],
-  claimedSlotsByDate: Record<string, Pick<ScheduleSlot, "startTime" | "endTime">[]>,
-  workingWindow: typeof DEFAULT_WORKING_WINDOW
-): WeekProposal[] {
-  const windowStart = minutesFromTime(workingWindow.startTime);
-  const windowEnd = minutesFromTime(workingWindow.endTime);
-  const workingDates = weekDateKeys.filter((d) => workingWindow.daysOfWeek.includes(getDay(parseISO(d))));
-  const simulated: Record<string, { startTime: string; endTime: string }[]> = {};
-  for (const d of weekDateKeys) simulated[d] = [...(claimedSlotsByDate[d] ?? [])];
-
-  return candidates.map((candidate, index) => {
-    const key = `${index}`;
-    const searchDates = candidate.dateKey
-      ? [candidate.dateKey]
-      : [...workingDates].sort((a, b) => totalClaimedMinutes(simulated[a]) - totalClaimedMinutes(simulated[b]));
-
-    for (const dateKey of searchDates) {
-      if (!workingWindow.daysOfWeek.includes(getDay(parseISO(dateKey)))) continue;
-      const start = placeInWindow(simulated[dateKey], windowStart, windowEnd, candidate.durationMinutes);
-      if (start !== null) {
-        const slot = { startTime: minutesToTime(start), endTime: minutesToTime(start + candidate.durationMinutes) };
-        simulated[dateKey].push(slot);
-        return { ...candidate, key, dateKey, ...slot, fits: true };
-      }
-    }
-    return { ...candidate, key, dateKey: candidate.dateKey ?? weekDateKeys[0], startTime: "00:00", endTime: "00:00", fits: false };
-  });
-}
 
 export default function PlanWeekPage() {
   return (
@@ -170,6 +116,11 @@ function PlanWeekContent() {
     useMemo(() => [where("date", ">=", priorWeekStart), where("date", "<=", priorWeekEnd), orderBy("date")], [priorWeekStart, priorWeekEnd])
   );
   const { allCheckpoints } = useCourseCheckpoints(courses);
+
+  // plan/15 §5.1 — `recentDays` already fetches every `Day` doc (no date filter), so the current
+  // week's day-off marks are already sitting in it; no new subscription needed.
+  const weekDayDocs = new Map(recentDays.filter((d) => weekDateKeys.includes(d.date)).map((d) => [d.date, d] as const));
+  const offDateKeys = new Set(weekDateKeys.filter((d) => weekDayDocs.get(d)?.dayOff));
 
   const activeCourses = courses.filter((course) => weekDateKeys.some((d) => effectiveCourseStatus(course, d) === "active"));
   const linkedGoalsFor = (courseId: string) => goals.filter((goal) => goal.linked.courseIds.includes(courseId));
@@ -270,13 +221,46 @@ function PlanWeekContent() {
 
   const courseTargetMinutes = activeCourses.reduce((sum, course) => sum + COURSE_BUCKETS.reduce((s, bucket) => s + hoursFor(course, bucket), 0), 0);
   const committedMinutes = courseTargetMinutes + checkpointPrepMinutes + revisionQueueMinutesForWeek + unlinkedGoalMinutes;
-  const capacity = weekCapacity({ workingWindow, weekDateKeys, claimedSlotsByDate, committedMinutes });
+  const capacity = weekCapacity({ workingWindow, weekDateKeys, claimedSlotsByDate, committedMinutes, offDateKeys });
   const committedPct = capacity.freeMinutes > 0 ? (capacity.committedMinutes / capacity.freeMinutes) * 100 : capacity.committedMinutes > 0 ? 100 : 0;
 
   // ---- Step 4: proposals ----
+  // plan/15 §5.3 — the same lead-time spread checkpoint prep already uses (evenly across the days
+  // from the week's start through a target weekday, landing by it), lifted into a small helper so
+  // reading/task targets can reuse it instead of only ever getting one floating block. Hard-pins
+  // each chunk's `dateKey` (like checkpoint prep) — exempt from Step 4's per-day cap, since a chunk
+  // here was placed deliberately, not because that day happened to look emptiest. Day-off dates are
+  // filtered out of the window before splitting, same as every other generator below. The window
+  // always starts at the week's Monday, not at today — planning mid-week for a target earlier that
+  // same week can hard-pin a chunk onto an already-past date. Deliberately left as-is: checkpoint
+  // prep's own `windowDays` above has never filtered out past dates either, so diverging here would
+  // make target-day reading/tasks behave differently from the pattern they were built to match.
+  function leadTimeCandidates(
+    title: string,
+    type: WeekProposalCandidate["type"],
+    totalMinutes: number,
+    targetDow: number,
+    extra: Partial<WeekProposalCandidate>
+  ): WeekProposalCandidate[] {
+    const targetIndex = weekDateKeys.findIndex((d) => getDay(parseISO(d)) === targetDow);
+    if (targetIndex === -1) return [{ title, type, durationMinutes: totalMinutes, ...extra }];
+    const windowDays = weekDateKeys.slice(0, targetIndex + 1).filter((d) => !offDateKeys.has(d));
+    if (windowDays.length === 0) return [{ title, type, durationMinutes: totalMinutes, ...extra }];
+    const perDay = Math.max(15, Math.ceil(totalMinutes / windowDays.length));
+    const result: WeekProposalCandidate[] = [];
+    let remaining = totalMinutes;
+    for (const d of windowDays) {
+      if (remaining <= 0) break;
+      const minutes = Math.min(perDay, remaining);
+      result.push({ title, type, durationMinutes: minutes, dateKey: d, ...extra });
+      remaining -= minutes;
+    }
+    return result;
+  }
+
   const candidates: WeekProposalCandidate[] = [];
   for (const cp of prepCheckpoints) {
-    const windowDays = weekDateKeys.filter((d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt);
+    const windowDays = weekDateKeys.filter((d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt && !offDateKeys.has(d));
     const perDay = Math.max(15, Math.ceil(cp.prepEstimateMin / Math.max(1, cp.prepLeadDays)));
     let remaining = cp.prepEstimateMin;
     for (const d of windowDays) {
@@ -286,25 +270,62 @@ function PlanWeekContent() {
       remaining -= minutes;
     }
   }
+  // plan/15 §5.2 #4 — assignment first: it has no day preference of its own, so it should fill in
+  // around the days revision/backlog have already claimed via their preferences below, not the
+  // reverse (today's order let assignment's floating chunks take first pick of every day).
   for (const course of activeCourses) {
-    for (const bucket of COURSE_BUCKETS) {
-      const target = hoursFor(course, bucket);
-      const alreadyScheduled = scheduledMinutesThisWeek(tasks, course.id, bucket, workMinutes, weekDateKeys);
-      const remaining = Math.max(0, target - alreadyScheduled);
-      const chunks = Math.round(remaining / workMinutes);
-      for (let i = 0; i < chunks; i += 1) {
-        candidates.push({ title: `${course.name} — ${taskBucketLabels[bucket]}`, type: "deep_work", durationMinutes: workMinutes, courseId: course.id, bucket });
-      }
+    const target = hoursFor(course, "assignment");
+    const alreadyScheduled = scheduledMinutesThisWeek(tasks, course.id, "assignment", workMinutes, weekDateKeys);
+    const chunks = Math.round(Math.max(0, target - alreadyScheduled) / workMinutes);
+    for (let i = 0; i < chunks; i += 1) {
+      candidates.push({ title: `${course.name} — ${taskBucketLabels.assignment}`, type: "deep_work", durationMinutes: workMinutes, courseId: course.id, bucket: "assignment" });
+    }
+  }
+  // plan/15 §5.2 #3 — revision prefers the course's own lecture days this week (reviewing material
+  // near the class it came from), falling back to the general search when the course has none
+  // materializing this week (mid-break, or an async course with no `CourseSession` at all) — see
+  // plan/15 §8's open question on whether that should differ from a course with literally no
+  // sessions; for now both cases fall through identically.
+  for (const course of activeCourses) {
+    const target = hoursFor(course, "revision");
+    const alreadyScheduled = scheduledMinutesThisWeek(tasks, course.id, "revision", workMinutes, weekDateKeys);
+    const chunks = Math.round(Math.max(0, target - alreadyScheduled) / workMinutes);
+    const lectureDays = weekDateKeys.filter((d) => !isBreakMode(terms, d) && courseSlotsForDate([course], d).length > 0);
+    for (let i = 0; i < chunks; i += 1) {
+      candidates.push({
+        title: `${course.name} — ${taskBucketLabels.revision}`,
+        type: "deep_work",
+        durationMinutes: workMinutes,
+        courseId: course.id,
+        bucket: "revision",
+        preferredDateKeys: lectureDays.length > 0 ? lectureDays : undefined
+      });
     }
   }
   if (revisionQueueMinutesPerDay > 0) {
-    for (const d of weekDateKeys.slice(0, 5)) {
+    for (const d of weekDateKeys.slice(0, 5).filter((d) => !offDateKeys.has(d))) {
       candidates.push({ title: "Review revisions", type: "deep_work", durationMinutes: revisionQueueMinutesPerDay, dateKey: d, refType: "revision" });
+    }
+  }
+  // plan/15 §5.2 #3 — backlog (both the bucket and undated tasks) prefers the weekend, the same
+  // "leftover work last" instinct a person planning by hand already has.
+  const weekend = [weekDateKeys[5], weekDateKeys[6]];
+  for (const course of activeCourses) {
+    const target = hoursFor(course, "backlog");
+    const alreadyScheduled = scheduledMinutesThisWeek(tasks, course.id, "backlog", workMinutes, weekDateKeys);
+    const chunks = Math.round(Math.max(0, target - alreadyScheduled) / workMinutes);
+    for (let i = 0; i < chunks; i += 1) {
+      candidates.push({ title: `${course.name} — ${taskBucketLabels.backlog}`, type: "deep_work", durationMinutes: workMinutes, courseId: course.id, bucket: "backlog", preferredDateKeys: weekend });
     }
   }
   const backlogTasks = tasks.filter((task) => task.status !== "done" && (!task.dueDate || task.dueDate < weekStart));
   for (const task of backlogTasks) {
-    candidates.push({ title: task.title, type: "deep_work", durationMinutes: taskBlockMinutes(task, workMinutes), taskId: task.id });
+    const duration = taskBlockMinutes(task, workMinutes);
+    if (task.weeklyTargetDay != null) {
+      candidates.push(...leadTimeCandidates(task.title, "deep_work", duration, task.weeklyTargetDay, { taskId: task.id }));
+    } else {
+      candidates.push({ title: task.title, type: "deep_work", durationMinutes: duration, taskId: task.id, preferredDateKeys: weekend });
+    }
   }
   const stalePapers = papers
     .filter((paper) => paper.status === "reading")
@@ -313,10 +334,14 @@ function PlanWeekContent() {
     .sort((a, b) => b.daysSinceUpdate - a.daysSinceUpdate)
     .slice(0, 3);
   for (const paper of stalePapers) {
-    candidates.push({ title: `Read: ${paper.title}`, type: "reading", durationMinutes: 45, refType: undefined, refId: paper.id });
+    if (paper.weeklyTargetDay != null) {
+      candidates.push(...leadTimeCandidates(`Read: ${paper.title}`, "reading", 45, paper.weeklyTargetDay, { refId: paper.id }));
+    } else {
+      candidates.push({ title: `Read: ${paper.title}`, type: "reading", durationMinutes: 45, refId: paper.id });
+    }
   }
 
-  const freshProposals = placeProposals(candidates, weekDateKeys, claimedSlotsByDate, workingWindow);
+  const freshProposals = placeProposals(candidates, weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys);
   const proposals: WeekProposal[] = committed
     ? (existingReview!.plan!.proposedBlocks.map((p, index) => ({ ...p, key: `${index}`, fits: true })) as WeekProposal[])
     : freshProposals;
@@ -443,6 +468,7 @@ function PlanWeekContent() {
       lookbackDone += completedMinutesThisWeek(sessions, tasks, course.id, bucket, priorWeekDateKeys);
     }
   }
+  const priorWeekDaysOff = priorWeekDays.filter((d) => d.dayOff).length;
   const priorWeekLI = priorWeekDays.filter((d) => d.loadIndex);
   const behindDays = priorWeekLI.filter((d) => loadIndexBand(d.loadIndex!.value) === "behind").length;
   const onTrackDays = priorWeekLI.length - behindDays;
@@ -521,6 +547,7 @@ function PlanWeekContent() {
           <div className="mb-4 grid gap-3 sm:grid-cols-4">
             <Stat label="Done vs planned" value={`${formatHours(lookbackDone)} / ${formatHours(lookbackPlanned)}`} />
             <Stat label="On-track / behind days" value={`${onTrackDays} / ${behindDays}`} />
+            <Stat label="Days off" value={`${priorWeekDaysOff}`} />
             <Stat label="Catch-up (14-day)" value={`${debtHours}h`} />
             <Stat label="On-track streak" value={`${streak}d`} />
             <Stat label="Classes logged" value={`${classesLogged} of ${classesHeld}`} />
@@ -581,25 +608,40 @@ function PlanWeekContent() {
             const commitments = recurringTemplates.filter((t) => isTemplateDueOn(t, d));
             const checkpointsDue = allCheckpoints.filter((cp) => cp.dueAt === d);
             const external = (schedules.find((s) => s.dateKey === d)?.slots ?? []).filter((s) => s.type === "external");
+            const dayOff = weekDayDocs.get(d)?.dayOff;
             return (
-              <div key={d} className="min-h-32 rounded-md border border-ink-200 p-2 dark:border-ink-800">
-                <p className="mb-1 font-medium">{DAY_LABELS[i]} {d.slice(5)}</p>
-                {anchor ? <p className="truncate rounded bg-moss-500/10 px-1 py-0.5 text-moss-700 dark:text-moss-300">Weekly planning</p> : null}
-                {classes.map((slot) => (
-                  <p key={slot.id} className="truncate rounded bg-fuchsia-500/10 px-1 py-0.5 text-fuchsia-700 dark:text-fuchsia-300">{slot.title}</p>
-                ))}
-                {routine.map((slot) => (
-                  <p key={slot.id} className="truncate rounded bg-ink-100 px-1 py-0.5 text-ink-600 dark:bg-ink-800 dark:text-ink-300">{slot.title}</p>
-                ))}
-                {commitments.map((t) => (
-                  <p key={t.id} className="truncate rounded bg-sky-500/10 px-1 py-0.5 text-sky-700 dark:text-sky-300">{t.title}</p>
-                ))}
-                {checkpointsDue.map((cp) => (
-                  <p key={cp.id} className="truncate rounded bg-amberline/10 px-1 py-0.5 text-amber-700 dark:text-amber-300">Due: {cp.title}</p>
-                ))}
-                {external.map((slot) => (
-                  <p key={slot.id} className="truncate rounded bg-ink-100 px-1 py-0.5 text-ink-600 dark:bg-ink-800 dark:text-ink-300">{slot.title} (calendar)</p>
-                ))}
+              <div key={d} className={`min-h-32 rounded-md border p-2 ${dayOff ? "border-ink-300 bg-ink-50 dark:border-ink-700 dark:bg-ink-900" : "border-ink-200 dark:border-ink-800"}`}>
+                <div className="mb-1 flex items-center justify-between gap-1">
+                  <p className="font-medium">{DAY_LABELS[i]} {d.slice(5)}</p>
+                  <button
+                    className="text-[10px] text-ink-500 underline decoration-dotted hover:text-ink-700 dark:hover:text-ink-300"
+                    onClick={() => user && (dayOff ? clearDayOff(user.uid, d) : setDayOff(user.uid, d))}
+                  >
+                    {dayOff ? "Undo" : "Day off"}
+                  </button>
+                </div>
+                {dayOff ? (
+                  <DayOffReasonInput dateKey={d} reason={dayOff.reason} onSave={(reason) => user && setDayOff(user.uid, d, reason)} />
+                ) : (
+                  <>
+                    {anchor ? <p className="truncate rounded bg-moss-500/10 px-1 py-0.5 text-moss-700 dark:text-moss-300">Weekly planning</p> : null}
+                    {classes.map((slot) => (
+                      <p key={slot.id} className="truncate rounded bg-fuchsia-500/10 px-1 py-0.5 text-fuchsia-700 dark:text-fuchsia-300">{slot.title}</p>
+                    ))}
+                    {routine.map((slot) => (
+                      <p key={slot.id} className="truncate rounded bg-ink-100 px-1 py-0.5 text-ink-600 dark:bg-ink-800 dark:text-ink-300">{slot.title}</p>
+                    ))}
+                    {commitments.map((t) => (
+                      <p key={t.id} className="truncate rounded bg-sky-500/10 px-1 py-0.5 text-sky-700 dark:text-sky-300">{t.title}</p>
+                    ))}
+                    {checkpointsDue.map((cp) => (
+                      <p key={cp.id} className="truncate rounded bg-amberline/10 px-1 py-0.5 text-amber-700 dark:text-amber-300">Due: {cp.title}</p>
+                    ))}
+                    {external.map((slot) => (
+                      <p key={slot.id} className="truncate rounded bg-ink-100 px-1 py-0.5 text-ink-600 dark:bg-ink-800 dark:text-ink-300">{slot.title} (calendar)</p>
+                    ))}
+                  </>
+                )}
               </div>
             );
           })}
@@ -696,6 +738,30 @@ function PlanWeekContent() {
             {accepting ? "Accepting..." : "Accept all"}
           </button>
         </div>
+        {stalePapers.length > 0 || backlogTasks.length > 0 ? (
+          <div className="mb-4 space-y-1">
+            <p className="label mb-1 inline-flex items-center gap-1">
+              Target a day (optional)
+              <InfoHint term="weeklyTargetDay" />
+            </p>
+            {stalePapers.map((paper) => (
+              <TargetDayRow
+                key={paper.id}
+                title={`Read: ${paper.title}`}
+                value={paper.weeklyTargetDay}
+                onChange={(day) => user && updatePaper(user.uid, paper.id, { weeklyTargetDay: day })}
+              />
+            ))}
+            {backlogTasks.map((task) => (
+              <TargetDayRow
+                key={task.id}
+                title={task.title}
+                value={task.weeklyTargetDay}
+                onChange={(day) => user && updateTask(user.uid, task.id, { weeklyTargetDay: day })}
+              />
+            ))}
+          </div>
+        ) : null}
         <div className="space-y-4">
           {weekDateKeys.map((d, i) => {
             const dayProposals = (workingByDate.get(d) ?? []).filter((p) => p.fits);
@@ -780,6 +846,48 @@ function Stat({ label, value }: { label: string; value: string }) {
     <div className="rounded-md bg-ink-50 p-3 dark:bg-ink-800">
       <p className="text-xs text-ink-500">{label}</p>
       <p className="mt-1 text-lg font-semibold">{value}</p>
+    </div>
+  );
+}
+
+/**
+ * plan/15 §5.1's "report a holiday" half — `setDayOff` always accepts an optional `reason`, but the
+ * one-click toggle button never passes one. This is the single place a reason gets typed in (mirrors
+ * `dayOff.reason`'s only other read sites — NowCard, workday-session-provider's start notice —
+ * which have always rendered it optionally, just never had a way to set it). Local `value` avoids
+ * a Firestore round-trip per keystroke; only `onBlur` persists, and only when it actually changed.
+ */
+function DayOffReasonInput({ dateKey, reason, onSave }: { dateKey: string; reason: string | undefined; onSave: (reason: string | undefined) => void }) {
+  const [value, setValue] = useState(reason ?? "");
+  useEffect(() => setValue(reason ?? ""), [dateKey, reason]);
+  return (
+    <input
+      className="input w-full px-1 py-0.5 text-[11px]"
+      placeholder="Day off (reason, optional)"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => {
+        const trimmed = value.trim();
+        if (trimmed !== (reason ?? "")) onSave(trimmed || undefined);
+      }}
+    />
+  );
+}
+
+function TargetDayRow({ title, value, onChange }: { title: string; value: number | undefined; onChange: (day: number | undefined) => void }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-ink-50 px-3 py-2 text-xs dark:bg-ink-800">
+      <span className="truncate">{title}</span>
+      <select
+        className="input w-32 py-1 text-xs"
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+      >
+        <option value="">No target</option>
+        {DAY_LABELS.map((label, i) => (
+          <option key={label} value={(i + 1) % 7}>{label}</option>
+        ))}
+      </select>
     </div>
   );
 }

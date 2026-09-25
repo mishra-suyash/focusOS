@@ -243,6 +243,7 @@ export async function createTasksBatch(uid: string, tasks: NewTask[]) {
 export async function updateTask(uid: string, id: string, patch: Partial<Task>) {
   const payload: Record<string, unknown> = withoutUndefined({ ...patch, updatedAt: now() });
   if ("completedAt" in patch && patch.completedAt === undefined) payload.completedAt = deleteField();
+  if ("weeklyTargetDay" in patch && patch.weeklyTargetDay === undefined) payload.weeklyTargetDay = deleteField();
   trackWrite();
   await updateDoc(doc(userCollection(uid, "tasks"), id), payload);
 }
@@ -658,6 +659,7 @@ export async function updatePaper(uid: string, id: string, patch: Partial<Paper>
   const payload: Record<string, unknown> = withoutUndefined({ ...patch, updatedAt: now() });
   if ("readAt" in patch && patch.readAt === undefined) payload.readAt = deleteField();
   if ("fileId" in patch && patch.fileId === undefined) payload.fileId = deleteField();
+  if ("weeklyTargetDay" in patch && patch.weeklyTargetDay === undefined) payload.weeklyTargetDay = deleteField();
   // Replacing or removing the attached PDF invalidates any cached Anthropic
   // file reference and the layered notes generated from it — a stale summary
   // of a since-replaced PDF would be actively misleading, not just outdated.
@@ -796,6 +798,18 @@ export async function endWorkdaySession(uid: string, date: string) {
 /** F11 (plan §11.2) — the 10-second "Undo" toast's action: clears `session.endedAt` so the day reads active again, without touching whatever the evening rollup already generated. */
 export async function undoEndWorkdaySession(uid: string, date: string) {
   await saveDayFields(uid, date, { "session.endedAt": deleteField() });
+}
+
+/** plan/15 §5.1 — marks `date` (past or future) as a day off, in advance or reported after the
+ *  fact (`reason` is optional either way; only `markedAt` distinguishes the two for display). Goes
+ *  through `saveDayFields` (itself a plain, non-dotted key here — `dayOff` is written as one whole
+ *  nested object, not a dot-path, so this doesn't depend on that helper's dot-path branch at all). */
+export async function setDayOff(uid: string, date: string, reason?: string) {
+  await saveDayFields(uid, date, { dayOff: { reason, markedAt: now() } });
+}
+
+export async function clearDayOff(uid: string, date: string) {
+  await saveDayFields(uid, date, { dayOff: deleteField() });
 }
 
 export async function recordHydration(uid: string, date: string, hydrationCount: number) {

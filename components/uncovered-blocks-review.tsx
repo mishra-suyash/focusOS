@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { useDay } from "@/hooks/use-day";
 import { saveDailySchedule, subscribeDoc } from "@/lib/firestore";
 import { currentMinute, isLockedSlot, minutesFromTime, sortedSlots } from "@/lib/schedule";
 import type { DailySchedule, ScheduleSlot } from "@/types";
@@ -35,6 +36,7 @@ export function UncoveredBlocksReview({
   const { user } = useAuth();
   const [schedule, setSchedule] = useState<DailySchedule | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
+  const { day } = useDay(date);
 
   useEffect(() => {
     if (!user) {
@@ -45,6 +47,9 @@ export function UncoveredBlocksReview({
   }, [user, date]);
 
   if (!schedule) return null;
+  // plan/15 §5.5 — a day marked off has no blocks that meaningfully "timed out": nobody intended
+  // to work it, so there's nothing to ask about.
+  if (day?.dayOff) return null;
 
   const minute = currentMinute();
   const uncovered = sortedSlots(schedule.slots).filter(

@@ -12,16 +12,19 @@ import { MoreOptions } from "@/components/more-options";
 import { SectionHeader } from "@/components/section-header";
 import { TemplateGalleryDialog } from "@/components/template-gallery";
 import { useAuth } from "@/components/auth-provider";
+import { useDay } from "@/hooks/use-day";
 import { useFeatures } from "@/hooks/use-features";
 import { useTemplateCatalog } from "@/hooks/use-template-catalog";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { courseSlotsForDate } from "@/lib/courses";
 import {
+  clearDayOff,
   createDayTemplate,
   deleteDayTemplate,
   duplicateDayTemplate,
   saveDailySchedule,
+  setDayOff,
   setDefaultTemplate,
   updateDayTemplate
 } from "@/lib/firestore";
@@ -68,6 +71,7 @@ function DayPlannerContent() {
   const { settings, loaded: settingsLoaded, update: updateSettings } = useUserSettings();
   const { catalog } = useTemplateCatalog();
   const schedule = schedules.find((item) => item.dateKey === dateKey);
+  const { day } = useDay(dateKey);
   // Routine-Blocks-and-AI-Templates spec §2.4 — this date's class + enabled routine blocks,
   // always passed to `DayTimelineEditor` (which merges in whichever aren't already on the saved
   // day — see its own `wantedLockedSlots` doc comment), not just when nothing is saved yet.
@@ -147,7 +151,16 @@ function DayPlannerContent() {
   return (
     <>
       <SectionHeader title="Day" eyebrow={friendlyDate(dateKey)}>
-        <input className="input max-w-48" type="date" value={dateKey} onChange={(event) => setDateKey(event.target.value)} />
+        <div className="flex items-center gap-2">
+          <input className="input max-w-48" type="date" value={dateKey} onChange={(event) => setDateKey(event.target.value)} />
+          <button
+            className="btn-secondary py-1.5 text-xs"
+            onClick={() => user && (day?.dayOff ? clearDayOff(user.uid, dateKey) : setDayOff(user.uid, dateKey))}
+            title={day?.dayOff ? "Undo — this is a working day" : "Mark this date as a day off"}
+          >
+            {day?.dayOff ? "Undo day off" : "Day off"}
+          </button>
+        </div>
       </SectionHeader>
       {showNewDayViewCallout ? (
         <div className="card mb-4 flex flex-wrap items-center justify-between gap-2 p-3 text-sm">

@@ -3,6 +3,7 @@
 import { orderBy } from "firebase/firestore";
 import { useMemo } from "react";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
+import { useDay } from "@/hooks/use-day";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { todayMetrics } from "@/lib/analytics";
@@ -25,6 +26,7 @@ export function useLiveLoadIndex(todayKey: string) {
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { allCheckpoints } = useCourseCheckpoints(courses);
   const { dueCount, reviewedTodayCount } = useRevisionCounts(todayKey);
+  const { day } = useDay(todayKey);
   const dailySchedule = dailySchedules.find((item) => item.dateKey === todayKey);
   const metrics = todayMetrics(tasks, sessions);
 
@@ -37,6 +39,7 @@ export function useLiveLoadIndex(todayKey: string) {
     goals,
     terms,
     focusedMinutes: metrics.focusedMinutes,
-    todayKey
+    todayKey,
+    isDayOff: Boolean(day?.dayOff)
   });
 }

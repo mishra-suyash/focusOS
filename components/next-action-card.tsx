@@ -10,7 +10,9 @@ export function NextActionCard({ action, onScheduleIt }: { action: NextAction | 
   // (components/now-card.tsx) already shows that block with its own primary action, elapsed bar,
   // and assigned tasks. Rendering it again here would be the "second card" §7.1 explicitly says
   // this replacement is not — so this card steps aside rather than duplicate it.
-  if (action?.kind === "block") return null;
+  // plan/15 §5.1 — `kind: "day-off"` gets the same treatment: the Now card already replaces itself
+  // with a "Day off" state for a marked-off today, so this card would just repeat it.
+  if (action?.kind === "block" || action?.kind === "day-off") return null;
   if (!action) {
     return (
       <section className="card p-4">

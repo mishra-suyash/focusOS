@@ -164,7 +164,8 @@ export async function generateEveningRollup(uid: string): Promise<EveningRollup>
       goals,
       terms,
       focusedMinutes: todayStats.focusedMinutes,
-      todayKey: today
+      todayKey: today,
+      isDayOff: Boolean(dayData?.dayOff)
     });
     await adminDb().collection("users").doc(uid).collection("days").doc(today).set({ loadIndex: snapshot, date: today, updatedAt: new Date().toISOString() }, { merge: true });
     loadIndexValue = snapshot.value;

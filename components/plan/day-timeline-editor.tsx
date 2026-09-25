@@ -14,7 +14,7 @@ import { useUndoStack } from "@/hooks/use-undo-stack";
 import { useDay } from "@/hooks/use-day";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { createDayTemplate, saveDayFields } from "@/lib/firestore";
+import { clearDayOff, createDayTemplate, saveDayFields, setDayOff } from "@/lib/firestore";
 import {
   createSlot,
   formatMinutes,
@@ -133,6 +133,7 @@ export function DayTimelineEditor({
   // otherwise a rollup that proposed roughly the same day the user already built manually renders
   // every one of those blocks as a dashed ghost directly on top of the real one. Left undecided
   // rather than auto-dismissed, so it comes back if that slot is later freed up.
+  const { day } = useDay(dateKey);
   const previousDateKey = addDaysToKey(dateKey, -1);
   const { day: previousDay } = useDay(previousDateKey);
   const proposedSlots = previousDay?.rollup?.proposedSlots ?? [];
@@ -479,6 +480,13 @@ export function DayTimelineEditor({
           >
             <Eraser className="h-3.5 w-3.5" />
             Clear all
+          </button>
+          <button
+            className="btn-secondary py-1.5 text-xs"
+            onClick={() => (day?.dayOff ? clearDayOff(uid, dateKey) : setDayOff(uid, dateKey))}
+            title={day?.dayOff ? "Undo — this is a working day" : "Mark this date as a day off"}
+          >
+            {day?.dayOff ? "Undo day off" : "Day off"}
           </button>
           {isToday ? (
             <div className="relative">

@@ -3,7 +3,7 @@
  * Unit-test stand-in for lib/weekplan.ts (plan/14 §5.3/§5.4/§5.6, §12) — same pattern as
  * scripts/verify-tracking.ts, since this repo has no test runner.
  */
-import { DEFAULT_WORKING_WINDOW, placeInWindow, weekCapacity, weeklyPlanningSlotForDate } from "../lib/weekplan";
+import { DEFAULT_WORKING_WINDOW, placeInWindow, placeProposals, weekCapacity, weeklyPlanningSlotForDate, type WeekProposalCandidate } from "../lib/weekplan";
 import { minutesFromTime } from "../lib/schedule";
 import type { ScheduleSlot } from "../types";
 
@@ -128,6 +128,60 @@ const SUN = WEEK[6];
 {
   const slot = weeklyPlanningSlotForDate(undefined, SUN);
   check("an absent setting returns null (the feature is off by default)", slot === null);
+}
+
+// --- placeProposals (plan/15 §5.2) ---
+const WED = WEEK[2];
+const THU = WEEK[3];
+const FRI = WEEK[4];
+const SAT = WEEK[5];
+
+{
+  // plan/15 §2.2's exact bug: Mon-Fri are nearly full (480 of 540 min claimed, 60 min free each),
+  // Sat is wide open. Eight floating 60-min candidates, naively assigned to whichever day is
+  // "least loaded so far," would all land on Sat before Mon-Fri's higher starting load ever caught
+  // up. The per-day cap (ceil((480/6)*1.5) = 120min = 2 chunks) must stop that pile-up.
+  const claimedSlotsByDate: Record<string, Pick<ScheduleSlot, "startTime" | "endTime">[]> = {};
+  for (const d of [MON, TUE, WED, THU, FRI]) claimedSlotsByDate[d] = [{ startTime: "09:00", endTime: "17:00" }];
+  const candidates: WeekProposalCandidate[] = Array.from({ length: 8 }, (_, i) => ({
+    title: `Task ${i}`,
+    type: "deep_work",
+    durationMinutes: 60
+  }));
+  const placed = placeProposals(candidates, WEEK, claimedSlotsByDate, DEFAULT_WORKING_WINDOW);
+  const onSaturday = placed.filter((p) => p.fits && p.dateKey === SAT).length;
+  const distinctDates = new Set(placed.filter((p) => p.fits).map((p) => p.dateKey)).size;
+  check("the per-day cap keeps the emptiest day from absorbing every candidate", onSaturday <= 2, `Saturday got ${onSaturday}`);
+  check("placement spreads across more than one day", distinctDates > 1, `only ${distinctDates} distinct date(s)`);
+}
+
+{
+  // Revision prefers the course's lecture day (Tue here) even though Monday starts out emptier.
+  const claimedSlotsByDate: Record<string, Pick<ScheduleSlot, "startTime" | "endTime">[]> = {
+    [TUE]: [{ startTime: "09:00", endTime: "10:00" }] // Tue already has 60 min claimed; Mon has none
+  };
+  const candidates: WeekProposalCandidate[] = [{ title: "Revise", type: "deep_work", durationMinutes: 60, preferredDateKeys: [TUE] }];
+  const placed = placeProposals(candidates, WEEK, claimedSlotsByDate, DEFAULT_WORKING_WINDOW);
+  check("a preferred date is honored over a less-loaded fallback day", placed[0].fits && placed[0].dateKey === TUE, `got ${placed[0].dateKey}`);
+}
+
+{
+  // Backlog prefers the weekend (Sat, the only weekend day in the default Mon-Sat window) even
+  // though a weekday is emptier.
+  const candidates: WeekProposalCandidate[] = [{ title: "Backlog task", type: "deep_work", durationMinutes: 60, preferredDateKeys: [SAT] }];
+  const placed = placeProposals(candidates, WEEK, {}, DEFAULT_WORKING_WINDOW);
+  check("backlog's weekend preference is honored", placed[0].fits && placed[0].dateKey === SAT, `got ${placed[0].dateKey}`);
+}
+
+{
+  // A day marked off is excluded from both the preferred list and the general fallback search —
+  // a candidate preferring it, or with no preference at all, must never land there.
+  const offDateKeys = new Set([MON]);
+  const preferring: WeekProposalCandidate = { title: "Prefers Monday", type: "deep_work", durationMinutes: 60, preferredDateKeys: [MON] };
+  const floating: WeekProposalCandidate = { title: "Floating", type: "deep_work", durationMinutes: 60 };
+  const placed = placeProposals([preferring, floating], WEEK, {}, DEFAULT_WORKING_WINDOW, offDateKeys);
+  check("a day off is skipped even when explicitly preferred", placed[0].dateKey !== MON, `got ${placed[0].dateKey}`);
+  check("a day off never absorbs a floating candidate either", placed[1].dateKey !== MON, `got ${placed[1].dateKey}`);
 }
 
 if (failures.length > 0) {

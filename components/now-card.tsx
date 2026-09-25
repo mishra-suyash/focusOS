@@ -6,7 +6,7 @@ import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { useFocusSession } from "@/components/focus-session-provider";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
-import { updateTask } from "@/lib/firestore";
+import { clearDayOff, updateTask } from "@/lib/firestore";
 import { categoryForSlotType } from "@/lib/timeline";
 import { computeStatusPatch } from "@/lib/tasks";
 import {
@@ -20,7 +20,7 @@ import {
   slotTypeStyles,
   sortedSlots
 } from "@/lib/schedule";
-import type { Course, DailySchedule, Task } from "@/types";
+import type { Course, DailySchedule, Day, Task } from "@/types";
 
 /**
  * plan/14 §7.2 — replaces `DailyScheduleWidget`'s compact three-metric grid and duplicate
@@ -30,11 +30,39 @@ import type { Course, DailySchedule, Task } from "@/types";
  * deleted here, not carried over. The full-day list is still reachable, just collapsed behind
  * "Show the whole day".
  */
-export function NowCard({ schedule, tasks, courses }: { schedule?: DailySchedule; tasks: Task[]; courses: Course[] }) {
+export function NowCard({
+  date,
+  schedule,
+  tasks,
+  courses,
+  dayOff
+}: {
+  date: string;
+  schedule?: DailySchedule;
+  tasks: Task[];
+  courses: Course[];
+  dayOff?: Day["dayOff"];
+}) {
   const { user } = useAuth();
   const { startFocus, running } = useFocusSession();
   const [showAll, setShowAll] = useState(false);
   const minute = useCurrentMinute();
+
+  // plan/15 §5.1 — a day marked off replaces the whole card, the same "an explicit decision wins
+  // over whatever's still sitting on the schedule" precedent `pickNextAction`'s day-off branch
+  // already established (lib/next-action.ts) — a day off isn't "no plan," it's a plan not to work.
+  if (dayOff) {
+    return (
+      <section className="card p-4">
+        <p className="label mb-1">Now</p>
+        <h2 className="text-lg font-semibold leading-snug">Day off</h2>
+        {dayOff.reason ? <p className="mt-1 text-sm text-ink-600 dark:text-ink-300">{dayOff.reason}</p> : null}
+        <button className="btn-secondary mt-3 py-1.5 text-xs" onClick={() => user && clearDayOff(user.uid, date)}>
+          Undo — this is a working day
+        </button>
+      </section>
+    );
+  }
 
   if (!schedule || schedule.slots.length === 0) {
     return (

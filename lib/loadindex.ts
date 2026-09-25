@@ -13,6 +13,11 @@ export interface LoadIndexInputs {
   /** Optional — omitted callers simply get 0 for the goal-target term, same as before Goals existed. */
   goals?: Goal[];
   terms?: Term[];
+  /** plan/15 §5.1 — today is marked off (`Day.dayOff`). Short-circuits `computeRequiredMinutes` to
+   *  0 before summing any of the other terms, so a day nobody intended to work reads as a clean day
+   *  rather than "Behind." Optional, defaults to false — every existing caller keeps today's
+   *  behavior until it's told otherwise. */
+  isDayOff?: boolean;
 }
 
 function daysBetween(laterKey: string, earlierKey: string): number {
@@ -41,6 +46,7 @@ export function courseTargetMinutesForDay(courses: Course[], todayKey: string): 
 }
 
 export function computeRequiredMinutes(inputs: LoadIndexInputs): number {
+  if (inputs.isDayOff) return 0;
   return (
     inputs.scheduledDeepWorkMinutes +
     inputs.revisionDueCount * MINUTES_PER_REVISION +
@@ -78,11 +84,17 @@ export const loadIndexBandStyles: Record<LoadIndexBand, string> = {
   overrun: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300"
 };
 
-/** Floors required at 30 minutes so a nearly-empty day doesn't divide-by-near-zero into a meaningless spike. */
+/**
+ * Floors required at 30 minutes so a nearly-empty day doesn't divide-by-near-zero into a
+ * meaningless spike — except a day off (plan/15 §5.5), where required is 0 on purpose, not
+ * because too little got scheduled. Flooring that to 30 anyway would price a planned day off as
+ * "Behind" (0 actual / 30 floor), which would wrongly break `computeLoadIndexStreak`'s on-track
+ * streak the same week this feature was added to stop penalizing a day nobody intended to work.
+ */
 export function buildLoadIndexSnapshot(inputs: LoadIndexInputs): LoadIndexSnapshot {
   const requiredMinutes = computeRequiredMinutes(inputs);
   const actualMinutes = computeActualMinutes(inputs);
-  const value = actualMinutes / Math.max(requiredMinutes, 30);
+  const value = inputs.isDayOff ? 1 : actualMinutes / Math.max(requiredMinutes, 30);
   return {
     requiredMinutes: Math.round(requiredMinutes),
     actualMinutes: Math.round(actualMinutes),
