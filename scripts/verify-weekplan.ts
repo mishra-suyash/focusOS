@@ -184,6 +184,33 @@ const SAT = WEEK[5];
   check("a day off never absorbs a floating candidate either", placed[1].dateKey !== MON, `got ${placed[1].dateKey}`);
 }
 
+{
+  // Reproduces the exact bug found live: a heavy, unrelated backlog-tasks pool (1200 min, no
+  // preference) would inflate a single global cap so far — ceil((1200+300)/6*1.5) = 375min = 15
+  // chunks — that one course's entire 300-min revision bucket (12 chunks of 25, all preferring its
+  // one lecture day, Mon) fit under it undisturbed: 06:00-to-17:10, one course, one day. Scoping
+  // the cap to each candidate's own `capGroup` means revision's cap is ceil((300/6)*1.5) = 75min =
+  // 3 chunks, regardless of how much unrelated backlog work also exists that week.
+  const revision: WeekProposalCandidate[] = Array.from({ length: 12 }, (_, i) => ({
+    title: `Revise ${i}`,
+    type: "deep_work",
+    durationMinutes: 25,
+    preferredDateKeys: [MON],
+    capGroup: "revision:course1"
+  }));
+  const backlog: WeekProposalCandidate[] = Array.from({ length: 20 }, (_, i) => ({
+    title: `Backlog ${i}`,
+    type: "deep_work",
+    durationMinutes: 60,
+    capGroup: "backlog-tasks"
+  }));
+  const placed = placeProposals([...revision, ...backlog], WEEK, {}, DEFAULT_WORKING_WINDOW);
+  const revisionOnMonday = placed.filter((p) => p.fits && p.capGroup === "revision:course1" && p.dateKey === MON).length;
+  const revisionElsewhere = placed.filter((p) => p.fits && p.capGroup === "revision:course1" && p.dateKey !== MON).length;
+  check("a course's own revision cap isn't inflated by an unrelated bucket's volume", revisionOnMonday <= 3, `Monday got ${revisionOnMonday} revision chunks`);
+  check("capped revision overflow spills onto other days instead of vanishing", revisionElsewhere > 0, `got ${revisionElsewhere} elsewhere`);
+}
+
 if (failures.length > 0) {
   console.error(`verify-weekplan: ${failures.length} failure(s)\n`);
   for (const failure of failures) console.error(`  - ${failure}`);

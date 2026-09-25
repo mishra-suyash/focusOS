@@ -278,7 +278,14 @@ function PlanWeekContent() {
     const alreadyScheduled = scheduledMinutesThisWeek(tasks, course.id, "assignment", workMinutes, weekDateKeys);
     const chunks = Math.round(Math.max(0, target - alreadyScheduled) / workMinutes);
     for (let i = 0; i < chunks; i += 1) {
-      candidates.push({ title: `${course.name} — ${taskBucketLabels.assignment}`, type: "deep_work", durationMinutes: workMinutes, courseId: course.id, bucket: "assignment" });
+      candidates.push({
+        title: `${course.name} — ${taskBucketLabels.assignment}`,
+        type: "deep_work",
+        durationMinutes: workMinutes,
+        courseId: course.id,
+        bucket: "assignment",
+        capGroup: `assignment:${course.id}`
+      });
     }
   }
   // plan/15 §5.2 #3 — revision prefers the course's own lecture days this week (reviewing material
@@ -298,7 +305,8 @@ function PlanWeekContent() {
         durationMinutes: workMinutes,
         courseId: course.id,
         bucket: "revision",
-        preferredDateKeys: lectureDays.length > 0 ? lectureDays : undefined
+        preferredDateKeys: lectureDays.length > 0 ? lectureDays : undefined,
+        capGroup: `revision:${course.id}`
       });
     }
   }
@@ -315,7 +323,15 @@ function PlanWeekContent() {
     const alreadyScheduled = scheduledMinutesThisWeek(tasks, course.id, "backlog", workMinutes, weekDateKeys);
     const chunks = Math.round(Math.max(0, target - alreadyScheduled) / workMinutes);
     for (let i = 0; i < chunks; i += 1) {
-      candidates.push({ title: `${course.name} — ${taskBucketLabels.backlog}`, type: "deep_work", durationMinutes: workMinutes, courseId: course.id, bucket: "backlog", preferredDateKeys: weekend });
+      candidates.push({
+        title: `${course.name} — ${taskBucketLabels.backlog}`,
+        type: "deep_work",
+        durationMinutes: workMinutes,
+        courseId: course.id,
+        bucket: "backlog",
+        preferredDateKeys: weekend,
+        capGroup: `backlog:${course.id}`
+      });
     }
   }
   const backlogTasks = tasks.filter((task) => task.status !== "done" && (!task.dueDate || task.dueDate < weekStart));
@@ -324,7 +340,10 @@ function PlanWeekContent() {
     if (task.weeklyTargetDay != null) {
       candidates.push(...leadTimeCandidates(task.title, "deep_work", duration, task.weeklyTargetDay, { taskId: task.id }));
     } else {
-      candidates.push({ title: task.title, type: "deep_work", durationMinutes: duration, taskId: task.id, preferredDateKeys: weekend });
+      // plan/15 — every undated backlog task shares one cap pool: many small individual tasks
+      // piling onto the same emptiest day is the exact §2.2 failure mode, just with tasks instead
+      // of a single heavy bucket, so they still need to compete for one shared per-day allowance.
+      candidates.push({ title: task.title, type: "deep_work", durationMinutes: duration, taskId: task.id, preferredDateKeys: weekend, capGroup: "backlog-tasks" });
     }
   }
   const stalePapers = papers
@@ -337,7 +356,7 @@ function PlanWeekContent() {
     if (paper.weeklyTargetDay != null) {
       candidates.push(...leadTimeCandidates(`Read: ${paper.title}`, "reading", 45, paper.weeklyTargetDay, { refId: paper.id }));
     } else {
-      candidates.push({ title: `Read: ${paper.title}`, type: "reading", durationMinutes: 45, refId: paper.id });
+      candidates.push({ title: `Read: ${paper.title}`, type: "reading", durationMinutes: 45, refId: paper.id, capGroup: "papers" });
     }
   }
 

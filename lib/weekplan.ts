@@ -147,6 +147,15 @@ export interface WeekProposalCandidate {
   taskId?: string;
   refType?: "checkpoint" | "revision";
   refId?: string;
+  /** plan/15 §5.2's cap, revised — which pool this candidate's per-day allowance is computed
+   *  against. Candidates sharing a `capGroup` compete for one shared cap; every candidate that
+   *  omits it falls into one implicit shared pool instead (the original behavior, before this
+   *  field existed). The caller sets this per generation batch — e.g. `revision:<courseId>` — so
+   *  a course's revision minutes are capped relative to *that course's own* weekly total, not the
+   *  whole week's floating volume. Without it, a heavy week (several courses, big targets) could
+   *  inflate one global cap number so far that a single preferred day legally absorbed an entire
+   *  bucket's worth of work before tripping it — see plan/15 §2.2's bug, recurring in live use. */
+  capGroup?: string;
 }
 
 export interface WeekProposal extends WeekProposalCandidate {
@@ -179,6 +188,15 @@ function totalClaimedMinutes(slots: Pick<ScheduleSlot, "startTime" | "endTime">[
  * deprioritized — a later large candidate could otherwise push it well over). A candidate whose
  * every reachable day has no room, capped or not, comes back with `fits: false` — never silently
  * dropped, so the caller can list it under "Didn't fit".
+ *
+ * The cap is scoped per `capGroup` (candidates that omit it all share one implicit pool), not to
+ * the week's total floating minutes — an earlier version used one cap for everything, which meant
+ * a heavy week (several courses, big weekly targets) inflated that single number so far that one
+ * course's revision bucket, preferring its one lecture day, could legally dump its *entire* week's
+ * revision there before the cap ever tripped (found live: 12 chunks, one course, one day, 06:00 to
+ * 17:10). Scoping the cap to each candidate's own pool means a course's revision minutes are capped
+ * relative to that course's own fair share; once its preferred day is reasonably full, the rest
+ * spills to the general least-loaded search exactly like any other candidate.
  */
 export function placeProposals(
   candidates: WeekProposalCandidate[],
@@ -193,22 +211,31 @@ export function placeProposals(
   const simulated: Record<string, { startTime: string; endTime: string }[]> = {};
   for (const d of weekDateKeys) simulated[d] = [...(claimedSlotsByDate[d] ?? [])];
 
-  const floatingMinutes = candidates.filter((c) => !c.dateKey).reduce((sum, c) => sum + c.durationMinutes, 0);
-  const perDayCap = workingDates.length > 0 ? Math.ceil((floatingMinutes / workingDates.length) * 1.5) : Infinity;
-  const newlyProposedMinutes: Record<string, number> = {};
-  for (const d of workingDates) newlyProposedMinutes[d] = 0;
-  const cappedDays = new Set<string>();
+  const DEFAULT_CAP_GROUP = "__default__";
+  const floatingByGroup: Record<string, number> = {};
+  for (const c of candidates) {
+    if (c.dateKey) continue;
+    const key = c.capGroup ?? DEFAULT_CAP_GROUP;
+    floatingByGroup[key] = (floatingByGroup[key] ?? 0) + c.durationMinutes;
+  }
+  const capByGroup: Record<string, number> = {};
+  for (const key of Object.keys(floatingByGroup)) {
+    capByGroup[key] = workingDates.length > 0 ? Math.ceil((floatingByGroup[key] / workingDates.length) * 1.5) : Infinity;
+  }
+  const newlyProposedMinutes: Record<string, number> = {}; // keyed by `${capGroup}|${dateKey}`
+  const cappedGroupDays = new Set<string>();
 
   function tryPlace(dateKey: string, durationMinutes: number): number | null {
     return placeInWindow(simulated[dateKey] ?? [], windowStart, windowEnd, durationMinutes);
   }
 
-  function commit(dateKey: string, start: number, durationMinutes: number, trackCap: boolean) {
+  function commit(dateKey: string, start: number, durationMinutes: number, capGroup: string | null) {
     const slot = { startTime: minutesToTime(start), endTime: minutesToTime(start + durationMinutes) };
     simulated[dateKey].push(slot);
-    if (trackCap) {
-      newlyProposedMinutes[dateKey] = (newlyProposedMinutes[dateKey] ?? 0) + durationMinutes;
-      if (newlyProposedMinutes[dateKey] >= perDayCap) cappedDays.add(dateKey);
+    if (capGroup) {
+      const groupDayKey = `${capGroup}|${dateKey}`;
+      newlyProposedMinutes[groupDayKey] = (newlyProposedMinutes[groupDayKey] ?? 0) + durationMinutes;
+      if (newlyProposedMinutes[groupDayKey] >= (capByGroup[capGroup] ?? Infinity)) cappedGroupDays.add(groupDayKey);
     }
     return slot;
   }
@@ -219,21 +246,23 @@ export function placeProposals(
     if (candidate.dateKey) {
       const start = tryPlace(candidate.dateKey, candidate.durationMinutes);
       if (start !== null) {
-        const slot = commit(candidate.dateKey, start, candidate.durationMinutes, false);
+        const slot = commit(candidate.dateKey, start, candidate.durationMinutes, null);
         return { ...candidate, key, dateKey: candidate.dateKey, ...slot, fits: true };
       }
       return { ...candidate, key, dateKey: candidate.dateKey, startTime: "00:00", endTime: "00:00", fits: false };
     }
 
-    const preferred = (candidate.preferredDateKeys ?? []).filter((d) => workingDates.includes(d) && !cappedDays.has(d));
+    const capGroup = candidate.capGroup ?? DEFAULT_CAP_GROUP;
+    const isCapped = (d: string) => cappedGroupDays.has(`${capGroup}|${d}`);
+    const preferred = (candidate.preferredDateKeys ?? []).filter((d) => workingDates.includes(d) && !isCapped(d));
     const fallback = [...workingDates]
-      .filter((d) => !cappedDays.has(d) && !preferred.includes(d))
+      .filter((d) => !isCapped(d) && !preferred.includes(d))
       .sort((a, b) => totalClaimedMinutes(simulated[a]) - totalClaimedMinutes(simulated[b]));
 
     for (const dateKey of [...preferred, ...fallback]) {
       const start = tryPlace(dateKey, candidate.durationMinutes);
       if (start !== null) {
-        const slot = commit(dateKey, start, candidate.durationMinutes, true);
+        const slot = commit(dateKey, start, candidate.durationMinutes, capGroup);
         return { ...candidate, key, dateKey, ...slot, fits: true };
       }
     }
