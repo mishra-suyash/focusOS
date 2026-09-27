@@ -12,6 +12,32 @@ export function effectiveCourseStatus(course: Course, dateKey: string): CourseSt
   return course.status;
 }
 
+/**
+ * plan/16 — whether this task belongs to a course that has been dropped.
+ *
+ * `effectiveCourseStatus` was only ever consulted where *courses* are iterated, so a task was never
+ * checked against its own course's status. A dropped course's tasks therefore kept flowing into
+ * every surface that proposes work — the weekly planner's candidates, "What's coming", Up next, the
+ * day's task tray — which is the "dropped course's tasks still showing" reported in use.
+ *
+ * Deliberately only `dropped`, not `completed`. Dropping a course is a statement that its work is
+ * not going to happen; a course simply having ended can still leave a real task with a real deadline
+ * (a final report handed in after the last lecture), and refusing to plan that would be wrong.
+ *
+ * Also deliberately a *filter for suggestions*, never a reason to hide a task on `/tasks`: the task
+ * still exists and is still the user's, so it stays visible and labelled there. Silently vanishing
+ * work is how you end up not trusting the list.
+ */
+export function isFromDroppedCourse(task: Pick<Task, "courseId">, courses: Pick<Course, "id" | "status">[]): boolean {
+  if (!task.courseId) return false;
+  return courses.find((course) => course.id === task.courseId)?.status === "dropped";
+}
+
+/** The tasks a planning surface should consider — everything except a dropped course's. */
+export function plannableTasks<T extends Pick<Task, "courseId">>(tasks: T[], courses: Pick<Course, "id" | "status">[]): T[] {
+  return tasks.filter((task) => !isFromDroppedCourse(task, courses));
+}
+
 export function courseSlotsForDate(courses: Course[], dateKey: string): ScheduleSlot[] {
   const dayOfWeek = getDay(parseISO(dateKey));
   const slots: ScheduleSlot[] = [];

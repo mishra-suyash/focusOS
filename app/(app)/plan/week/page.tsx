@@ -21,6 +21,7 @@ import {
   completedMinutesThisWeek,
   courseSlotsForDate,
   effectiveCourseStatus,
+  plannableTasks,
   plannedMinutesForTask,
   plannedMinutesThisWeek,
   scheduledMinutesThisWeek,
@@ -31,6 +32,7 @@ import { clearDayOff, fetchCourseClassLogs, saveDailySchedule, saveWeeklyReviewF
 import { isGoalActiveForDate } from "@/lib/goals";
 import { computeDebtHours, computeLoadIndexStreak, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import { taskBucketLabels } from "@/lib/options";
+import { paperStatusLabels, readingCandidates } from "@/lib/papers";
 import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, estimatedReviewMinutes } from "@/lib/revision";
 import { isTemplateDueOn } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
@@ -403,7 +405,12 @@ function PlanWeekContent() {
   for (const course of activeCourses) {
     candidates.push(...bucketCandidates(course, "backlog", weekend));
   }
-  const backlogTasks = tasks.filter((task) => task.status !== "done" && (!task.dueDate || task.dueDate < weekStart));
+  // plan/16 — a dropped course's tasks are not work this week is going to contain, so they never
+  // become candidates. They stay visible and labelled on /tasks; they just stop being proposed.
+  const backlogTasks = plannableTasks(
+    tasks.filter((task) => task.status !== "done" && (!task.dueDate || task.dueDate < weekStart)),
+    courses
+  );
   for (const task of backlogTasks) {
     // plan/16 §5.1 — propose only what's actually left, which is the "tracked across sittings" half
     // of the ask: the leftover rolls forward into the next week's plan with no bookkeeping of its own.
@@ -487,19 +494,27 @@ function PlanWeekContent() {
       });
     }
   }
-  const stalePapers = papers
-    .filter((paper) => paper.status === "reading")
-    .map((paper) => ({ ...paper, daysSinceUpdate: Math.round((new Date(todayK).getTime() - new Date(paper.updatedAt).getTime()) / 86_400_000) }))
-    .filter((paper) => paper.daysSinceUpdate > 14)
-    .sort((a, b) => b.daysSinceUpdate - a.daysSinceUpdate)
-    .slice(0, 3);
-  for (const paper of stalePapers) {
-    const readingMinutes = splitIntoChunks(45, chunkOpts);
-    const paperObjective = { objectiveRef: { kind: "paper" as const, id: paper.id }, refId: paper.id };
+  /**
+   * plan/16 §5.2 — reading is planned as the *pass the paper is actually owed*, at the length that
+   * pass takes for this reader.
+   *
+   * What this replaces: a flat 45-minute block, offered only for papers already in `reading` status
+   * and untouched for 14+ days, with no `passNo`. That could only surface reading already started
+   * and abandoned — a paper added this week was never plannable — and 45 minutes is wrong for all
+   * three passes at once, when the app already knows a pass-1 skim is minutes and a pass-3
+   * reimplementation is most of a morning, calibrated to this reader's own medians. Carrying `passNo`
+   * is what lets the block say "Pass 2", arm that pass's length on the timer, and attribute the
+   * session to the right pass.
+   */
+  const { plannable: readingPlan, needsGoal: papersNeedingGoal } = readingCandidates(papers, todayK);
+  for (const { paper, passNo, minutes: passMinutes } of readingPlan) {
+    const readingMinutes = splitIntoChunks(passMinutes, chunkOpts);
+    const paperObjective = { objectiveRef: { kind: "paper" as const, id: paper.id, passNo }, refId: paper.id };
+    const title = `Read: ${paper.title} (pass ${passNo})`;
     if (paper.weeklyTargetDay != null) {
       readingMinutes.forEach((minutes, index) => {
         candidates.push(
-          ...leadTimeCandidates(`Read: ${paper.title}`, "reading", minutes, paper.weeklyTargetDay!, {
+          ...leadTimeCandidates(title, "reading", minutes, paper.weeklyTargetDay!, {
             ...paperObjective,
             plannedMinutes: minutes,
             key: `paper:${paper.id}:${index}`
@@ -509,7 +524,7 @@ function PlanWeekContent() {
     } else {
       readingMinutes.forEach((minutes, index) => {
         candidates.push({
-          title: `Read: ${paper.title}`,
+          title,
           type: "reading",
           durationMinutes: minutes,
           plannedMinutes: minutes,
@@ -603,7 +618,7 @@ function PlanWeekContent() {
       });
     }
   }
-  for (const task of tasks) {
+  for (const task of plannableTasks(tasks, courses)) {
     if (task.status === "done" || !task.dueDate || task.dueDate < todayK || task.dueDate > horizonEnd) continue;
     const outstanding = Math.max(
       0,
@@ -648,15 +663,31 @@ function PlanWeekContent() {
       objectiveRef: { kind: "revisionQueue" }
     });
   }
-  for (const paper of stalePapers) {
+  // Reading rows come from the same `readingCandidates` the Step-4 candidates do, so the two
+  // surfaces can never offer different passes or different lengths for the same paper.
+  for (const { paper, passNo, minutes, daysSinceUpdate } of readingPlan) {
     upcomingRows.push({
       id: `paper:${paper.id}`,
-      title: `Read: ${paper.title}`,
-      detail: `Untouched ${paper.daysSinceUpdate} days`,
-      minutes: 45,
+      title: `Read: ${paper.title} (pass ${passNo})`,
+      detail: `Pass ${passNo} · ${daysSinceUpdate > 14 ? `untouched ${daysSinceUpdate} days` : paperStatusLabels[paper.status]}`,
+      minutes,
       type: "reading",
       preferredDateKeys: paper.weeklyTargetDay != null ? weekDateKeys.filter((d) => getDay(parseISO(d)) === paper.weeklyTargetDay) : [],
-      objectiveRef: { kind: "paper", id: paper.id }
+      objectiveRef: { kind: "paper", id: paper.id, passNo }
+    });
+  }
+  // A paper whose pass 1 is blocked on a missing reading goal is *not* schedulable — starting it is
+  // gated — so it is surfaced as the small thing it actually is rather than as reading time. Hiding
+  // it is how a paper sits in the library for a month; proposing it would schedule work the app then
+  // refuses to start.
+  for (const paper of papersNeedingGoal) {
+    upcomingRows.push({
+      id: `paperGoal:${paper.id}`,
+      title: `Set a reading goal: ${paper.title}`,
+      detail: "Pass 1 needs a goal before it can start",
+      minutes: 10,
+      type: "admin",
+      preferredDateKeys: []
     });
   }
 
@@ -1323,16 +1354,16 @@ function PlanWeekContent() {
         <p className="sr-only" role="status" aria-live="polite">
           {gridMessage}
         </p>
-        {stalePapers.length > 0 || backlogTasks.length > 0 ? (
+        {readingPlan.length > 0 || backlogTasks.length > 0 ? (
           <div className="mb-4 space-y-1">
             <p className="label mb-1 inline-flex items-center gap-1">
               Target a day (optional)
               <InfoHint term="weeklyTargetDay" />
             </p>
-            {stalePapers.map((paper) => (
+            {readingPlan.map(({ paper, passNo }) => (
               <TargetDayRow
                 key={paper.id}
-                title={`Read: ${paper.title}`}
+                title={`Read: ${paper.title} (pass ${passNo})`}
                 value={paper.weeklyTargetDay}
                 onChange={(day) => user && updatePaper(user.uid, paper.id, { weeklyTargetDay: day })}
               />

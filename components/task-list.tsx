@@ -63,8 +63,22 @@ export function TaskList({
                     {categoryLabels[task.category]}
                   </span>
                   {course ? (
-                    <span className="rounded bg-ink-100 px-1.5 py-0.5 text-[11px] font-medium text-ink-600 dark:bg-ink-800 dark:text-ink-300">
+                    <span
+                      className={clsx(
+                        "rounded px-1.5 py-0.5 text-[11px] font-medium",
+                        course.status === "dropped"
+                          ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"
+                          : "bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300"
+                      )}
+                      // plan/16 — a dropped course's tasks stop being *proposed* anywhere, but they
+                      // are still the user's tasks and still exist, so here they are labelled rather
+                      // than hidden. Silently vanishing work is how you stop trusting the list; this
+                      // way the reason they no longer turn up in planning is visible and the task can
+                      // be finished or deleted deliberately.
+                      title={course.status === "dropped" ? "This course is dropped — its tasks are no longer planned" : undefined}
+                    >
                       {course.code || course.name}
+                      {course.status === "dropped" ? " · dropped" : ""}
                     </span>
                   ) : null}
                   {task.seriesId ? (

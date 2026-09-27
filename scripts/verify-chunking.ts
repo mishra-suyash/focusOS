@@ -16,8 +16,10 @@ import { loggedMinutesForTask, remainingMinutes, sittingOutcome, sittingRemainin
 import { plannedMinutesForTask, plannedMinutesThisWeek } from "../lib/courses";
 import { describeObjective } from "../lib/objectives";
 import { computeDayReadout, computeDayScore } from "../lib/gamify";
+import { isFromDroppedCourse, plannableTasks } from "../lib/courses";
+import { nextPassEstimateMinutes, nextReadingPass, pastPassMinutes, readingCandidates, PASS_SEED_MINUTES } from "../lib/papers";
 import { placeProposals, DEFAULT_WORKING_WINDOW, type WeekProposalCandidate } from "../lib/weekplan";
-import type { DailySchedule, PomodoroSession, ScheduleSlot, Task } from "../types";
+import type { DailySchedule, Paper, PomodoroSession, ScheduleSlot, Task } from "../types";
 
 const failures: string[] = [];
 
@@ -373,6 +375,109 @@ const objectiveCtx = {
 
   const dayOff = computeDayReadout({ slots: morning, sessions: [], nowMinute: 10 * 60, isDayOff: true });
   check("a day off is never paced", dayOff.mode === "final" && dayOff.score === null, `${dayOff.mode}/${dayOff.score}`);
+}
+
+// --- plan/16: a dropped course's tasks are never proposed ---
+
+{
+  const courses = [{ id: "c1", status: "active" as const }, { id: "c2", status: "dropped" as const }, { id: "c3", status: "completed" as const }];
+  const list = [
+    { id: "t1", courseId: "c1" },
+    { id: "t2", courseId: "c2" },
+    { id: "t3", courseId: "c3" },
+    { id: "t4" }
+  ];
+  const kept = plannableTasks(list, courses).map((task) => task.id);
+  check("a dropped course's task is not plannable", !kept.includes("t2"), kept.join(","));
+  check("an active course's task, a completed course's task, and an uncoursed task all are",
+    kept.includes("t1") && kept.includes("t3") && kept.includes("t4"), kept.join(","));
+  check("isFromDroppedCourse ignores a task with no course", !isFromDroppedCourse({}, courses));
+  check("an unknown courseId is not treated as dropped", !isFromDroppedCourse({ courseId: "gone" }, courses));
+}
+
+// --- plan/16 §5.2: reading is planned as the pass the paper is actually owed ---
+
+const paper = (partial: Partial<Paper>): Paper => ({
+  id: "p1",
+  title: "A paper",
+  authors: [],
+  status: "to_read",
+  priority: "medium",
+  tags: [],
+  progress: 0,
+  groupIds: [],
+  createdAt: "2026-09-01T00:00:00.000Z",
+  updatedAt: "2026-09-01T00:00:00.000Z",
+  ...partial
+});
+const donePass = (minutes: number, output?: unknown) => ({ status: "done" as const, minutes, output: output as never });
+
+{
+  check("a fresh paper is owed pass 1", nextReadingPass(paper({})) === 1);
+  check("an in-progress pass 1 is still pass 1", nextReadingPass(paper({ pass1: { status: "in_progress" } })) === 1);
+  check("a finished pass 1 moves to pass 2", nextReadingPass(paper({ pass1: donePass(8, { verdict: "continue" }) })) === 2);
+  check("a skipped pass counts as passed through", nextReadingPass(paper({ pass1: { status: "skipped" } })) === 2);
+  check(
+    "a dropped paper is owed nothing",
+    nextReadingPass(paper({ pass1: donePass(6, { verdict: "drop" }) })) === null
+  );
+  check(
+    "a parked paper is owed nothing",
+    nextReadingPass(paper({ pass1: donePass(6, { verdict: "park" }) })) === null
+  );
+  // Pass 3 is opt-in, exactly as derivePaperStatus treats it: "grasped" finishes the paper.
+  check(
+    "pass 2 grasped finishes the paper",
+    nextReadingPass(paper({ pass1: donePass(7, { verdict: "continue" }), pass2: donePass(55, { outcome: "grasped" }) })) === null
+  );
+  check(
+    "pass 2 persevere earns a pass 3",
+    nextReadingPass(paper({ pass1: donePass(7, { verdict: "continue" }), pass2: donePass(55, { outcome: "persevere" }) })) === 3
+  );
+  check(
+    "a deliberate set-aside is not argued with",
+    nextReadingPass(paper({ pass1: donePass(7, { verdict: "continue" }), pass2: donePass(55, { outcome: "set-aside" }) })) === null
+  );
+  check("a finished pass 3 is owed nothing", nextReadingPass(paper({ pass3: donePass(95) })) === null);
+}
+
+{
+  // Sizing: the seed until there are 5 samples, then the reader's own median.
+  const noHistory = nextPassEstimateMinutes(paper({}), [paper({})]);
+  check("with no history, pass 1 is the seed estimate", noHistory === PASS_SEED_MINUTES[1], `got ${noHistory}`);
+
+  const library = [10, 12, 14, 16, 18].map((minutes, i) => paper({ id: `h${i}`, pass1: donePass(minutes, { verdict: "continue" }) }));
+  check("five samples switch pass 1 to the reader's own median", pastPassMinutes(library, 1).length === 5, `${pastPassMinutes(library, 1)}`);
+  const calibrated = nextPassEstimateMinutes(paper({}), [...library, paper({})]);
+  check("the calibrated estimate replaces the seed", calibrated === 14, `got ${calibrated}`);
+  check("an unfinished pass contributes no sample", pastPassMinutes([paper({ pass1: { status: "in_progress", minutes: 9 } })], 1).length === 0);
+}
+
+{
+  // Candidate selection: staleness ranks, it no longer gates. A paper added today with a next pass
+  // is plannable — under the old rule only `reading`-status papers untouched 14+ days ever were.
+  // Note the goal: a paper without one is *correctly* held back at pass 1, so a fixture testing
+  // "added today is plannable" has to give it one — which is the gate doing its job.
+  const fresh = paper({
+    id: "fresh",
+    title: "Added today",
+    priority: "high",
+    goal: "check whether the baseline is comparable",
+    goalKind: "baseline",
+    updatedAt: "2026-09-26T00:00:00.000Z"
+  });
+  const blocked = paper({ id: "blocked", title: "No goal yet" });
+  const withGoal = paper({ id: "goal", title: "Has a goal", goal: "decide if the method applies", goalKind: "method" });
+  const finished = paper({ id: "done", pass1: donePass(7, { verdict: "continue" }), pass2: donePass(50, { outcome: "grasped" }) });
+
+  const { plannable, needsGoal } = readingCandidates([fresh, blocked, withGoal, finished], "2026-09-26");
+  const ids = plannable.map((item) => item.paper.id);
+  check("a paper added today is plannable", ids.includes("fresh"), ids.join(","));
+  check("a finished paper is not offered", !ids.includes("done"), ids.join(","));
+  check("pass 1 without a reading goal is held back, not proposed", !ids.includes("blocked") && needsGoal.some((p) => p.id === "blocked"), ids.join(","));
+  check("a paper with a goal is proposed", ids.includes("goal"), ids.join(","));
+  check("every candidate carries a pass and a length", plannable.every((item) => item.passNo >= 1 && item.minutes > 0));
+  check("high priority is offered first", plannable[0]?.paper.id === "fresh", ids.join(","));
 }
 
 if (failures.length > 0) {

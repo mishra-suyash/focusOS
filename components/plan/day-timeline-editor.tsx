@@ -697,6 +697,7 @@ export function DayTimelineEditor({
               <PlanTray
                 dateKey={dateKey}
                 tasks={tasks}
+                courses={courses}
                 workMinutes={workMinutes}
                 anchorMinute={isToday ? nowMinute : DEFAULT_SCROLL_MINUTE}
                 slots={slots}

@@ -10,6 +10,7 @@ import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { generateDayTemplate } from "@/lib/ai/client";
+import { plannableTasks } from "@/lib/courses";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 import { createDayTemplate } from "@/lib/firestore";
 import { createSlot, materializeSlots, minutesFromTime, minutesToTime, shiftTemplateSlots, slotTypeStyles, sortedSlots, validateSlots } from "@/lib/schedule";
@@ -27,14 +28,15 @@ import {
   type QuickBlockPreset
 } from "@/lib/timeline";
 import { BUILTIN_DAY_TEMPLATES, materializeBuiltinDayTemplate, type BuiltinDayTemplate } from "@/lib/templates/builtin";
-import type { DayTemplate, Goal, Priority, ScheduleSlot, Task } from "@/types";
+import type { Course, DayTemplate, Goal, Priority, ScheduleSlot, Task } from "@/types";
 
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
 
-/** §4.4 "Tasks to schedule" — open tasks due today/this week, or already in progress, priority-sorted. */
-function relevantTasks(tasks: Task[]): Task[] {
+/** §4.4 "Tasks to schedule" — open tasks due today/this week, or already in progress, priority-sorted.
+ *  plan/16: a dropped course's tasks are excluded, the same as everywhere else that *offers* work. */
+function relevantTasks(tasks: Task[], courses: Pick<Course, "id" | "status">[]): Task[] {
   const weekAhead = addDaysToKey(todayKey(), 7);
-  return tasks
+  return plannableTasks(tasks, courses)
     .filter((task) => task.status !== "done")
     .filter((task) => task.status === "in_progress" || (task.dueDate && task.dueDate <= weekAhead))
     .sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || (a.dueDate ?? "9999-12-31").localeCompare(b.dueDate ?? "9999-12-31"));
@@ -80,6 +82,7 @@ export function PlanTray({
   dateKey,
   tasks,
   workMinutes,
+  courses = [],
   anchorMinute,
   slots,
   gridRef,
@@ -91,6 +94,9 @@ export function PlanTray({
   dateKey: string;
   tasks: Task[];
   workMinutes: number;
+  /** plan/16 — only to exclude a dropped course's tasks from what this tray offers. Optional: absent
+   *  means no course is known to be dropped, which is every pre-`16` caller's behavior. */
+  courses?: Pick<Course, "id" | "status">[];
   /** Where the non-drag "Schedule" actions anchor their `nearestFreeGap` search — the same value DayTimelineEditor's own "N" shortcut and duplicate-block action use (now, or the day's default start on other dates). */
   anchorMinute: number;
   slots: ScheduleSlot[];
@@ -142,7 +148,7 @@ export function PlanTray({
     return () => gridRef.current?.setExternalPreview(null);
   }, [templateDrop, gridRef]);
 
-  const openTasks = relevantTasks(tasks);
+  const openTasks = relevantTasks(tasks, courses);
 
   function beginDrag(event: React.PointerEvent, gesture: TrayGesture) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -312,7 +318,7 @@ export function PlanTray({
         startTime: slot.startTime,
         endTime: slot.endTime
       }));
-      const openTasks = relevantTasks(tasks).map((task) => ({ title: task.title, priority: task.priority, dueDate: task.dueDate }));
+      const openTasks = relevantTasks(tasks, courses).map((task) => ({ title: task.title, priority: task.priority, dueDate: task.dueDate }));
       const activeGoals = goals.filter((goal) => goal.status === "active").map((goal) => ({ title: goal.title }));
       const result = await generateDayTemplate(user, {
         prompt: aiPrompt.trim(),

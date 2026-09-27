@@ -8,6 +8,7 @@ import { useFeatures } from "@/hooks/use-features";
 import { useLiveLoadIndex } from "@/hooks/use-live-load-index";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
+import { plannableTasks } from "@/lib/courses";
 import { weekDates, weekStartKey } from "@/lib/dates";
 import { pickNextAction, type NextAction } from "@/lib/next-action";
 import { describeObjective } from "@/lib/objectives";
@@ -61,7 +62,10 @@ export function useNextAction(todayKey: string): { action: NextAction | null; st
   const action = pickNextAction({
     checkpoints: allCheckpoints,
     dueRevisionCount: dueCount,
-    tasks,
+    // plan/16 — never recommend work from a course the user has dropped. `pickNextAction` itself
+    // stays unaware of courses: it is a pure cascade over whatever it is handed, and filtering here
+    // keeps that true rather than threading course status into it.
+    tasks: plannableTasks(tasks, courses),
     loadIndexValue: loadIndex.value,
     todayKey,
     weekEndKey: weekDates(weekStartKey())[6],
