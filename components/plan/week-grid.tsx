@@ -410,8 +410,10 @@ export function ProposalInspector({
   onDismiss,
   disabled = false,
   chip,
+  notice,
   invalidReason,
-  suggestStart
+  suggestStart,
+  maxMinutes
 }: {
   proposal: WeekProposal;
   weekDateKeys: string[];
@@ -429,6 +431,13 @@ export function ProposalInspector({
    *  user with "outside your working window" on the one path that exists for placing work the
    *  search refused. */
   suggestStart?: (dateKey: string, durationMinutes: number) => number;
+  /** The sitting cap, so the number input's own spinner can't offer a value the caller will clamp. */
+  maxMinutes?: number;
+  /** plan/16 — what the caller changed about a requested placement, and why: a duration clamped to
+   *  the sitting cap, or trimmed to the room actually free after the start. Information, not an
+   *  error — a field that comes back smaller than what was typed has to explain itself, or it reads
+   *  as the control being broken. */
+  notice?: string;
   /** Why this proposal can't be accepted where it currently sits, if it can't — the caller knows
    *  about the locked layer and the other proposals, so it decides; this only renders the sentence. */
   invalidReason?: string | null;
@@ -475,6 +484,7 @@ export function ProposalInspector({
           type="number"
           min={5}
           step={5}
+          max={maxMinutes}
           aria-label={`Minutes for ${proposal.title}`}
           value={duration}
           disabled={disabled}
@@ -506,6 +516,7 @@ export function ProposalInspector({
         </>
       )}
       {invalidReason ? <span className="w-full text-[11px] text-red-600 dark:text-red-400">{invalidReason}</span> : null}
+      {notice && !invalidReason ? <span className="w-full text-[11px] text-ink-500">{notice}</span> : null}
     </div>
   );
 }

@@ -18,7 +18,7 @@ import { describeObjective } from "../lib/objectives";
 import { computeDayReadout, computeDayScore } from "../lib/gamify";
 import { isFromDroppedCourse, plannableTasks } from "../lib/courses";
 import { nextPassEstimateMinutes, nextReadingPass, pastPassMinutes, readingCandidates, PASS_SEED_MINUTES } from "../lib/papers";
-import { placeProposals, DEFAULT_WORKING_WINDOW, type WeekProposalCandidate } from "../lib/weekplan";
+import { placeProposals, resolvePlacement, DEFAULT_WORKING_WINDOW, type WeekProposalCandidate } from "../lib/weekplan";
 import type { DailySchedule, Paper, PomodoroSession, ScheduleSlot, Task } from "../types";
 
 const failures: string[] = [];
@@ -478,6 +478,55 @@ const donePass = (minutes: number, output?: unknown) => ({ status: "done" as con
   check("a paper with a goal is proposed", ids.includes("goal"), ids.join(","));
   check("every candidate carries a pass and a length", plannable.every((item) => item.passNo >= 1 && item.minutes > 0));
   check("high priority is offered first", plannable[0]?.paper.id === "fresh", ids.join(","));
+}
+
+// --- plan/16 §5.3: a typed duration is resolved against every constraint it touches ---
+//
+// This is the regression guard for the "increase a block's size and it doesn't adjust" report. The
+// clamps aren't cosmetic: a block longer than `maxChunkMinutes` arms a timer clamped to that cap
+// (`startFocus`), so it can never reach `slotAutoStatus`'s 60% coverage, so it never closes, and
+// `computeDayScore` counts it unfinished while dividing coverage by the inflated plan. An over-long
+// block is unfinishable by construction.
+
+{
+  const bounds = { maxChunkMinutes: 50, minChunkMinutes: 15, workingWindow: DEFAULT_WORKING_WINDOW };
+  const empty = { occupied: [], ...bounds };
+
+  const overCap = resolvePlacement({ dateKey: MON, startMinutes: 9 * 60, durationMinutes: 120 }, empty);
+  check("a duration over the sitting cap is clamped to it", overCap.placement.durationMinutes === 50, `${overCap.placement.durationMinutes}`);
+  check("and says so", overCap.notes.some((note) => note.includes("longest sitting")), overCap.notes.join(" "));
+
+  const underFloor = resolvePlacement({ dateKey: MON, startMinutes: 9 * 60, durationMinutes: 5 }, empty);
+  check("a duration under the floor is raised to it", underFloor.placement.durationMinutes === 15, `${underFloor.placement.durationMinutes}`);
+
+  // Growth stops at the locked layer rather than overlapping a lecture that cannot move.
+  const beforeLecture = resolvePlacement(
+    { dateKey: MON, startMinutes: 9 * 60, durationMinutes: 50 },
+    { ...bounds, occupied: [{ startTime: "09:35", endTime: "11:00", title: "CS201 lecture" }] }
+  );
+  check("growth stops where the next block starts", beforeLecture.placement.durationMinutes === 35, `${beforeLecture.placement.durationMinutes}`);
+  check("and names what stopped it", beforeLecture.notes.some((note) => note.includes("CS201 lecture")), beforeLecture.notes.join(" "));
+
+  // The working window is a ceiling too.
+  const atWindowEnd = resolvePlacement({ dateKey: MON, startMinutes: 17 * 60 + 40, durationMinutes: 50 }, empty);
+  check("growth stops at the end of the working window", atWindowEnd.placement.durationMinutes === 20, `${atWindowEnd.placement.durationMinutes}`);
+
+  // Squeezed into a gap smaller than the floor, the length is left alone: the caller's own overlap
+  // check then reports it, which beats silently shrinking it to a stub that happens to fit.
+  const noRoom = resolvePlacement(
+    { dateKey: MON, startMinutes: 9 * 60, durationMinutes: 50 },
+    { ...bounds, occupied: [{ startTime: "09:05", endTime: "11:00", title: "Standup" }] }
+  );
+  check("a gap below the floor is not silently filled with a stub", noRoom.placement.durationMinutes === 50, `${noRoom.placement.durationMinutes}`);
+  check("and the user is told to move it", noRoom.notes.some((note) => note.includes("move it")), noRoom.notes.join(" "));
+
+  // A start outside the window is pulled back in, and a placement that needs nothing changed says
+  // nothing — a notice on every edit would be noise.
+  const early = resolvePlacement({ dateKey: MON, startMinutes: 6 * 60, durationMinutes: 45 }, empty);
+  check("a start before the window is pulled into it", early.placement.startMinutes === 9 * 60, `${early.placement.startMinutes}`);
+  const fine = resolvePlacement({ dateKey: MON, startMinutes: 10 * 60, durationMinutes: 45 }, empty);
+  check("a placement needing no change reports nothing", fine.notes.length === 0, fine.notes.join(" "));
+  check("and is returned unchanged", fine.placement.durationMinutes === 45 && fine.placement.startMinutes === 10 * 60);
 }
 
 if (failures.length > 0) {

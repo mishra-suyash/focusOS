@@ -45,6 +45,7 @@ import {
   DEFAULT_WORKING_WINDOW,
   placeInWindow,
   placeProposals,
+  resolvePlacement,
   weekCapacity,
   weeklyPlanningSlotForDate,
   type WeekProposal,
@@ -765,7 +766,13 @@ function PlanWeekContent() {
    * the keys had to become stable first (see `WeekProposalCandidate.key`).
    */
   const [placements, setPlacements] = useState<Record<string, WeekGridPlacement>>({});
-  useEffect(() => setPlacements({}), [weekStart]);
+  /** What `applyPlacement` changed about a requested placement, per proposal key — reported on the
+   *  row so a clamp explains itself rather than looking like a control that ignored you. */
+  const [placementNotes, setPlacementNotes] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setPlacements({});
+    setPlacementNotes({});
+  }, [weekStart]);
   const [gridMessage, setGridMessage] = useState("");
 
   /**
@@ -810,6 +817,52 @@ function PlanWeekContent() {
     ];
     const clash = others.find((other) => start < minutesFromTime(other.endTime) && minutesFromTime(other.startTime) < end);
     return clash ? `Overlaps "${clash.title}" (${clash.startTime}–${clash.endTime}).` : null;
+  }
+
+  /**
+   * The single path every move and resize goes through — the grid's drag and the inspector's day,
+   * time and duration fields alike — because a placement has to satisfy more constraints than any
+   * one of those inputs knows about.
+   *
+   * A typed duration in particular reaches much further than its own block, which is why it is
+   * clamped here rather than taken literally:
+   *
+   * - **The sitting cap is not advisory.** `startFocus` clamps the armed timer to
+   *   `maxChunkMinutes`, so a 120-minute block arms a 50-minute timer. 50 of 120 is 42%, below
+   *   `slotAutoStatus`'s 60% threshold, so the block can never auto-close however diligently it is
+   *   worked — and `computeDayScore` then counts it as an unfinished sitting *and* uses the inflated
+   *   120 as its coverage denominator. A block longer than the cap is unfinishable by construction,
+   *   so allowing one is not flexibility, it is a trap.
+   * - **`plannedMinutes` is read by the planner.** It feeds `plannedMinutesThisWeek` /
+   *   `plannedMinutesForTask`, which is what next week's generation subtracts before deciding how
+   *   much to propose. Inflating it silently tells the planner more is planned than the work needs,
+   *   and the difference is lost rather than rolled forward.
+   * - **The locked layer cannot move.** Lectures, routine and calendar events are fixed reality
+   *   (§5.4/A1), so growth stops at whatever is next on the day rather than overlapping it. Other
+   *   *proposals* could in principle be pushed, but silently reflowing a block the user placed
+   *   deliberately is worse than stopping short and saying so.
+   *
+   * Every clamp is reported rather than applied silently — the note appears on the row, so a
+   * duration that came back smaller than typed explains itself instead of looking broken.
+   */
+  function applyPlacement(key: string, requested: WeekGridPlacement) {
+    const proposal = effectiveProposals.find((p) => p.key === key);
+    const grew = proposal ? requested.durationMinutes > minutesFromTime(proposal.endTime) - minutesFromTime(proposal.startTime) : false;
+    const { placement, notes } = resolvePlacement(requested, {
+      occupied: [
+        ...(claimedSlotsByDate[requested.dateKey] ?? []),
+        ...undecidedProposals.filter((other) => other.key !== key && other.dateKey === requested.dateKey)
+      ].map((item) => ({ startTime: item.startTime, endTime: item.endTime, title: item.title })),
+      workingWindow,
+      maxChunkMinutes: chunkOpts.maxChunkMinutes,
+      minChunkMinutes: chunkOpts.minChunkMinutes
+    });
+    // Growing one sitting of a split doesn't shrink its siblings — so the week now plans more of this
+    // work than the split budgeted. Said out loud rather than silently rebalancing blocks the user
+    // may have already placed deliberately.
+    if (grew && proposal?.chunk) notes.push(`This is sitting ${proposal.chunk.index} of ${proposal.chunk.total}; the others are unchanged.`);
+    setPlacements((current) => ({ ...current, [key]: placement }));
+    setPlacementNotes((current) => ({ ...current, [key]: notes.join(" ") }));
   }
 
   /** The first start on `dateKey` that would actually fit — what the inspector uses when a proposal
@@ -1390,7 +1443,7 @@ function PlanWeekContent() {
             fixedSlotsByDate={claimedSlotsByDate}
             proposals={undecidedProposals.filter((p) => p.fits)}
             decisions={decisions}
-            onPlace={(key, placement) => setPlacements((current) => ({ ...current, [key]: placement }))}
+            onPlace={applyPlacement}
             disabled={accepting || committed}
             chipFor={chipForProposal}
             dayScoreFor={dayScoreOn ? (dateKey) => (dateKey < todayK ? weekDayDocs.get(dateKey)?.game?.score ?? null : null) : undefined}
@@ -1419,7 +1472,7 @@ function PlanWeekContent() {
                         dayLabels={DAY_LABELS}
                         offDateKeys={offDateKeys}
                         decision={decisions[p.key]}
-                        onPlace={(key, placement) => setPlacements((current) => ({ ...current, [key]: placement }))}
+                        onPlace={applyPlacement}
                         onAccept={(key) => {
                           const proposal = effectiveProposals.find((item) => item.key === key);
                           if (proposal) acceptProposals([proposal]);
@@ -1431,6 +1484,8 @@ function PlanWeekContent() {
                         disabled={accepting || committed}
                         chip={chipForProposal(p)}
                         invalidReason={placementProblem(p)}
+                        notice={placementNotes[p.key]}
+                        maxMinutes={chunkOpts.maxChunkMinutes}
                         suggestStart={suggestStartOn}
                       />
                     ))}
@@ -1458,7 +1513,7 @@ function PlanWeekContent() {
                     dayLabels={DAY_LABELS}
                     offDateKeys={offDateKeys}
                     decision={decisions[p.key]}
-                    onPlace={(key, placement) => setPlacements((current) => ({ ...current, [key]: placement }))}
+                    onPlace={applyPlacement}
                     onAccept={(key) => {
                       const proposal = effectiveProposals.find((item) => item.key === key);
                       if (proposal) acceptProposals([proposal]);
@@ -1470,6 +1525,8 @@ function PlanWeekContent() {
                     disabled={accepting || committed}
                     chip={chipForProposal(p)}
                     invalidReason={placementProblem(p)}
+                    notice={placementNotes[p.key]}
+                    maxMinutes={chunkOpts.maxChunkMinutes}
                     suggestStart={suggestStartOn}
                   />
                 ))}

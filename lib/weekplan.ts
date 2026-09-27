@@ -313,3 +313,75 @@ export function placeProposals(
     return { ...candidate, key, dateKey: candidate.preferredDateKeys?.[0] ?? workingDates[0] ?? weekDateKeys[0], startTime: "00:00", endTime: "00:00", fits: false };
   });
 }
+
+/**
+ * plan/16 §5.3 — resolves a requested placement (a drag's drop position, or a typed day/time/
+ * duration) into one the rest of the app can actually honor, and says what it had to change.
+ *
+ * Pure, and deliberately not left inside the page: a typed duration reaches much further than its
+ * own block, and every one of those consequences is a rule worth pinning in a test rather than
+ * re-deriving in a component.
+ *
+ * - **The sitting cap is not advisory.** `startFocus` clamps the armed timer to `maxChunkMinutes`,
+ *   so a 120-minute block arms a 50-minute timer; 50 of 120 is 42%, under `slotAutoStatus`'s 60%
+ *   threshold, so the block can never auto-close however well it is worked — and `computeDayScore`
+ *   then counts it unfinished *and* divides its coverage by the inflated 120. A block over the cap
+ *   is unfinishable by construction, so permitting one isn't flexibility, it's a trap.
+ * - **`plannedMinutes` is read by next week's planner** (`plannedMinutesThisWeek`), which subtracts
+ *   it before deciding how much to propose. Inflating it quietly tells the planner more is planned
+ *   than the work needs, and the difference stops rolling forward.
+ * - **The locked layer cannot move.** Growth stops at whatever is next on the day. Other proposals
+ *   could in principle be pushed aside, but silently reflowing a block the user placed on purpose is
+ *   worse than stopping short and saying why.
+ */
+export function resolvePlacement(
+  requested: { dateKey: string; startMinutes: number; durationMinutes: number },
+  context: {
+    /** Start/end of every immovable thing and every other standing proposal on that date. */
+    occupied: { startTime: string; endTime: string; title: string }[];
+    workingWindow: WorkingWindow;
+    maxChunkMinutes: number;
+    minChunkMinutes: number;
+  }
+): { placement: { dateKey: string; startMinutes: number; durationMinutes: number }; notes: string[] } {
+  const windowStart = minutesFromTime(context.workingWindow.startTime);
+  const windowEnd = minutesFromTime(context.workingWindow.endTime);
+  const max = Math.max(1, context.maxChunkMinutes);
+  const min = Math.max(1, Math.min(context.minChunkMinutes, max));
+  const notes: string[] = [];
+
+  let durationMinutes = Math.round(requested.durationMinutes);
+  if (durationMinutes > max) {
+    durationMinutes = max;
+    notes.push(`Capped at ${max} min — that's your longest sitting. Add a second sitting for more.`);
+  } else if (durationMinutes < min) {
+    durationMinutes = min;
+    notes.push(`Raised to ${min} min — that's your shortest sitting.`);
+  }
+
+  const startMinutes = Math.max(windowStart, Math.min(Math.round(requested.startMinutes), Math.max(windowStart, windowEnd - min)));
+
+  const next = context.occupied
+    .map((item) => ({ start: minutesFromTime(item.startTime), title: item.title }))
+    .filter((item) => item.start > startMinutes)
+    .sort((a, b) => a.start - b.start)[0];
+  const ceiling = Math.min(windowEnd, next?.start ?? windowEnd);
+  const room = ceiling - startMinutes;
+
+  if (durationMinutes > room) {
+    if (room >= min) {
+      notes.push(
+        next && next.start <= windowEnd
+          ? `Trimmed to ${room} min — "${next.title}" starts at ${minutesToTime(next.start)}.`
+          : `Trimmed to ${room} min — your working window ends at ${context.workingWindow.endTime}.`
+      );
+      durationMinutes = room;
+    } else {
+      // Left at the requested length on purpose: the caller's own overlap check then reports it as
+      // unacceptable where it stands, which is more useful than shrinking it to a stub that fits.
+      notes.push("There's no room to grow it here — move it to a freer slot first.");
+    }
+  }
+
+  return { placement: { dateKey: requested.dateKey, startMinutes, durationMinutes }, notes };
+}
