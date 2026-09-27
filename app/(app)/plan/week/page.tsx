@@ -1360,10 +1360,6 @@ function PlanWeekContent() {
             proposals={undecidedProposals.filter((p) => p.fits)}
             decisions={decisions}
             onPlace={(key, placement) => setPlacements((current) => ({ ...current, [key]: placement }))}
-            onAccept={(key) => {
-              const proposal = effectiveProposals.find((p) => p.key === key);
-              if (proposal) acceptProposals([proposal]);
-            }}
             disabled={accepting || committed}
             chipFor={chipForProposal}
             dayScoreFor={dayScoreOn ? (dateKey) => (dateKey < todayK ? weekDayDocs.get(dateKey)?.game?.score ?? null : null) : undefined}

@@ -76,7 +76,6 @@ export function WeekGrid({
   proposals,
   decisions,
   onPlace,
-  onAccept,
   disabled = false,
   chipFor,
   dayScoreFor,
@@ -95,7 +94,13 @@ export function WeekGrid({
   proposals: WeekProposal[];
   decisions: Record<string, ProposalDecision>;
   onPlace: (key: string, placement: WeekGridPlacement) => void;
-  onAccept: (key: string) => void;
+  /** Deliberately unused by the grid itself: accepting happens through the inspector list's explicit
+   *  Accept button. There was a double-click-to-accept shortcut here, removed because `preventDefault`
+   *  on pointerdown (which is what stops a drag selecting the block's text) suppresses the
+   *  compatibility mouse events that `dblclick` is built on in some browsers — an invisible shortcut
+   *  that may or may not fire is worse than no shortcut. Kept in the signature so a deliberate
+   *  affordance can be added later without rethreading the callback. */
+  onAccept?: (key: string) => void;
   disabled?: boolean;
   /** `describeObjective`-derived chip text — passed in rather than derived here so this component
    *  needs none of the course/paper/checkpoint context (plan/16 §5.2's one-function rule). */
@@ -168,6 +173,13 @@ export function WeekGrid({
     if (disabled) return;
     const el = columnsRef.current;
     if (!el) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    // Without this, the browser's default pointerdown behavior runs and a mouse drag across a block
+    // selects its text instead of moving it — the block's title and objective chip end up
+    // highlighted and the gesture reads as broken. `preventDefault` here suppresses the compatibility
+    // mousedown that starts a selection; `select-none` on the columns below is the other half, since
+    // a selection begun outside the grid can otherwise still be extended into it.
+    event.preventDefault();
     const duration = durationOf(proposal);
     const pointerMinute = gridStart + pxToMinutes(event.clientY - el.getBoundingClientRect().top, PX_PER_HOUR);
     gestureRef.current = {
@@ -176,7 +188,12 @@ export function WeekGrid({
       durationMinutes: duration,
       grabOffsetMinutes: Math.max(0, Math.min(duration, pointerMinute - minutesFromTime(proposal.startTime)))
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    // Capture on the *columns container*, never on the block. The block is an absolutely-positioned
+    // child of one column, and a drag into another column re-renders it elsewhere in the tree — if
+    // capture lived on that node, losing it would end the gesture mid-drag: no further pointermove,
+    // no pointerup, so the drop never commits and the block appears to freeze halfway. Dragging
+    // within one day would have worked, dragging to another day — the entire point — would not.
+    el.setPointerCapture(event.pointerId);
     setPreview({ key: proposal.key, dateKey: proposal.dateKey, startMinutes: minutesFromTime(proposal.startTime), durationMinutes: duration, valid: true });
   }
 
@@ -201,6 +218,11 @@ export function WeekGrid({
     const hit = hitTest(event.clientX, event.clientY, gesture);
     setPreview(null);
     if (!hit) return;
+    // A click with no real movement is a click, not a move. Without this, pointerdown-pointerup on a
+    // block would commit a "placement" at whatever the snap and magnetism resolved to — nudging a
+    // block by a few minutes for merely being touched.
+    const proposal = proposals.find((p) => p.key === gesture.key);
+    if (proposal && hit.dateKey === proposal.dateKey && hit.startMinutes === minutesFromTime(proposal.startTime)) return;
     if (!validAt(hit.dateKey, hit.startMinutes, gesture.durationMinutes, gesture.key)) {
       announce?.(`Can't move there — ${offDateKeys.has(hit.dateKey) ? "that day is marked off" : "something is already in that space"}.`);
       return;
@@ -250,7 +272,24 @@ export function WeekGrid({
             })}
           </div>
 
-          <div ref={columnsRef} className="relative flex gap-1" style={{ height: gridHeight }}>
+          <div
+            ref={columnsRef}
+            className="relative flex select-none gap-1"
+            style={{ height: gridHeight }}
+            onPointerMove={handleMove}
+            onPointerUp={handleEnd}
+            onPointerCancel={() => {
+              gestureRef.current = null;
+              setPreview(null);
+            }}
+            // Belt to pointercancel's braces: capture can be lost without a cancel event (the node
+            // being re-parented, the browser reclaiming the pointer), and a gesture left armed would
+            // make the *next* pointermove anywhere on the grid move the last-dragged block.
+            onLostPointerCapture={() => {
+              gestureRef.current = null;
+              setPreview(null);
+            }}
+          >
             {weekDateKeys.map((dateKey) => {
               const isOff = offDateKeys.has(dateKey);
               const isWorkingDay = workingWindow.daysOfWeek.includes(getDay(parseISO(dateKey)));
@@ -293,12 +332,14 @@ export function WeekGrid({
 
                   {/* The movable layer. */}
                   {(proposalsByDate.get(dateKey) ?? []).map((proposal) => {
+                    // The dragged block is never moved or unmounted during the gesture: it stays at
+                    // its current position, dimmed, and the dashed shadow below shows where it would
+                    // land. Beyond keeping pointer capture alive, this is the clearer reading — you
+                    // can see where the block is *and* where it's going, and a refused drop needs no
+                    // animation back because nothing ever left.
                     const dragging = preview?.key === proposal.key;
-                    // While dragging, the block follows the pointer — including into another column,
-                    // where this instance simply isn't rendered and the shadow below is.
-                    if (dragging && preview!.dateKey !== dateKey) return null;
-                    const start = dragging ? preview!.startMinutes : minutesFromTime(proposal.startTime);
-                    const duration = dragging ? preview!.durationMinutes : durationOf(proposal);
+                    const start = minutesFromTime(proposal.startTime);
+                    const duration = durationOf(proposal);
                     const chip = chipFor?.(proposal);
                     return (
                       <div
@@ -307,18 +348,10 @@ export function WeekGrid({
                         tabIndex={-1}
                         aria-label={`${proposal.title}, ${proposal.startTime} to ${proposal.endTime}. Drag to move, or use the list below.`}
                         onPointerDown={(event) => beginDrag(event, proposal)}
-                        onPointerMove={handleMove}
-                        onPointerUp={handleEnd}
-                        onPointerCancel={() => {
-                          gestureRef.current = null;
-                          setPreview(null);
-                        }}
-                        onDoubleClick={() => !disabled && onAccept(proposal.key)}
                         className={clsx(
                           "absolute inset-x-0.5 touch-none overflow-hidden rounded border px-1 py-0.5 text-[10px] leading-tight",
                           slotTypeStyles[proposal.type],
-                          dragging && !preview!.valid && "opacity-40 ring-2 ring-red-500",
-                          dragging && preview!.valid && "ring-2 ring-moss-500",
+                          dragging && "opacity-40",
                           disabled ? "cursor-default" : "cursor-grab active:cursor-grabbing"
                         )}
                         style={{ top: minutesToPx(start - gridStart, PX_PER_HOUR), height: Math.max(10, minutesToPx(duration, PX_PER_HOUR)) }}
@@ -330,9 +363,10 @@ export function WeekGrid({
                     );
                   })}
 
-                  {/* The drop shadow, only while the dragged block is over a column it doesn't
-                      currently belong to — otherwise the block itself already shows the position. */}
-                  {preview && preview.dateKey === dateKey && !(proposalsByDate.get(dateKey) ?? []).some((p) => p.key === preview.key) ? (
+                  {/* The drop shadow: where the block would land, in whichever column the pointer is
+                      over — including the one it already sits in, since the block itself no longer
+                      moves during the gesture. */}
+                  {preview && preview.dateKey === dateKey ? (
                     <div
                       className={clsx(
                         "pointer-events-none absolute inset-x-0.5 rounded border-2 border-dashed",

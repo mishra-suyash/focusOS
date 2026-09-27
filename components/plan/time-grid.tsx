@@ -419,7 +419,9 @@ export const TimeGrid = forwardRef<
                   if (event.key === "Enter" || event.key === " ") onSelect(slot.id);
                 }}
                 className={clsx(
-                  "absolute cursor-grab rounded border px-2 py-1 text-left text-xs leading-tight outline-none focus-visible:ring-2 focus-visible:ring-moss-500",
+                  // `select-none`: a mouse drag on a block must move it, not select its title — the
+                  // same defect reported on the week grid, which shares this gesture shape.
+                  "absolute cursor-grab select-none rounded border px-2 py-1 text-left text-xs leading-tight outline-none focus-visible:ring-2 focus-visible:ring-moss-500",
                   // Selected blocks skip clipping — a short (< ~30min) block's own 24px-tall resize
                   // handles (WCAG 2.5.8) would otherwise get clipped down to the block's own tiny
                   // height by `overflow-hidden`, shrinking their real hit area right when a resize
