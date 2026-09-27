@@ -200,7 +200,18 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         // the evening doesn't fire a notification for every block the day already finished.
         if (minute >= end && minute < end + 2 && !notifiedSittingsRef.current.has(endKey)) {
           notifiedSittingsRef.current.add(endKey);
-          new Notification("FocusOS", { body: `${slot.title} is done.`, tag: endKey });
+          // plan/16 §5.5 — the end notification *reports the outcome*, it doesn't just announce the
+          // clock. Read off `slot.status` rather than by calling `sittingOutcome` directly: this
+          // provider has no session subscription, and the status was already set by
+          // `syncSlotAutoStatus` from that same 60%-coverage rule when the last focus session
+          // finalized. One rule, one implementation — a notification can't contradict the block
+          // strip beside it. Stated plainly and without judgement either way: an unfinished sitting
+          // is a fact about a block, not a verdict on the person (§5.6).
+          const closed = slot.status === "completed";
+          new Notification("FocusOS", {
+            body: closed ? `${slot.title} — done.` : `${slot.title} ended, not logged as finished.`,
+            tag: endKey
+          });
         }
       }
     }

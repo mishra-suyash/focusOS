@@ -127,7 +127,10 @@ export default function SettingsPage() {
           />
         </section>
         <section className="card p-5">
-          <h2 className="mb-4 text-lg font-semibold">Sittings</h2>
+          <h2 className="mb-4 flex items-center gap-1 text-lg font-semibold">
+            Sittings
+            <InfoHint term="sitting" />
+          </h2>
           <p className="mb-3 text-xs text-ink-500">
             How long one block of work may be. Anything bigger is split into several sittings across the week, each planned and
             timed separately, so a six-hour task becomes blocks you can actually sit down to instead of one that never fits.
