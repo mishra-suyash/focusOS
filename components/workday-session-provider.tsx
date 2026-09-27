@@ -25,6 +25,7 @@ import { buildLoadIndexSnapshot } from "@/lib/loadindex";
 import { getActiveSlot, minutesFromTime, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePackWorkdayTemplate } from "@/lib/templates/builtin";
 import { isBreakMode } from "@/lib/terms";
+import { computeDayScore } from "@/lib/gamify";
 import { slotAutoStatus } from "@/lib/tracking";
 import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term, WeeklyReview } from "@/types";
@@ -310,7 +311,18 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         todayKey: today,
         isDayOff: Boolean(day?.dayOff)
       });
-      await saveDayFields(user.uid, today, { loadIndex: snapshot });
+      // plan/16 §5.6 — the day's score snapshot, written at exactly the same moment and for the same
+      // reason as the Load Index one: a historical record that must not silently change when a later
+      // edit changes what "today" would compute to. Every field is derived from data already stored
+      // elsewhere, so a missing snapshot is simply recomputed for display.
+      const todaySessions = sessions.filter((session) => session.completedAt.startsWith(today));
+      const game = computeDayScore({
+        slots: todaySlots,
+        sessions: todaySessions,
+        loadIndex: snapshot,
+        isDayOff: Boolean(day?.dayOff)
+      });
+      await saveDayFields(user.uid, today, { loadIndex: snapshot, game: { ...game, computedAt: new Date().toISOString() } });
     } catch {
       // Best-effort snapshot only — never block ending the day if this fails.
     }

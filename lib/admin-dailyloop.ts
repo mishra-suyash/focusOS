@@ -2,6 +2,7 @@ import { adminDb } from "@/lib/firebase-admin";
 import { fetchInsightData } from "@/lib/admin-firestore";
 import { buildMorningBrief, buildProposedSlots, buildProposedTasks } from "@/lib/dailyloop";
 import { todayKey } from "@/lib/dates";
+import { computeDayScore } from "@/lib/gamify";
 import { buildLoadIndexSnapshot, computeRequiredMinutes } from "@/lib/loadindex";
 import { runAiTask } from "@/lib/ai/run";
 import type { ReviewEodOutput } from "@/lib/ai/schemas";
@@ -167,7 +168,26 @@ export async function generateEveningRollup(uid: string): Promise<EveningRollup>
       todayKey: today,
       isDayOff: Boolean(dayData?.dayOff)
     });
-    await adminDb().collection("users").doc(uid).collection("days").doc(today).set({ loadIndex: snapshot, date: today, updatedAt: new Date().toISOString() }, { merge: true });
+    // plan/16 §5.6 — the day score rides along with the Load Index snapshot, written at the same
+    // point and gated by the same condition, because it is the same kind of record: a historical
+    // number for a day that is over, which must not change when a later edit changes what "today"
+    // would compute to. `nowMinute` is deliberately not passed — this runs in the evening over a
+    // finished day, so the absolute score is the honest reading, not a pace.
+    const game = computeDayScore({
+      slots: schedule?.slots ?? [],
+      sessions: sessions.filter((session) => session.completedAt.startsWith(today)),
+      loadIndex: snapshot,
+      isDayOff: Boolean(dayData?.dayOff)
+    });
+    await adminDb()
+      .collection("users")
+      .doc(uid)
+      .collection("days")
+      .doc(today)
+      .set(
+        { loadIndex: snapshot, game: { ...game, computedAt: new Date().toISOString() }, date: today, updatedAt: new Date().toISOString() },
+        { merge: true }
+      );
     loadIndexValue = snapshot.value;
   }
 

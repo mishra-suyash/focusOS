@@ -15,7 +15,7 @@ import { DEFAULT_MAX_CHUNK_MINUTES, splitIntoChunks, taskChunkMinutes, taskBlock
 import { loggedMinutesForTask, remainingMinutes, sittingOutcome, sittingRemainingMinutes } from "../lib/tracking";
 import { plannedMinutesForTask, plannedMinutesThisWeek } from "../lib/courses";
 import { describeObjective } from "../lib/objectives";
-import { computeDayScore } from "../lib/gamify";
+import { computeDayReadout, computeDayScore } from "../lib/gamify";
 import { placeProposals, DEFAULT_WORKING_WINDOW, type WeekProposalCandidate } from "../lib/weekplan";
 import type { DailySchedule, PomodoroSession, ScheduleSlot, Task } from "../types";
 
@@ -297,6 +297,46 @@ const objectiveCtx = {
     `got ${sittingRemainingMinutes(s, [session({ slotId: "a", minutes: 22 })])}`);
   check("a fully covered sitting arms nothing", sittingRemainingMinutes(s, [session({ slotId: "a", minutes: 50 })]) === 0);
   check("a class block closes on attendance, not coverage", sittingOutcome(slot({ id: "c", type: "class" }), [], true) === "closed");
+}
+
+// --- plan/16 §5.6 / §8 Q6: pace while the day runs, the absolute score once it's done ---
+
+{
+  const morning = [
+    slot({ id: "a", type: "deep_work", startTime: "09:00", endTime: "09:50", plannedMinutes: 50 }),
+    slot({ id: "b", type: "deep_work", startTime: "14:00", endTime: "14:50", plannedMinutes: 50 })
+  ];
+
+  // 08:00: nothing was planned to have finished yet, so pace is null — never 0, which would read as
+  // a failure for not having done work that wasn't due.
+  const early = computeDayReadout({ slots: morning, sessions: [], nowMinute: 8 * 60 });
+  check("before the first sitting ends, pace is null not zero", early.mode === "pace" && early.pace === null, `${early.mode}/${early.pace}`);
+
+  // 10:00: one 50-minute sitting has ended and 40 minutes were logged — 80% of pace, even though
+  // the absolute score would be a discouraging fraction of the whole day.
+  const midday = computeDayReadout({
+    slots: morning,
+    sessions: [session({ slotId: "a", minutes: 40 })],
+    nowMinute: 10 * 60
+  });
+  check("mid-day reads pace against what has elapsed", midday.mode === "pace" && midday.pace === 0.8, `${midday.mode}/${midday.pace}`);
+
+  // 18:00: everything planned has elapsed, so pace has stopped being a different question.
+  const evening = computeDayReadout({ slots: morning, sessions: [session({ slotId: "a", minutes: 40 })], nowMinute: 18 * 60 });
+  check("once every sitting has elapsed, the absolute score takes over", evening.mode === "final", evening.mode);
+
+  // A written snapshot always wins, and always reads as final — a closed day's record must not
+  // change under a later edit.
+  const snapshotted = computeDayReadout({
+    slots: morning,
+    sessions: [],
+    nowMinute: 10 * 60,
+    snapshot: { score: 71, sittingsClosed: 1, sittingsPlanned: 2, minutesLogged: 40, minutesPlanned: 100 }
+  });
+  check("a stored snapshot wins over a recomputation", snapshotted.mode === "final" && snapshotted.score === 71, `${snapshotted.mode}/${snapshotted.score}`);
+
+  const dayOff = computeDayReadout({ slots: morning, sessions: [], nowMinute: 10 * 60, isDayOff: true });
+  check("a day off is never paced", dayOff.mode === "final" && dayOff.score === null, `${dayOff.mode}/${dayOff.score}`);
 }
 
 if (failures.length > 0) {

@@ -108,3 +108,89 @@ export function formatDayScoreLine(score: DayScore): string {
   const minutes = `${score.minutesLogged} of ${score.minutesPlanned} min`;
   return score.score == null ? `${sittings} · ${minutes}` : `${sittings} · ${minutes} · score ${score.score}`;
 }
+
+/**
+ * plan/16 §5.6, settling §8 Q6 — the same numbers, read two different ways depending on whether the
+ * day is still happening.
+ *
+ * A day score is a ratio against what the *whole* day planned, so at 09:00 it is structurally near
+ * zero however well the day is going: motivating at 16:00, demoralizing at breakfast, and in both
+ * cases not actually a statement about the user. The resolution is not to hide it but to change
+ * what it measures while the day is in progress: **pace** compares logged minutes against the
+ * minutes of sittings that have already *ended*, which is a question the morning can answer
+ * honestly. Once the day is done — or a `Day.game` snapshot has been written by End day or the
+ * evening rollup — the absolute score is the readout.
+ *
+ * Two consequences worth naming rather than discovering later:
+ * - Before the first sitting of the day ends, nothing has elapsed to be measured against, so pace
+ *   is `null` (rendered as "—"), never 0.
+ * - A day whose blocks are all in the evening reads on-pace all morning. That is correct: nothing
+ *   was planned to have happened yet, and claiming otherwise would be the morning-zero problem
+ *   wearing a different hat.
+ */
+export interface DayReadout extends DayScore {
+  mode: "pace" | "final";
+  /** 0-1, or null when nothing was planned to have finished yet. Only set in "pace" mode. */
+  pace: number | null;
+  /** Minutes of sittings whose end time has already passed. Only meaningful in "pace" mode. */
+  minutesElapsedPlanned: number;
+}
+
+export function computeDayReadout(input: {
+  slots: Pick<ScheduleSlot, "id" | "type" | "startTime" | "endTime" | "plannedMinutes">[];
+  sessions: Pick<PomodoroSession, "slotId" | "mode" | "minutes">[];
+  loadIndex?: Pick<LoadIndexSnapshot, "value">;
+  isDayOff?: boolean;
+  classAttendedSlotIds?: ReadonlySet<string>;
+  /** Minutes since midnight, when the day being read is today and still running. Omitted = the day
+   *  is over (a past date, or a caller that only wants the absolute score). */
+  nowMinute?: number;
+  /** A `Day.game` snapshot already written for this date. Its presence means the day was closed, so
+   *  the absolute score is the honest reading even if `nowMinute` was passed; and its stored numbers
+   *  win over a recomputation, for the same reason `loadIndex` snapshots do — a historical record
+   *  must not silently change when a later edit changes what "today" would compute to. */
+  snapshot?: { score: number | null; sittingsClosed: number; sittingsPlanned: number; minutesLogged: number; minutesPlanned: number };
+}): DayReadout {
+  const live = computeDayScore(input);
+  if (input.snapshot) {
+    return { ...input.snapshot, mode: "final", pace: null, minutesElapsedPlanned: input.snapshot.minutesPlanned };
+  }
+
+  const dayIsRunning = input.nowMinute != null && !input.isDayOff && live.sittingsPlanned > 0;
+  if (!dayIsRunning) return { ...live, mode: "final", pace: null, minutesElapsedPlanned: live.minutesPlanned };
+
+  const nowMinute = input.nowMinute!;
+  const elapsed = input.slots
+    .filter(isScoredSitting)
+    .filter((slot) => minutesFromTime(slot.endTime) <= nowMinute)
+    .reduce((sum, slot) => sum + (slot.plannedMinutes ?? Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime))), 0);
+
+  // Past the last sitting of the day, "elapsed" and "planned" are the same number, so pace has
+  // stopped being a different question from the score — switch to the real thing rather than
+  // showing a ratio that can no longer move.
+  if (elapsed >= live.minutesPlanned && live.minutesPlanned > 0) {
+    return { ...live, mode: "final", pace: null, minutesElapsedPlanned: elapsed };
+  }
+
+  return {
+    ...live,
+    mode: "pace",
+    pace: elapsed > 0 ? Math.min(1, live.minutesLogged / elapsed) : null,
+    minutesElapsedPlanned: elapsed
+  };
+}
+
+/**
+ * plan/16 §5.6 / plan/13's coherence rule — the one sentence every surface shows, so the dashboard
+ * line, the PiP card and Look back can never word the same numbers differently.
+ */
+export function formatDayReadout(readout: DayReadout): string {
+  if (readout.sittingsPlanned === 0) return "Nothing planned";
+  const sittings = `${readout.sittingsClosed} of ${readout.sittingsPlanned} sitting${readout.sittingsPlanned === 1 ? "" : "s"} closed`;
+  const minutes = `${readout.minutesLogged} of ${readout.minutesPlanned} min`;
+  if (readout.mode === "pace") {
+    const pace = readout.pace == null ? "not started yet" : `${Math.round(readout.pace * 100)}% of pace`;
+    return `${sittings} · ${minutes} · ${pace}`;
+  }
+  return readout.score == null ? `${sittings} · ${minutes}` : `${sittings} · ${minutes} · score ${readout.score}`;
+}

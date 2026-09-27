@@ -162,6 +162,11 @@ export default function SettingsPage() {
           <p className="mb-3 text-xs text-ink-500">
             The picture-in-picture button near the top of the app floats a small, resizable, always-on-top window with your focus timer. Choose what shows in it. Chromium browsers only (Chrome, Edge, Arc, Dia).
           </p>
+          <p className="mb-3 text-xs text-ink-500">
+            Two new cards are available: <strong>What&apos;s next</strong> (the next block, with a button that starts a correctly-sized
+            session) and <strong>Today&apos;s score</strong>. If you&apos;ve customized this list before, they start switched off — turn
+            them on below.
+          </p>
           <button className="btn-secondary py-1.5 text-xs" onClick={() => setFloatingWidgetCustomizeOpen(true)}>
             Customize
           </button>

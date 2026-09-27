@@ -24,6 +24,7 @@ export type ModuleId =
   | "workload"
   | "analytics"
   | "insights"
+  | "dayScore"
   | "planDayTimeline";
 
 export interface FeatureModule {
@@ -76,6 +77,13 @@ export const FEATURE_MODULES: Record<ModuleId, FeatureModule> = {
   workload: { id: "workload", label: "Workload", description: "How much you've done today compared with what today asked for." },
   analytics: { id: "analytics", label: "Analytics", description: "Trends across tasks, focus sessions, and load." },
   insights: { id: "insights", label: "AI Insights", description: "AI-generated daily insight summaries." },
+  /**
+   * plan/16 §5.6 — gamification as a readout of what the app already measures: a day score, the
+   * existing on-track streak, and how many sittings actually closed. Gated like `analytics` and
+   * `workload` so it can be turned off entirely, because "how did today score" is a genuinely
+   * optional way to relate to a day's work and some people will not want to be given one.
+   */
+  dayScore: { id: "dayScore", label: "Day score", description: "How today went, scored from your own logged minutes and finished sittings." },
   /**
    * plan/05.FocusOS-v2-Plan-Day-Timeline.md §7.3 registered this as a `hidden` rollout flag through
    * DP0–DP5 while the new editor was being built. DP5 shipped it; the user has since chosen to

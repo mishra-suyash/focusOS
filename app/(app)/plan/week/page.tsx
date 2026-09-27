@@ -913,6 +913,11 @@ function PlanWeekContent() {
     }
   }
   const priorWeekDaysOff = priorWeekDays.filter((d) => d.dayOff).length;
+  // plan/16 §5.6 — Look back's one new number. Averaged over the days that actually have a score:
+  // a day with nothing planned and a day off both score null rather than 0 (plan/15 §5.1's
+  // distinction), so counting them would drag the average down for not having worked on a Sunday.
+  const priorWeekScores = priorWeekDays.map((d) => d.game?.score).filter((score): score is number => typeof score === "number");
+  const avgDayScore = priorWeekScores.length > 0 ? Math.round(priorWeekScores.reduce((sum, score) => sum + score, 0) / priorWeekScores.length) : null;
   const priorWeekLI = priorWeekDays.filter((d) => d.loadIndex);
   const behindDays = priorWeekLI.filter((d) => loadIndexBand(d.loadIndex!.value) === "behind").length;
   const onTrackDays = priorWeekLI.length - behindDays;
@@ -996,6 +1001,7 @@ function PlanWeekContent() {
             <Stat label="Stale papers (14d+)" value={`${priorStalePapers.length}`} />
             <Stat label="Tasks still open" value={`${overdueOpenTasks.length}`} />
             <Stat label="Focus average" value={avgFocus ? `${avgFocus}` : "-"} />
+            <Stat label="Average day score" value={avgDayScore != null ? `${avgDayScore}` : "-"} />
           </div>
           {overdueOpenTasks.length > 0 ? (
             <p className="mb-3 text-sm text-ink-500">

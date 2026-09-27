@@ -12,6 +12,8 @@ import { DashboardCustomizeDialog } from "@/components/dashboard-customize";
 import { useFocusSession } from "@/components/focus-session-provider";
 import { GettingStartedChecklist } from "@/components/getting-started-checklist";
 import { LoadIndexWidget } from "@/components/load-index-widget";
+import { DayScoreLine } from "@/components/day-score-line";
+import { ModuleGate } from "@/components/module-gate";
 import { MorningBriefCard } from "@/components/morning-brief-card";
 import { NextActionCard } from "@/components/next-action-card";
 import { NowCard } from "@/components/now-card";
@@ -20,20 +22,19 @@ import { ReadingNowCard } from "@/components/reading-now-card";
 import { useAuth } from "@/components/auth-provider";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useDay } from "@/hooks/use-day";
-import { useFeatures } from "@/hooks/use-features";
+import { useNextAction } from "@/hooks/use-next-action";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { friendlyDate, todayKey, weekDates, weekStartKey } from "@/lib/dates";
+import { friendlyDate, todayKey } from "@/lib/dates";
 import { resolveDashboardWidgets } from "@/lib/dashboard-widgets";
 import { saveDailySchedule, saveDayFields, updateTask } from "@/lib/firestore";
 import { categoryLabels } from "@/lib/options";
 import { computeStatusPatch } from "@/lib/tasks";
 import { todayMetrics } from "@/lib/analytics";
 import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak } from "@/lib/loadindex";
-import { pickNextAction } from "@/lib/next-action";
 import { downloadDailyFramePdf } from "@/lib/pdf";
-import { createSlot, currentMinute, getActiveSlot, getNextSlot, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
+import { createSlot, currentMinute, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { describeObjective } from "@/lib/objectives";
 import { createTaskBlock, nearestFreeGap, taskChunkPlan } from "@/lib/timeline";
 import { sittingRemainingMinutes } from "@/lib/tracking";
@@ -52,7 +53,6 @@ function DashboardContent() {
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { enabledModules } = useFeatures();
   const { settings, update: updateSettings } = useUserSettings();
   const widgets = resolveDashboardWidgets(settings);
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -92,22 +92,10 @@ function DashboardContent() {
   const chronologicalLI = [...recentDays].filter((d) => d.loadIndex).sort((a, b) => (a.date < b.date ? -1 : 1));
   const debtHours = computeDebtHours(chronologicalLI.map((d) => d.loadIndex!));
   const liStreak = computeLoadIndexStreak(chronologicalLI.map((d) => d.loadIndex!));
-  const weekEnd = weekDates(weekStartKey())[6];
-  const scheduleMinute = currentMinute();
-  const scheduleSlots = sortedSlots(dailySchedule?.slots ?? []);
-  const nextAction = pickNextAction({
-    checkpoints: allCheckpoints,
-    dueRevisionCount: dueCount,
-    tasks,
-    loadIndexValue: loadIndex.value,
-    todayKey: today,
-    weekEndKey: weekEnd,
-    enabledModules,
-    activeSlot: getActiveSlot(scheduleSlots, scheduleMinute),
-    nextSlot: getNextSlot(scheduleSlots, scheduleMinute),
-    minute: scheduleMinute,
-    isDayOff: Boolean(day?.dayOff)
-  });
+  // plan/16 §5.7 — the same hook the floating widget's "Next" card uses, so the two surfaces can't
+  // disagree about what's next or about what a session started from it should arm and attribute
+  // (acceptance criteria #21/#22). It was inline `pickNextAction` here before the PiP needed it too.
+  const { action: nextAction } = useNextAction(today);
 
   const { startFocus } = useFocusSession();
 
@@ -254,6 +242,13 @@ function DashboardContent() {
       <GettingStartedChecklist data={{ tasks, sessions, papers, courses, goals, recentDays }} />
       {widgets.has("morningOverview") ? <MorningBriefCard brief={day?.brief} schedule={dailySchedule} /> : null}
       <NextActionCard action={nextAction} onScheduleIt={scheduleAction} />
+      {/* plan/16 §5.6 — one line, gated only by its own module. Deliberately not a dashboard
+          *widget*: a widget would need `dashboardWidgetsAfterModuleToggle`'s dual-flag treatment
+          (plan/13 C1, where a module toggle that changes nothing visible is the bug), and there is
+          no reason to take that on for a single line of derived text. */}
+      <ModuleGate moduleId="dayScore" silent>
+        <DayScoreLine dateKey={today} streak={liStreak} />
+      </ModuleGate>
       {widgets.has("metricsStrip") ? (
         <section className="card p-3">
           <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">

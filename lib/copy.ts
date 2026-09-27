@@ -20,6 +20,14 @@ export const copy = {
   done: { label: "Done" },
   catchUpHours: { label: "Catch-up hours", hint: "Planned work you didn't get to over the last two weeks" },
   onTrackStreak: { label: "On-track streak", hint: "Days in a row you hit your planned workload" },
+  dayScore: {
+    label: "Day score",
+    hint: "0-100 from your own logged minutes, finished sittings, and workload band. While the day is still running it shows pace instead — how you're doing against the sittings that have already ended. A day with nothing planned isn't scored, and neither is a day off."
+  },
+  sitting: {
+    label: "Sitting",
+    hint: "One block of work, capped at your longest-sitting setting. Work bigger than that is split into several, each planned and timed separately."
+  },
   topicsRevised: { label: "Topics revised", hint: "Share of a course's topics you've revised at least once" },
   upNext: { label: "Up next", hint: "The single most useful thing to do right now" },
   assessment: { label: "Assessment", hint: "A quiz, lab, assignment, presentation, or exam with a due date" },
@@ -31,7 +39,7 @@ export const copy = {
   revisePage: { label: "Revise" },
   revisionHoursPerWeek: {
     label: "Revision hours/week",
-    hint: "Auto-creates a weekly \"Revise\" task sized to this many hours — clear it to stop. Also counts toward this course's share of your daily workload."
+    hint: "How much revision this course asks for each week. Weekly planning proposes it as sittings you place; it only auto-creates a weekly \"Revise\" task if you switch that on for the course. Counts toward this course's share of your daily workload either way."
   },
   bucketAssignmentBacklog: {
     label: "Assignment / Backlog",
