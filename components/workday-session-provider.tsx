@@ -22,10 +22,10 @@ import {
   undoEndWorkdaySession
 } from "@/lib/firestore";
 import { buildLoadIndexSnapshot } from "@/lib/loadindex";
-import { getActiveSlot, minutesFromTime, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
+import { currentMinute, getActiveSlot, minutesFromTime, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePackWorkdayTemplate } from "@/lib/templates/builtin";
 import { isBreakMode } from "@/lib/terms";
-import { computeDayScore } from "@/lib/gamify";
+import { computeDayScore, isScoredSitting } from "@/lib/gamify";
 import { slotAutoStatus } from "@/lib/tracking";
 import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term, WeeklyReview } from "@/types";
@@ -147,6 +147,68 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     }, 30_000);
     return () => window.clearInterval(id);
   }, [active, settings.hydrationMinutes, settings.breakMinutes, schedule, fireReminder]);
+
+  /**
+   * plan/16 §5.7 / §6 Phase 6 — OS-level notifications at a sitting's boundaries.
+   *
+   * Opt-in and default off (`UserSettings.sittingNotifications`), and fired from **this** provider,
+   * which lives in the main document — never from the Picture-in-Picture window. That is the whole
+   * reason they live here: the PiP is a separate `Window` with its own document, it is Chromium-only,
+   * and it may be closed. Firing from the main document means exactly one notification arrives
+   * whether the PiP is open or not, which is what acceptance criterion #23 asks.
+   *
+   * Exactly two triggers, per the plan: a sitting starting within `leadMinutes`, and a sitting's end
+   * time passing. Both dedupe on `${dateKey}:${slotId}:${edge}` — the date is part of the key
+   * because a recurring class or routine slot reuses the same id on every date it materializes on
+   * (the trap `slotCoverageMinutes` documents), so a key without it would silently suppress
+   * tomorrow's notification for today's block.
+   *
+   * The live `Notification.permission` is always the authority; the stored `granted` flag is display
+   * only, because a permission revoked in browser settings never tells the app.
+   *
+   * This does not collide with plan/14 §7.3's existing block-transition notification: that one fires
+   * *at* a block's start and is not gated by this setting, while the lead notification fires some
+   * minutes *before*. Different moments, different sentences.
+   */
+  const notifiedSittingsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    notifiedSittingsRef.current = new Set();
+  }, [today]);
+
+  const sittingNotifications = settings.sittingNotifications;
+  useEffect(() => {
+    if (!sittingNotifications?.enabled || day?.dayOff) return;
+    if (typeof Notification === "undefined") return;
+
+    function check() {
+      // Re-read the live permission every tick rather than trusting the stored `granted` flag:
+      // permission can be revoked in browser settings without the app ever hearing about it.
+      if (Notification.permission !== "granted" || !schedule) return;
+      const leadMinutes = Math.max(0, sittingNotifications!.leadMinutes);
+      const minute = currentMinute();
+      for (const slot of schedule.slots) {
+        if (!isScoredSitting(slot)) continue;
+        const start = minutesFromTime(slot.startTime);
+        const end = minutesFromTime(slot.endTime);
+        const leadKey = `${today}:${slot.id}:lead`;
+        const endKey = `${today}:${slot.id}:end`;
+        if (minute >= start - leadMinutes && minute < start && !notifiedSittingsRef.current.has(leadKey)) {
+          notifiedSittingsRef.current.add(leadKey);
+          new Notification("FocusOS", { body: `${slot.title} starts in ${Math.max(1, start - minute)} min.`, tag: leadKey });
+        }
+        // Bounded to the minute the block ends rather than "any time after", so opening the app in
+        // the evening doesn't fire a notification for every block the day already finished.
+        if (minute >= end && minute < end + 2 && !notifiedSittingsRef.current.has(endKey)) {
+          notifiedSittingsRef.current.add(endKey);
+          new Notification("FocusOS", { body: `${slot.title} is done.`, tag: endKey });
+        }
+      }
+    }
+
+    check();
+    const id = window.setInterval(check, 30_000);
+    return () => window.clearInterval(id);
+  }, [sittingNotifications?.enabled, sittingNotifications?.leadMinutes, schedule, today, day?.dayOff, sittingNotifications]);
 
   const start = useCallback(async () => {
     if (!user || starting) return;

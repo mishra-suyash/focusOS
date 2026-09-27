@@ -2,7 +2,7 @@
 
 import { orderBy } from "firebase/firestore";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { FloatingWidgetCustomizeDialog } from "@/components/floating-widget-customize-dialog";
@@ -117,6 +117,14 @@ export default function SettingsPage() {
             </label>
             <p className="text-xs text-ink-500">Reminders only fire while your day is started and this tab is open. Allow browser notifications when prompted to get alerts outside the tab.</p>
           </div>
+          {/* plan/16 §5.7 / Phase 6 — opt-in, default off, and the permission is requested from this
+              real click, never on page load. `SittingNotificationSettings` reads the live
+              `Notification.permission` rather than the stored `granted` flag, because a permission
+              revoked in browser settings never tells the app. */}
+          <SittingNotificationSettings
+            value={settings.sittingNotifications}
+            onChange={(sittingNotifications) => updateSettings({ sittingNotifications })}
+          />
         </section>
         <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Sittings</h2>
@@ -299,5 +307,69 @@ function TimezoneSelect({ value, onChange }: { value: string; onChange: (value: 
         </option>
       ))}
     </select>
+  );
+}
+
+/**
+ * plan/16 §5.7 — the opt-in for sitting notifications, and the one place browser permission is ever
+ * requested deliberately (from this click, never on page load).
+ *
+ * `granted` is stored only so the row can render something sensible before the browser is asked;
+ * every decision about whether a notification may actually fire reads the live
+ * `Notification.permission`, in `WorkdaySessionProvider`. Turning the switch on when permission has
+ * been denied is allowed and honest: the row says the browser is blocking it, and points at the
+ * only place that can be fixed, which is the browser's own site settings.
+ */
+function SittingNotificationSettings({
+  value,
+  onChange
+}: {
+  value: { enabled: boolean; leadMinutes: number; granted?: boolean } | undefined;
+  onChange: (value: { enabled: boolean; leadMinutes: number; granted?: boolean }) => void;
+}) {
+  const current = value ?? { enabled: false, leadMinutes: 5 };
+  const [permission, setPermission] = useState<NotificationPermission | "unsupported">("unsupported");
+  useEffect(() => {
+    setPermission(typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+  }, []);
+
+  async function toggle(enabled: boolean) {
+    if (enabled && typeof Notification !== "undefined" && Notification.permission === "default") {
+      const result = await Notification.requestPermission();
+      setPermission(result);
+      onChange({ ...current, enabled, granted: result === "granted" });
+      return;
+    }
+    onChange({ ...current, enabled, granted: permission === "granted" });
+  }
+
+  return (
+    <div className="mt-4 space-y-2 border-t border-ink-100 pt-4 dark:border-ink-800">
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span>Notify me at the start and end of a sitting</span>
+        <input type="checkbox" className="h-4 w-4" checked={current.enabled} onChange={(e) => void toggle(e.target.checked)} />
+      </label>
+      {current.enabled ? (
+        <label className="flex items-center justify-between gap-3 text-sm">
+          <span>Warn me this long before</span>
+          <input
+            className="input w-24"
+            type="number"
+            min={0}
+            max={60}
+            value={current.leadMinutes}
+            onChange={(e) => onChange({ ...current, leadMinutes: Math.max(0, Math.min(60, Number(e.target.value))) })}
+          />
+          <span className="text-xs text-ink-500">min</span>
+        </label>
+      ) : null}
+      <p className="text-xs text-ink-500">
+        {permission === "unsupported"
+          ? "This browser doesn't support notifications."
+          : permission === "denied"
+            ? "Your browser is blocking notifications for this site — allow them in its site settings to receive these."
+            : "One notification before a work block starts, and one when it ends. Sent from the app itself, so the floating window doesn't need to be open."}
+      </p>
+    </div>
   );
 }
