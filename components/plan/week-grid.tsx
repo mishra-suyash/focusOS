@@ -376,7 +376,8 @@ export function ProposalInspector({
   onDismiss,
   disabled = false,
   chip,
-  invalidReason
+  invalidReason,
+  suggestStart
 }: {
   proposal: WeekProposal;
   weekDateKeys: string[];
@@ -388,6 +389,12 @@ export function ProposalInspector({
   onDismiss: (key: string) => void;
   disabled?: boolean;
   chip?: string | null;
+  /** A start minute that would actually work on `dateKey` — the caller knows what that day already
+   *  contains, so it decides. Used when a proposal has no position yet: such a proposal carries
+   *  `startTime: "00:00"`, so picking a day without this would place it at midnight and greet the
+   *  user with "outside your working window" on the one path that exists for placing work the
+   *  search refused. */
+  suggestStart?: (dateKey: string, durationMinutes: number) => number;
   /** Why this proposal can't be accepted where it currently sits, if it can't — the caller knows
    *  about the locked layer and the other proposals, so it decides; this only renders the sentence. */
   invalidReason?: string | null;
@@ -407,7 +414,11 @@ export function ProposalInspector({
         value={placed ? proposal.dateKey : ""}
         disabled={disabled}
         onChange={(event) =>
-          onPlace(proposal.key, { dateKey: event.target.value, startMinutes: minutesFromTime(proposal.startTime), durationMinutes: duration })
+          onPlace(proposal.key, {
+            dateKey: event.target.value,
+            startMinutes: placed ? minutesFromTime(proposal.startTime) : suggestStart?.(event.target.value, duration) ?? minutesFromTime(proposal.startTime),
+            durationMinutes: duration
+          })
         }
       >
         {!placed ? <option value="">Pick a day</option> : null}

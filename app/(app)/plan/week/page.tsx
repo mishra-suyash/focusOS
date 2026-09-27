@@ -689,7 +689,17 @@ function PlanWeekContent() {
     setAcceptedUpcoming((current) => [...current, row.id]);
   }
 
-  const freshProposals = placeProposals([...candidates, ...extraCandidates], weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys);
+  /**
+   * The order here is load-bearing, not cosmetic. `placeProposals` walks the array once, committing
+   * each candidate into its simulated day as it goes, and a `fixedStartTime` candidate is *refused*
+   * rather than moved when its exact range is already taken. "What's coming" candidates carry
+   * exactly such a pin — the time the user confirmed — and `tentativeTime` prefills it from
+   * `placeInWindow`, which returns the earliest fitting gap on the day, which is precisely where the
+   * search puts its own first candidate for that day. Ordered last, a confirmed time would collide
+   * with an auto-placed block by construction and come back under "Didn't fit". A time the user
+   * explicitly chose claims its space before the search is allowed to guess.
+   */
+  const freshProposals = placeProposals([...extraCandidates, ...candidates], weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys);
   const proposals: WeekProposal[] = committed
     ? (existingReview!.plan!.proposedBlocks.map((p, index) => ({ ...p, key: p.key ?? `${index}`, fits: true })) as WeekProposal[])
     : freshProposals;
@@ -763,6 +773,14 @@ function PlanWeekContent() {
     ];
     const clash = others.find((other) => start < minutesFromTime(other.endTime) && minutesFromTime(other.startTime) < end);
     return clash ? `Overlaps "${clash.title}" (${clash.startTime}–${clash.endTime}).` : null;
+  }
+
+  /** The first start on `dateKey` that would actually fit — what the inspector uses when a proposal
+   *  with no position is given a day, so choosing a day is one step rather than "choose a day, then
+   *  discover it's at midnight, then type a time". */
+  function suggestStartOn(dateKey: string, durationMinutes: number): number {
+    const windowStart = minutesFromTime(workingWindow.startTime);
+    return placeInWindow(claimedSlotsByDate[dateKey] ?? [], windowStart, minutesFromTime(workingWindow.endTime), durationMinutes) ?? windowStart;
   }
 
   const objectiveCtx = { courses, papers, checkpoints: allCheckpoints, tasks, goals };
@@ -894,7 +912,10 @@ function PlanWeekContent() {
         // plan/16 §5.3 — `key` is kept (it's part of `ProposedSlot` now) so a committed week's
         // `blockDecisions` still resolve when the plan is re-opened; only `fits`, which is a property
         // of this render's placement search rather than of the proposal, is dropped.
-        proposedBlocks: proposals.map(({ fits, ...rest }) => rest),
+        // plan/16 §5.3 — `effectiveProposals`, not `proposals`: the week is committed as the user
+        // left it, drags and typed times included. Committing the search's own positions would
+        // silently discard every move the moment the week was committed and re-opened.
+        proposedBlocks: effectiveProposals.map(({ fits, ...rest }) => rest),
         completedAt: new Date().toISOString()
       });
     } finally {
@@ -1358,6 +1379,7 @@ function PlanWeekContent() {
                         disabled={accepting || committed}
                         chip={chipForProposal(p)}
                         invalidReason={placementProblem(p)}
+                        suggestStart={suggestStartOn}
                       />
                     ))}
                   </div>
@@ -1396,6 +1418,7 @@ function PlanWeekContent() {
                     disabled={accepting || committed}
                     chip={chipForProposal(p)}
                     invalidReason={placementProblem(p)}
+                    suggestStart={suggestStartOn}
                   />
                 ))}
             </div>

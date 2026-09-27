@@ -216,6 +216,42 @@ function slot(partial: Partial<ScheduleSlot>): ScheduleSlot {
   check("keys are unique across a placed set", new Set(after.map((p) => p.key)).size === after.length);
 }
 
+// --- plan/16 §5.4 / AC #20: a user-confirmed time must be placed before the search guesses ---
+//
+// `placeProposals` walks its array once, committing each candidate as it goes, and refuses (never
+// moves) a `fixedStartTime` candidate whose exact range is taken. "What's coming" prefills its time
+// from `placeInWindow`, which returns the earliest fitting gap — exactly where the search puts its
+// own first candidate for that day. So the ordering isn't a detail: last means the default prefill
+// collides by construction and the confirmed time comes back "Didn't fit".
+
+{
+  const confirmed: WeekProposalCandidate = {
+    title: "Prep: Midterm (confirmed 09:00)",
+    type: "deep_work",
+    durationMinutes: 50,
+    dateKey: MON,
+    fixedStartTime: "09:00",
+    key: "upcoming:checkpoint:k1:0"
+  };
+  const floating: WeekProposalCandidate = { title: "Revise CS201", type: "deep_work", durationMinutes: 50, preferredDateKeys: [MON], key: "revision:c1:0" };
+
+  const confirmedFirst = placeProposals([confirmed, floating], WEEK, {}, DEFAULT_WORKING_WINDOW);
+  check(
+    "a confirmed time placed first keeps its own slot",
+    confirmedFirst[0].fits && confirmedFirst[0].startTime === "09:00",
+    `${confirmedFirst[0].startTime} fits=${confirmedFirst[0].fits}`
+  );
+  check("and the floating candidate moves around it", confirmedFirst[1].fits && confirmedFirst[1].startTime !== "09:00", confirmedFirst[1].startTime);
+
+  // The regression itself: ordered last, the same confirmed time is refused outright.
+  const confirmedLast = placeProposals([floating, confirmed], WEEK, {}, DEFAULT_WORKING_WINDOW);
+  check(
+    "ordered last, a confirmed time is refused — which is why the caller orders it first",
+    !confirmedLast[1].fits,
+    `fits=${confirmedLast[1].fits} at ${confirmedLast[1].startTime}`
+  );
+}
+
 // --- AC #9: describeObjective (plan/16 §5.2) ---
 
 const objectiveCtx = {
