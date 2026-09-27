@@ -345,6 +345,21 @@ export interface WeekPlan {
   /** Capacity numbers as computed at commit time (§5.3) — kept so a later Look back can compare plan to reality. */
   capacity: { freeMinutes: number; committedMinutes: number };
   proposedBlocks: (ProposedSlot & { dateKey: string; courseId?: string; bucket?: TaskBucket })[];
+  /**
+   * plan/16 — minutes the user has said no to this week, per candidate *family* (`revision:<courseId>`,
+   * `checkpoint:<id>`, `paper:<id>`, `revisionQueue`, `task:<id>`).
+   *
+   * Replaces `blockDecisions` as the thing that makes a dismissal stick. A dismissal could not be a
+   * per-candidate flag: what a bucket offers is derived from `target - alreadyPlanned - dismissed`,
+   * so the candidate list is regenerated at a different length every time anything changes, and a
+   * flag keyed to a position in it silently re-targeted — accepting two of four sittings could leave
+   * the planner showing nothing with half the target unplanned. Minutes are the unit the accounting
+   * is already in, so a dismissal survives the list being rebuilt at any length.
+   *
+   * Accepting needs no counterpart here: an accepted proposal becomes a real `ScheduleSlot` on a day,
+   * and that slot *is* the record. `blockDecisions` is kept for reading older plans.
+   */
+  dismissedMinutes?: Record<string, number>;
   blockDecisions?: Record<string, ProposalDecision>;
   completedAt?: string;
 }

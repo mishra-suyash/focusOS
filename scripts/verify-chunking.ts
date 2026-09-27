@@ -13,7 +13,7 @@
  */
 import { DEFAULT_MAX_CHUNK_MINUTES, splitIntoChunks, taskChunkMinutes, taskBlockMinutes, sittingTitle } from "../lib/timeline";
 import { loggedMinutesForTask, remainingMinutes, sittingOutcome, sittingRemainingMinutes } from "../lib/tracking";
-import { plannedMinutesForTask, plannedMinutesThisWeek } from "../lib/courses";
+import { plannedMinutesForObjective, plannedMinutesForTask, plannedMinutesThisWeek } from "../lib/courses";
 import { describeObjective } from "../lib/objectives";
 import { computeDayReadout, computeDayScore } from "../lib/gamify";
 import { isFromDroppedCourse, plannableTasks } from "../lib/courses";
@@ -128,9 +128,15 @@ function slot(partial: Partial<ScheduleSlot>): ScheduleSlot {
     { dateKey: WEEK[2], slots: [slot({ courseId: "c1", bucket: "revision", plannedMinutes: 45, endTime: "10:30" })] },
     { dateKey: "2026-09-14", slots: [slot({ courseId: "c1", bucket: "revision" })] }
   ];
-  check("accepted slots count toward the bucket's planned minutes", plannedMinutesThisWeek(schedules, "c1", "revision", WEEK) === 95,
+  // 50 (09:00-09:50) + 90 (09:00-10:30). The second slot also carries `plannedMinutes: 45`, and that
+  // deliberately does *not* win any more: this function answers "what is on the calendar now", and
+  // the calendar is the only honest source for that. The old precedence meant shortening an accepted
+  // block left the week still counting its original length, so the freed minutes never came back as
+  // something to plan — reported in use as the planner's math being rigged.
+  check("accepted slots count their real length on the day", plannedMinutesThisWeek(schedules, "c1", "revision", WEEK) === 140,
     `got ${plannedMinutesThisWeek(schedules, "c1", "revision", WEEK)}`);
-  check("plannedMinutes wins over a resized duration", plannedMinutesThisWeek([schedules[1]], "c1", "revision", WEEK) === 45);
+  check("a resized block counts as resized, not as originally planned", plannedMinutesThisWeek([schedules[1]], "c1", "revision", WEEK) === 90,
+    `got ${plannedMinutesThisWeek([schedules[1]], "c1", "revision", WEEK)}`);
   check("a slot outside the week is excluded", plannedMinutesThisWeek([schedules[2]], "c1", "revision", WEEK) === 0);
   check("another bucket is not counted", plannedMinutesThisWeek(schedules, "c1", "assignment", WEEK) === 50);
 }
@@ -151,8 +157,9 @@ function slot(partial: Partial<ScheduleSlot>): ScheduleSlot {
   check("a task-derived block is not counted as bucket-planned minutes",
     plannedMinutesThisWeek(withTaskBlock, "c1", "revision", WEEK) === 50,
     `got ${plannedMinutesThisWeek(withTaskBlock, "c1", "revision", WEEK)}`);
+  // 50, the block's real length — its `plannedMinutes: 90` no longer overrides that, same rule as above.
   check("the same block IS counted as that task's planned minutes",
-    plannedMinutesForTask(withTaskBlock, "t1", WEEK) === 90,
+    plannedMinutesForTask(withTaskBlock, "t1", WEEK) === 50,
     `got ${plannedMinutesForTask(withTaskBlock, "t1", WEEK)}`);
   check("a task with nothing placed has no planned minutes", plannedMinutesForTask(withTaskBlock, "t2", WEEK) === 0);
   check("a task block outside the week is excluded",
@@ -527,6 +534,74 @@ const donePass = (minutes: number, output?: unknown) => ({ status: "done" as con
   const fine = resolvePlacement({ dateKey: MON, startMinutes: 10 * 60, durationMinutes: 45 }, empty);
   check("a placement needing no change reports nothing", fine.notes.length === 0, fine.notes.join(" "));
   check("and is returned unchanged", fine.placement.durationMinutes === 45 && fine.placement.startMinutes === 10 * 60);
+}
+
+// --- plan/16: the weekly accounting rule, which is where "the math is rigged" came from ---
+//
+//     offered = what the week asks for  -  what is already on a day  -  what has been dismissed
+//
+// Two mechanisms used to suppress a candidate: the quantity shrank as work was accepted, *and* a
+// stored per-candidate flag hid it by key. Because a bucket's sittings are interchangeable, their key
+// was an index into a list whose length shrinks with every accept — so accepting the first of four
+// 45-minute sittings regenerated three, whose new first inherited the old first's flag and vanished.
+// The sequence below is the exact one that left the planner empty with half the target unplanned.
+
+{
+  const target = 180;
+  const cap = { maxChunkMinutes: 50, minChunkMinutes: 15 };
+  const offered = (planned: number, dismissed = 0) => splitIntoChunks(Math.max(0, target - planned - dismissed), cap);
+
+  const first = offered(0);
+  check("a 3h target is offered as four sittings", first.length === 4, `${first}`);
+  check("and they sum to the target", first.reduce((a, b) => a + b, 0) === target, `${first}`);
+
+  // Accept one: the quantity shrinks by exactly what was placed, and nothing else disappears.
+  const afterOne = offered(first[0]);
+  check("accepting one sitting leaves the rest of the minutes offered",
+    afterOne.reduce((a, b) => a + b, 0) === target - first[0], `${afterOne}`);
+  // Accept a second: still every remaining minute, which is the regression — it used to be zero.
+  const afterTwo = offered(first[0] + first[1]);
+  check("accepting two still leaves every remaining minute offered",
+    afterTwo.reduce((a, b) => a + b, 0) === target - first[0] - first[1], `${afterTwo}`);
+  check("and the week is not reported as finished while work remains", afterTwo.length > 0, `${afterTwo}`);
+
+  // Only when the whole target is placed does the family go quiet.
+  check("a fully placed target offers nothing", offered(target).length === 0);
+  // A dismissal subtracts in the same unit, so it survives the list being rebuilt at any length.
+  check("a dismissal reduces what is offered", offered(0, 45).reduce((a, b) => a + b, 0) === target - 45);
+  check("placed and dismissed together can close the family", offered(135, 45).length === 0);
+}
+
+{
+  // Resizing an accepted block must reflect: accounting reads the block's real duration, so cutting a
+  // 50-minute block to 25 frees 25 minutes back into what is offered. It read `plannedMinutes` first,
+  // which kept claiming 50 and lost the difference.
+  const week = [MON];
+  const asPlanned: Pick<DailySchedule, "dateKey" | "slots">[] = [
+    { dateKey: MON, slots: [slot({ courseId: "c1", bucket: "revision", startTime: "09:00", endTime: "09:50", plannedMinutes: 50 })] }
+  ];
+  const shortened: Pick<DailySchedule, "dateKey" | "slots">[] = [
+    { dateKey: MON, slots: [slot({ courseId: "c1", bucket: "revision", startTime: "09:00", endTime: "09:25", plannedMinutes: 50 })] }
+  ];
+  check("a block counts its real length", plannedMinutesThisWeek(asPlanned, "c1", "revision", week) === 50,
+    `${plannedMinutesThisWeek(asPlanned, "c1", "revision", week)}`);
+  check("shortening it frees the difference back", plannedMinutesThisWeek(shortened, "c1", "revision", week) === 25,
+    `${plannedMinutesThisWeek(shortened, "c1", "revision", week)}`);
+}
+
+{
+  // The families that carry an objectiveRef rather than a course/bucket are accounted too — until
+  // this they were not accounted at all, and only a stored accept flag kept them from re-offering.
+  const week = [MON, WEEK[1]];
+  const schedules: Pick<DailySchedule, "dateKey" | "slots">[] = [
+    { dateKey: MON, slots: [slot({ objectiveRef: { kind: "checkpoint", id: "k1" }, startTime: "09:00", endTime: "09:40" })] },
+    { dateKey: WEEK[1], slots: [slot({ objectiveRef: { kind: "paper", id: "p1", passNo: 2 }, startTime: "09:00", endTime: "10:00" })] }
+  ];
+  check("accepted prep is accounted", plannedMinutesForObjective(schedules, { kind: "checkpoint", id: "k1" }, week) === 40);
+  check("another checkpoint's prep is not", plannedMinutesForObjective(schedules, { kind: "checkpoint", id: "k2" }, week) === 0);
+  check("a paper's accepted reading is accounted regardless of which pass the block was labelled",
+    plannedMinutesForObjective(schedules, { kind: "paper", id: "p1" }, week) === 60);
+  check("a slot outside the week is excluded", plannedMinutesForObjective(schedules, { kind: "checkpoint", id: "k1" }, [WEEK[3]]) === 0);
 }
 
 if (failures.length > 0) {

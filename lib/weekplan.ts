@@ -176,6 +176,12 @@ export interface WeekProposalCandidate {
    *  now applies to a different proposal than the one it was made about. Latent as a wrong row in a
    *  list; unusable as "I dragged this block and another one moved". */
   key?: string;
+  /** plan/16 — which *family* of work this candidate belongs to (`revision:<courseId>`,
+   *  `checkpoint:<id>`, `paper:<id>`, `task:<id>`, `revisionQueue:<dateKey>`). Dismissals are recorded
+   *  against the family in minutes, not against the candidate: a family's candidates are
+   *  interchangeable sittings of one piece of work, regenerated at whatever length the remaining
+   *  minutes call for, so there is no individual candidate for a decision to belong to. */
+  family?: string;
   /** plan/15 §5.2's cap, revised — which pool this candidate's per-day allowance is computed
    *  against. Candidates sharing a `capGroup` compete for one shared cap; every candidate that
    *  omits it falls into one implicit shared pool instead (the original behavior, before this

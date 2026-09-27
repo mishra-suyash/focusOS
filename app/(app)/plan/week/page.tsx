@@ -22,6 +22,7 @@ import {
   courseSlotsForDate,
   effectiveCourseStatus,
   plannableTasks,
+  plannedMinutesForObjective,
   plannedMinutesForTask,
   plannedMinutesThisWeek,
   scheduledMinutesThisWeek,
@@ -273,6 +274,21 @@ function PlanWeekContent() {
   const courseTargetMinutes = activeCourses.reduce((sum, course) => sum + COURSE_BUCKETS.reduce((s, bucket) => s + hoursFor(course, bucket), 0), 0);
   const committedMinutes = courseTargetMinutes + checkpointPrepMinutes + revisionQueueMinutesForWeek + unlinkedGoalMinutes;
   const capacity = weekCapacity({ workingWindow, weekDateKeys, claimedSlotsByDate, committedMinutes, offDateKeys });
+  /**
+   * plan/16 — what of the week's ask is actually *on a day*. One pass over this week's saved
+   * schedules, counting the blocks the planner puts there (anything carrying a bucket or an
+   * objective); routine, lectures and calendar imports carry neither and are already the meter's
+   * `free` side, so they are not double-counted here.
+   *
+   * The meter showed "committed X of Y free" and nothing else, which never moved however much of the
+   * week you planned — so it read as a number that wasn't being computed. It is the same ask it
+   * always was; what was missing is the other half of the sentence.
+   */
+  const placedMinutes = schedules
+    .filter((schedule) => weekDateKeys.includes(schedule.dateKey))
+    .flatMap((schedule) => schedule.slots)
+    .filter((slot) => slot.bucket || slot.objectiveRef)
+    .reduce((sum, slot) => sum + Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime)), 0);
   const committedPct = capacity.freeMinutes > 0 ? (capacity.committedMinutes / capacity.freeMinutes) * 100 : capacity.committedMinutes > 0 ? 100 : 0;
 
   // ---- Step 4: proposals ----
@@ -312,6 +328,33 @@ function PlanWeekContent() {
   }
 
   /**
+   * plan/16 — the one accounting rule every candidate family now follows:
+   *
+   *     offered = what the week asks for  -  what is already on a day  -  what has been dismissed
+   *
+   * Nothing else may suppress a candidate. Before this, two mechanisms were doing that job and
+   * fighting: the quantity shrank as work was accepted *and* a stored per-candidate "accepted" flag
+   * hid a candidate by key. Because a bucket's sittings are interchangeable, their keys were an index
+   * into a list whose length shrinks with every accept — so accepting the first of four 45-minute
+   * sittings regenerated three, of which the new first inherited the old first's "accepted" flag and
+   * disappeared. Two accepts left the planner showing nothing with half the target still unplanned.
+   *
+   * With one rule, that cannot happen: an accepted proposal is a real `ScheduleSlot`, the slot is
+   * counted, and the count is the truth. A dismissal is minutes, not a flag, so it survives the list
+   * being rebuilt at any length — and because everything is measured in minutes against the
+   * calendar, editing a target, resizing a block, or deleting one all flow through correctly.
+   */
+  const dismissedMinutes = existingReview?.plan?.dismissedMinutes ?? {};
+  function outstandingFor(family: string, asks: number, alreadyPlanned: number): number {
+    return Math.max(0, asks - alreadyPlanned - (dismissedMinutes[family] ?? 0));
+  }
+
+  async function dismissFamily(family: string, minutes: number) {
+    if (!user) return;
+    await patchPlan({ dismissedMinutes: { ...dismissedMinutes, [family]: (dismissedMinutes[family] ?? 0) + minutes } });
+  }
+
+  /**
    * plan/16 §5.1 — one course bucket's outstanding minutes, as sittings.
    *
    * Two changes from the pre-`16` version this replaces. First, chunk size: it used to emit
@@ -326,10 +369,15 @@ function PlanWeekContent() {
    */
   function bucketCandidates(course: Course, bucket: TaskBucket, preferredDateKeys: string[] | undefined): WeekProposalCandidate[] {
     const target = hoursFor(course, bucket);
-    const alreadyScheduled =
-      scheduledMinutesThisWeek(tasks, course.id, bucket, workMinutes, weekDateKeys) +
-      plannedMinutesThisWeek(schedules, course.id, bucket, weekDateKeys);
-    const outstanding = Math.max(0, target - alreadyScheduled);
+    // `Math.max`, never a sum. These are two *overlapping* views of the same work — tasks due this
+    // week carrying the bucket, and blocks on days carrying it — and a task assigned to an accepted
+    // block is counted by both. Summing them double-subtracted and silently under-proposed, which is
+    // the mistake the task path below already documents avoiding and this one was making.
+    const alreadyScheduled = Math.max(
+      scheduledMinutesThisWeek(tasks, course.id, bucket, workMinutes, weekDateKeys),
+      plannedMinutesThisWeek(schedules, course.id, bucket, weekDateKeys)
+    );
+    const outstanding = outstandingFor(`${bucket}:${course.id}`, target, alreadyScheduled);
     const sittings = splitIntoChunks(outstanding, chunkOpts);
     if (sittings.length === 0) return [];
     const groupId = `${course.id}:${bucket}:${weekStart}`;
@@ -343,6 +391,7 @@ function PlanWeekContent() {
       preferredDateKeys,
       capGroup: `${bucket}:${course.id}`,
       key: `${bucket}:${course.id}:${index}`,
+      family: `${bucket}:${course.id}`,
       ...(sittings.length > 1 ? { chunk: { groupId, index: index + 1, total: sittings.length } } : {})
     }));
   }
@@ -350,8 +399,17 @@ function PlanWeekContent() {
   const candidates: WeekProposalCandidate[] = [];
   for (const cp of prepCheckpoints) {
     const windowDays = weekDateKeys.filter((d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt && !offDateKeys.has(d));
-    const perDay = Math.max(15, Math.ceil(cp.prepEstimateMin / Math.max(1, cp.prepLeadDays)));
-    let remaining = cp.prepEstimateMin;
+    // Accounted like every other family now: prep already placed on a day is prep that doesn't need
+    // proposing again. Until this, accepting a "Prep: Midterm" sitting reduced the next generation by
+    // nothing, and only a stored accept decision kept the identical proposal off the screen.
+    const prepOutstanding = outstandingFor(
+      `checkpoint:${cp.id}`,
+      cp.prepEstimateMin,
+      plannedMinutesForObjective(schedules, { kind: "checkpoint", id: cp.id }, weekDateKeys)
+    );
+    if (prepOutstanding <= 0) continue;
+    const perDay = Math.max(15, Math.ceil(prepOutstanding / Math.max(1, cp.prepLeadDays)));
+    let remaining = prepOutstanding;
     for (const d of windowDays) {
       if (remaining <= 0) break;
       const minutes = Math.min(perDay, remaining);
@@ -362,6 +420,7 @@ function PlanWeekContent() {
         plannedMinutes: minutes,
         dateKey: d,
         key: `checkpoint:${cp.id}:${d}`,
+        family: `checkpoint:${cp.id}`,
         refType: "checkpoint",
         refId: cp.id,
         // plan/16 §5.2 — the reference that used to be dropped by `acceptProposals`, so an accepted
@@ -388,6 +447,10 @@ function PlanWeekContent() {
   }
   if (revisionQueueMinutesPerDay > 0) {
     for (const d of weekDateKeys.slice(0, 5).filter((d) => !offDateKeys.has(d))) {
+      // The queue is a per-day commitment, so it is accounted per day: a day that already carries a
+      // review block doesn't get offered a second one.
+      const alreadyOnThisDay = plannedMinutesForObjective(schedules, { kind: "revisionQueue" }, [d]);
+      if (alreadyOnThisDay > 0 || (dismissedMinutes[`revisionQueue:${d}`] ?? 0) > 0) continue;
       candidates.push({
         title: "Review revisions",
         type: "deep_work",
@@ -395,6 +458,7 @@ function PlanWeekContent() {
         plannedMinutes: revisionQueueMinutesPerDay,
         dateKey: d,
         key: `revisionQueue:${d}`,
+        family: `revisionQueue:${d}`,
         refType: "revision",
         objectiveRef: { kind: "revisionQueue" }
       });
@@ -427,7 +491,7 @@ function PlanWeekContent() {
     // while an under-proposal silently loses work.
     const logged = loggedMinutesForTask(sessions, task.id);
     const planned = plannedMinutesForTask(schedules, task.id, weekDateKeys);
-    const total = Math.max(0, taskBlockMinutes(task, workMinutes) - Math.max(logged, planned));
+    const total = outstandingFor(`task:${task.id}`, taskBlockMinutes(task, workMinutes), Math.max(logged, planned));
     if (total <= 0) continue;
 
     // plan/16 §5.1/§2.1 — a fixed-time task is pinned to its own clock time on its own weekday and
@@ -445,6 +509,7 @@ function PlanWeekContent() {
         plannedMinutes: fixedMinutes,
         taskId: task.id,
         key: `task:${task.id}:fixed`,
+        family: `task:${task.id}`,
         // With a day to pin to, this is an exact-time candidate: 14:00 or it doesn't happen. Without
         // one — a fixed-time task with neither a target weekday nor a due date, or one whose day is
         // marked off — it still has to appear *somewhere*. It floats at its own fixed length instead,
@@ -470,6 +535,7 @@ function PlanWeekContent() {
             taskId: task.id,
             plannedMinutes: minutes,
             key: `task:${task.id}:${index}`,
+            family: `task:${task.id}`,
             ...chunkOf(index)
           })
         );
@@ -490,6 +556,7 @@ function PlanWeekContent() {
           preferredDateKeys: weekend,
           capGroup: `task:${task.id}`,
           key: `task:${task.id}:${index}`,
+          family: `task:${task.id}`,
           ...chunkOf(index)
         });
       });
@@ -509,7 +576,13 @@ function PlanWeekContent() {
    */
   const { plannable: readingPlan, needsGoal: papersNeedingGoal } = readingCandidates(papers, todayK);
   for (const { paper, passNo, minutes: passMinutes } of readingPlan) {
-    const readingMinutes = splitIntoChunks(passMinutes, chunkOpts);
+    const readingOutstanding = outstandingFor(
+      `paper:${paper.id}`,
+      passMinutes,
+      plannedMinutesForObjective(schedules, { kind: "paper", id: paper.id }, weekDateKeys)
+    );
+    if (readingOutstanding <= 0) continue;
+    const readingMinutes = splitIntoChunks(readingOutstanding, chunkOpts);
     const paperObjective = { objectiveRef: { kind: "paper" as const, id: paper.id, passNo }, refId: paper.id };
     const title = `Read: ${paper.title} (pass ${passNo})`;
     if (paper.weeklyTargetDay != null) {
@@ -518,7 +591,8 @@ function PlanWeekContent() {
           ...leadTimeCandidates(title, "reading", minutes, paper.weeklyTargetDay!, {
             ...paperObjective,
             plannedMinutes: minutes,
-            key: `paper:${paper.id}:${index}`
+            key: `paper:${paper.id}:${index}`,
+            family: `paper:${paper.id}`
           })
         );
       });
@@ -531,7 +605,8 @@ function PlanWeekContent() {
           plannedMinutes: minutes,
           ...paperObjective,
           capGroup: "papers",
-          key: `paper:${paper.id}:${index}`
+          key: `paper:${paper.id}:${index}`,
+          family: `paper:${paper.id}`
         });
       });
     }
@@ -713,6 +788,7 @@ function PlanWeekContent() {
       durationMinutes: sittingMinutes,
       plannedMinutes: sittingMinutes,
       key: `upcoming:${row.id}:${index}`,
+      family: `upcoming:${row.id}`,
       capGroup: `upcoming:${row.id}`,
       ...(row.courseId ? { courseId: row.courseId } : {}),
       ...(row.bucket ? { bucket: row.bucket } : {}),
@@ -737,24 +813,23 @@ function PlanWeekContent() {
    * with an auto-placed block by construction and come back under "Didn't fit". A time the user
    * explicitly chose claims its space before the search is allowed to guess.
    */
+  /** Exactly the work still being offered — the candidates are the outstanding minutes, by construction. */
+  const stillToPlaceMinutes = [...extraCandidates, ...candidates].reduce((sum, candidate) => sum + candidate.durationMinutes, 0);
   const freshProposals = placeProposals([...extraCandidates, ...candidates], weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys);
   const proposals: WeekProposal[] = committed
     ? (existingReview!.plan!.proposedBlocks.map((p, index) => ({ ...p, key: p.key ?? `${index}`, fits: true })) as WeekProposal[])
     : freshProposals;
 
   /**
-   * plan/16 §5.3 — keyed by each proposal's own stable `key` now (see `WeekProposalCandidate.key`),
-   * not by its array index. One consequence, deliberately not migrated: a `blockDecisions` map
-   * written before this change is keyed `"0"`/`"1"`/... and no longer resolves, so those proposals
-   * read as undecided and can simply be accepted or dismissed again. That is a week-scoped map with
-   * a one-week useful life, and re-deciding a handful of rows once is a smaller cost than a
-   * migration that would have to guess which index meant which piece of work.
+   * plan/16 — `blockDecisions` is no longer read. It was a per-candidate accepted/dismissed flag, and
+   * a flag cannot identify one of a family's interchangeable sittings: the list is regenerated at
+   * whatever length the remaining minutes call for, so a flag keyed to a position in it re-targets
+   * the moment anything changes. What replaced it: accepted work is counted off the calendar, and
+   * dismissals are minutes in `WeekPlan.dismissedMinutes`. The stored map is still written through
+   * unchanged by `patchPlan` rather than deleted — it costs nothing to keep and throwing away a
+   * user's data to tidy up a field would be the wrong trade.
    */
-  const [decisions, setDecisions] = useState<Record<string, ProposalDecision>>({});
-  useEffect(() => {
-    setDecisions(existingReview?.plan?.blockDecisions ?? {});
-     
-  }, [weekStart, existingReview?.plan?.blockDecisions]);
+  const legacyBlockDecisions = existingReview?.plan?.blockDecisions ?? {};
 
   /**
    * plan/16 §5.3 — where the user has dragged (or typed) a proposal, keyed by its stable `key`.
@@ -794,7 +869,14 @@ function PlanWeekContent() {
       fits: true
     };
   });
-  const undecidedProposals = effectiveProposals.filter((p) => !decisions[p.key]);
+  /**
+   * Every proposal the accounting produced. There is deliberately no "minus the ones flagged
+   * accepted or dismissed" step: an accepted proposal is already absent because the slot it became is
+   * counted, and a dismissal is already absent because its minutes were subtracted. Filtering again
+   * here is what made accepting two of four sittings leave the planner empty with half the target
+   * unplanned — the count and the flags were suppressing the same work twice.
+   */
+  const undecidedProposals = effectiveProposals;
 
   /** Why a proposal can't be accepted where it currently sits — the sentence the inspector shows,
    *  and the reason its Accept button is disabled. Checked against the same two layers the grid
@@ -903,9 +985,9 @@ function PlanWeekContent() {
    * `"plan.completedAt"`, `"plan.targets"`, etc. instead of a `plan` object, so `existingReview
    * ?.plan` stayed `undefined` and Commit never flipped to Re-commit). `merge: true` at the *top*
    * level does work — it leaves `wins`/`missedGoals`/etc. untouched — so replacing the whole `plan`
-   * value here is safe as long as callers always spread in what they don't mean to change (`decisions`
-   * is the local session-accumulated map, more current than `existingReview` which lags one
-   * subscription round-trip behind a just-made write).
+   * value here is safe as long as callers always spread in what they don't mean to change (`dismissedMinutes`
+   * is read straight off `existingReview`, so a dismissal made moments earlier is already in it by
+   * the time the next patch is built).
    */
   async function patchPlan(patch: Partial<WeekPlan>) {
     if (!user) return;
@@ -913,7 +995,7 @@ function PlanWeekContent() {
       targets: existingReview?.plan?.targets ?? [],
       capacity: existingReview?.plan?.capacity ?? { freeMinutes: 0, committedMinutes: 0 },
       proposedBlocks: existingReview?.plan?.proposedBlocks ?? [],
-      blockDecisions: decisions,
+      blockDecisions: legacyBlockDecisions,
       ...(existingReview?.plan?.completedAt ? { completedAt: existingReview.plan.completedAt } : {}),
       ...patch
     };
@@ -925,7 +1007,7 @@ function PlanWeekContent() {
     setAcceptError("");
     setAccepting(true);
     try {
-      const fitting = toAccept.filter((p) => p.fits && !decisions[p.key]);
+      const fitting = toAccept.filter((p) => p.fits);
       const byDate = new Map<string, WeekProposal[]>();
       for (const p of fitting) {
         if (!byDate.has(p.dateKey)) byDate.set(p.dateKey, []);
@@ -963,30 +1045,25 @@ function PlanWeekContent() {
       }
       for (const w of writes) await saveDailySchedule(user.uid, w);
 
-      if (fitting.length > 0) {
-        const nextDecisions = { ...decisions };
-        for (const p of fitting) nextDecisions[p.key] = "accepted";
-        setDecisions(nextDecisions);
-        await saveWeeklyReviewFields(user.uid, weekStart, {
-          plan: {
-            targets: existingReview?.plan?.targets ?? [],
-            capacity: existingReview?.plan?.capacity ?? { freeMinutes: 0, committedMinutes: 0 },
-            proposedBlocks: existingReview?.plan?.proposedBlocks ?? [],
-            blockDecisions: nextDecisions,
-            ...(existingReview?.plan?.completedAt ? { completedAt: existingReview.plan.completedAt } : {})
-          }
-        });
-      }
+      // No accept flag is written. The `ScheduleSlot` just saved onto the day *is* the record that
+      // this work is planned, and every generator now subtracts what is on the calendar — so a second
+      // record would only be a chance for the two to disagree, which is exactly what went wrong.
+
     } finally {
       setAccepting(false);
     }
   }
 
+  /**
+   * Dismissing means "not this week", and it is recorded as *minutes against the family* rather than
+   * a flag on this candidate. A family's candidates are interchangeable sittings of one quantity,
+   * regenerated at whatever length the remaining minutes call for — so there is no individual
+   * candidate for a flag to belong to, and a flag keyed to a position in that list re-targets the
+   * moment the quantity changes.
+   */
   async function dismissProposal(p: WeekProposal) {
-    if (!user) return;
-    const nextDecisions = { ...decisions, [p.key]: "dismissed" as const };
-    setDecisions(nextDecisions);
-    await patchPlan({ blockDecisions: nextDecisions });
+    const minutes = Math.max(0, minutesFromTime(p.endTime) - minutesFromTime(p.startTime)) || p.durationMinutes;
+    await dismissFamily(p.family ?? p.key, minutes);
   }
 
   // ---- Step 5: commit ----
@@ -1086,6 +1163,10 @@ function PlanWeekContent() {
           <p className="text-sm text-ink-500">
             Committed <span className="font-semibold text-ink-950 dark:text-ink-50">{formatHours(capacity.committedMinutes)}</span> of{" "}
             {formatHours(capacity.freeMinutes)} free
+            <span className="ml-2 text-xs">
+              · {formatHours(placedMinutes)} placed
+              {stillToPlaceMinutes > 0 ? `, ${formatHours(stillToPlaceMinutes)} still to place` : ", nothing left to place"}
+            </span>
           </p>
           <div className="mt-1 h-1.5 w-48 overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
             <div
@@ -1442,7 +1523,6 @@ function PlanWeekContent() {
             offDateKeys={offDateKeys}
             fixedSlotsByDate={claimedSlotsByDate}
             proposals={undecidedProposals.filter((p) => p.fits)}
-            decisions={decisions}
             onPlace={applyPlacement}
             disabled={accepting || committed}
             chipFor={chipForProposal}
@@ -1471,7 +1551,6 @@ function PlanWeekContent() {
                         weekDateKeys={weekDateKeys}
                         dayLabels={DAY_LABELS}
                         offDateKeys={offDateKeys}
-                        decision={decisions[p.key]}
                         onPlace={applyPlacement}
                         onAccept={(key) => {
                           const proposal = effectiveProposals.find((item) => item.key === key);
@@ -1512,7 +1591,6 @@ function PlanWeekContent() {
                     weekDateKeys={weekDateKeys}
                     dayLabels={DAY_LABELS}
                     offDateKeys={offDateKeys}
-                    decision={decisions[p.key]}
                     onPlace={applyPlacement}
                     onAccept={(key) => {
                       const proposal = effectiveProposals.find((item) => item.key === key);

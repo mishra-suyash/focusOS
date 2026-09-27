@@ -3,7 +3,18 @@ import { weekDates, weekStartKey } from "@/lib/dates";
 import { fetchCollection, saveDailySchedule, setRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/firestore";
 import { planRevisionTemplateSync } from "@/lib/recurring-tasks";
 import { minutesFromTime, sortedSlots } from "@/lib/schedule";
-import type { Course, CourseStatus, DailySchedule, Goal, PomodoroSession, RecurringTaskTemplate, ScheduleSlot, Task, TaskBucket } from "@/types";
+import type {
+  Course,
+  CourseStatus,
+  DailySchedule,
+  Goal,
+  PomodoroSession,
+  RecurringTaskTemplate,
+  ScheduleSlot,
+  SlotObjectiveRef,
+  Task,
+  TaskBucket
+} from "@/types";
 
 /** `status` as stored can go stale (nobody flips it when a course's end date passes) — derive the real one. */
 export function effectiveCourseStatus(course: Course, dateKey: string): CourseStatus {
@@ -175,9 +186,21 @@ export function scheduledMinutesThisWeek(
  * `blockDecisions` (keyed by a candidate's *array index*, so it re-targets the moment the candidate
  * list shifts) standing between the user and a duplicate.
  *
+ * Measures the block's **real duration**, not its recorded `plannedMinutes`. That precedence was the
+ * other way round and it made the number wrong in use: shortening an accepted block from 50 minutes
+ * to 25 left the week still counting 50, so the freed 25 never came back as something to plan. The
+ * two fields answer different questions — `plannedMinutes` is what the sitting was *intended* to
+ * contribute, kept for display and for `WeekPlan.proposedBlocks`' record of what was committed;
+ * this function asks what is *on the calendar now*, and for that the calendar is the only honest
+ * source. Superseded note, kept for the history:
  * A slot's `plannedMinutes` wins over its own duration where present, so resizing a block on the
  * timeline after planning doesn't rewrite what the week was understood to have committed.
  */
+/** A slot's real length on the day. See `plannedMinutesThisWeek` for why this, not `plannedMinutes`. */
+function slotMinutes(slot: Pick<ScheduleSlot, "startTime" | "endTime">): number {
+  return Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime));
+}
+
 export function plannedMinutesThisWeek(
   schedules: Pick<DailySchedule, "dateKey" | "slots">[],
   courseId: string,
@@ -196,7 +219,7 @@ export function plannedMinutesThisWeek(
     // construction: a planner-accepted *bucket* proposal carries no `assignedTaskIds` (bucket
     // candidates have no `taskId`), while every task-derived block does.
     .filter((slot) => slot.courseId === courseId && slot.bucket === bucket && !slot.assignedTaskIds?.length)
-    .reduce((sum, slot) => sum + (slot.plannedMinutes ?? Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime))), 0);
+    .reduce((sum, slot) => sum + slotMinutes(slot), 0);
 }
 
 /**
@@ -219,7 +242,7 @@ export function plannedMinutesForTask(
     .filter((schedule) => inWeek.has(schedule.dateKey))
     .flatMap((schedule) => schedule.slots)
     .filter((slot) => slot.assignedTaskIds?.includes(taskId))
-    .reduce((sum, slot) => sum + (slot.plannedMinutes ?? Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime))), 0);
+    .reduce((sum, slot) => sum + slotMinutes(slot), 0);
 }
 
 type BucketedSession = Pick<PomodoroSession, "mode" | "minutes" | "completedAt" | "courseId" | "bucket" | "taskId">;
@@ -250,4 +273,37 @@ export function completedMinutesThisWeek(
     if (sessionCourseId !== courseId || sessionBucket !== bucket) return sum;
     return sum + session.minutes;
   }, 0);
+}
+
+/**
+ * plan/16 — minutes already placed on a day this week for one *objective*: a checkpoint's prep, a
+ * paper's pass, a goal milestone, the revision queue.
+ *
+ * The sibling of `plannedMinutesThisWeek`, for the candidate families that carry an `objectiveRef`
+ * instead of a course/bucket pair. Without it those families were not accounted at all: accepting a
+ * "Prep: Midterm" sitting reduced the next generation by nothing, and the only thing standing
+ * between the user and the identical proposal returning was a stored accept decision. That made the
+ * accept decision load-bearing, which in turn made its key load-bearing — the exact fragility
+ * plan/16 §8 Q2 is about. With every family accounted, what is offered follows from what is on the
+ * calendar, and a decision only ever has to mean "not this week".
+ *
+ * A paper's `passNo` is deliberately *not* compared: a pass-2 sitting accepted for a paper is time
+ * spent on that paper this week either way, and re-offering pass 2 because the accepted block was
+ * labelled pass 3 would be the same double-count in a different coat.
+ */
+export function plannedMinutesForObjective(
+  schedules: Pick<DailySchedule, "dateKey" | "slots">[],
+  ref: { kind: SlotObjectiveRef["kind"]; id?: string },
+  weekDateKeys: string[] = currentWeekDateKeys()
+): number {
+  return schedules
+    .filter((schedule) => weekDateKeys.includes(schedule.dateKey))
+    .flatMap((schedule) => schedule.slots)
+    .filter((slot) => {
+      const slotRef = slot.objectiveRef;
+      if (!slotRef || slotRef.kind !== ref.kind) return false;
+      if (ref.id === undefined) return true;
+      return "id" in slotRef && slotRef.id === ref.id;
+    })
+    .reduce((sum, slot) => sum + slotMinutes(slot), 0);
 }

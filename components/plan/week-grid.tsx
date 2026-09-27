@@ -74,7 +74,6 @@ export function WeekGrid({
   offDateKeys,
   fixedSlotsByDate,
   proposals,
-  decisions,
   onPlace,
   disabled = false,
   chipFor,
@@ -92,7 +91,6 @@ export function WeekGrid({
   /** Only proposals that currently have a position. A proposal that didn't fit has no place on a
    *  grid; it appears in the caller's inspector list with a day and time to choose instead. */
   proposals: WeekProposal[];
-  decisions: Record<string, ProposalDecision>;
   onPlace: (key: string, placement: WeekGridPlacement) => void;
   /** Deliberately unused by the grid itself: accepting happens through the inspector list's explicit
    *  Accept button. There was a double-click-to-accept shortcut here, removed because `preventDefault`
@@ -121,9 +119,12 @@ export function WeekGrid({
   const gridHeight = minutesToPx(gridEnd - gridStart, PX_PER_HOUR);
   const hours = Array.from({ length: Math.max(1, (gridEnd - gridStart) / 60) }, (_, i) => gridStart / 60 + i);
 
-  const undecided = proposals.filter((p) => !decisions[p.key]);
+  // plan/16 — the caller hands over exactly what is still being offered. This used to filter by a
+  // stored accepted/dismissed flag as well, which double-suppressed: accepted work is already absent
+  // because the slot it became is counted, and a dismissal is already absent because its minutes were
+  // subtracted from the family's quantity.
   const proposalsByDate = new Map<string, WeekProposal[]>();
-  for (const p of undecided) {
+  for (const p of proposals) {
     if (!proposalsByDate.has(p.dateKey)) proposalsByDate.set(p.dateKey, []);
     proposalsByDate.get(p.dateKey)!.push(p);
   }
