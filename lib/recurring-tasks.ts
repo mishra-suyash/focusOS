@@ -79,13 +79,29 @@ export function revisionTemplateId(courseId: string): string {
  * hours again never force-reactivates a template the user paused by hand from the course card's
  * "Pause" button — only resizes it. Otherwise nudging the hours field would silently undo a
  * deliberate pause, which is worse than leaving the user to hit "Resume" themselves.
+ *
+ * plan/16 §5.4 (settling §8 Q8) added `autoEnabled`, and it is deliberately required rather than
+ * defaulted: a default of `true` would let a new call site silently keep the old auto-create
+ * behavior, which is the exact thing the setting exists to stop. Two rules follow from it, and
+ * together they are what makes this opt-in rather than a removal:
+ *
+ * - `!autoEnabled && !existing` → `none`. A new course with a revision target generates nothing;
+ *   the target reaches a day only through weekly planning, where the user picks the time.
+ * - `!autoEnabled && existing` → the template is *paused*, never deleted. A course that already has
+ *   an auto template made before this setting existed reads as opted in (`Course.autoRevisionTasks`
+ *   absent), so nothing regresses for it; turning the switch off then pauses it, and the generated
+ *   tasks that already exist are left alone.
  */
 export function planRevisionTemplateSync(
   course: Pick<Course, "id" | "name" | "targetMinutesPerWeek" | "startDate" | "endDate">,
   existing: RecurringTaskTemplate | undefined,
-  workMinutes: number
+  workMinutes: number,
+  autoEnabled: boolean
 ): RevisionTemplateSyncPlan {
   const minutesPerWeek = course.targetMinutesPerWeek ?? 0;
+  if (!autoEnabled) {
+    return existing?.active ? { action: "pause", templateId: existing.id } : { action: "none" };
+  }
   if (minutesPerWeek <= 0) {
     return existing?.active ? { action: "pause", templateId: existing.id } : { action: "none" };
   }

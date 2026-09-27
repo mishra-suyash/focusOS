@@ -83,13 +83,38 @@ function course(partial: Partial<Course> & Pick<Course, "id" | "name">): Pick<Co
   return { targetMinutesPerWeek: undefined, startDate: undefined, endDate: undefined, ...partial };
 }
 
+// --- plan/16 §5.4 / §8 Q8: the auto revision template is opt-in per course ---
+
 {
-  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201" }), undefined, 25);
+  // A new course with a revision target and the switch off generates nothing at all. This is the
+  // whole point: the target still drives the weekly planner's proposals, but nothing lands on a day
+  // until the user says when.
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 90 }), undefined, 25, false);
+  check("opted out with no template: nothing is created", plan.action === "none", plan.action);
+}
+
+{
+  // Opting out of a course that already has one pauses it — never deletes it, and never touches the
+  // tasks it has already generated.
+  const existing = template({ id: "revision-c1", estimatedPomodoros: 4, active: true, cadence: "weekly", daysOfWeek: [0] });
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 100 }), existing, 25, false);
+  check("opting out pauses an existing auto template", plan.action === "pause", plan.action);
+}
+
+{
+  // And opting out twice is idempotent: an already-paused template needs no second write.
+  const existing = template({ id: "revision-c1", estimatedPomodoros: 4, active: false, cadence: "weekly", daysOfWeek: [0] });
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 100 }), existing, 25, false);
+  check("opting out again is a no-op", plan.action === "none", plan.action);
+}
+
+{
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201" }), undefined, 25, true);
   check("no hours, no existing template: nothing to do", plan.action === "none");
 }
 
 {
-  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 90 }), undefined, 25);
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 90 }), undefined, 25, true);
   check("hours set, nothing exists yet: creates a weekly template", plan.action === "create");
   if (plan.action === "create") {
     check("created template is linked to the course", plan.template.courseId === "c1");
@@ -101,7 +126,7 @@ function course(partial: Partial<Course> & Pick<Course, "id" | "name">): Pick<Co
     // than letting addDoc hand out a random one: two racing "Save" clicks that both see no
     // `existing` template must still land on the SAME document instead of creating a duplicate.
     check("create carries the course's deterministic template id", plan.templateId === "revision-c1", `got ${plan.templateId}`);
-    const secondClick = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 90 }), undefined, 25);
+    const secondClick = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 90 }), undefined, 25, true);
     check(
       "a second concurrent create (still no existing template) targets the same id, not a new one",
       secondClick.action === "create" && secondClick.templateId === plan.templateId
@@ -111,20 +136,20 @@ function course(partial: Partial<Course> & Pick<Course, "id" | "name">): Pick<Co
 
 {
   const minimalMinutes = course({ id: "c1", name: "CS201", targetMinutesPerWeek: 5 });
-  const plan = planRevisionTemplateSync(minimalMinutes, undefined, 25);
+  const plan = planRevisionTemplateSync(minimalMinutes, undefined, 25, true);
   check("a small target never rounds down to 0 pomodoros", plan.action === "create" && plan.template.estimatedPomodoros === 1);
 }
 
 {
   const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", estimatedPomodoros: 2, generatedFrom: "courseRevisionTarget" });
-  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 150 }), existing, 25);
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 150 }), existing, 25, true);
   check("hours raised on an existing template: resizes it", plan.action === "update");
   if (plan.action === "update") check("resize targets the existing template's id", plan.templateId === "auto1");
 }
 
 {
   const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", estimatedPomodoros: 4, generatedFrom: "courseRevisionTarget", bucket: "revision" });
-  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 100 }), existing, 25);
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 100 }), existing, 25, true);
   check("same pomodoro count after rounding, bucket already set: no-op, not a spurious write", plan.action === "none");
 }
 
@@ -132,27 +157,27 @@ function course(partial: Partial<Course> & Pick<Course, "id" | "name">): Pick<Co
   // L2 (plan/14 §2.4) — a template created before `bucket` existed must get backfilled, not left
   // generating tasks the Revision row's own filter can never see.
   const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", estimatedPomodoros: 4, generatedFrom: "courseRevisionTarget" });
-  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 100 }), existing, 25);
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 100 }), existing, 25, true);
   check("an existing template with no bucket is patched to add one", plan.action === "update");
   if (plan.action === "update") check("...specifically to revision", plan.patch.bucket === "revision");
 }
 
 {
   const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", active: true, generatedFrom: "courseRevisionTarget" });
-  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 0 }), existing, 25);
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 0 }), existing, 25, true);
   check("hours cleared on an active template: pauses it", plan.action === "pause");
 }
 
 {
   const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", active: false, generatedFrom: "courseRevisionTarget" });
-  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 0 }), existing, 25);
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 0 }), existing, 25, true);
   check("hours cleared on an already-paused template: nothing left to do", plan.action === "none");
 }
 
 {
   // The user paused it by hand from the course card; raising the hours again must not silently flip it back on.
   const existing = template({ id: "auto1", daysOfWeek: [0], cadence: "weekly", active: false, estimatedPomodoros: 1, generatedFrom: "courseRevisionTarget" });
-  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 120 }), existing, 25);
+  const plan = planRevisionTemplateSync(course({ id: "c1", name: "CS201", targetMinutesPerWeek: 120 }), existing, 25, true);
   check("a manual pause is never force-reactivated by an hours edit", plan.action !== "pause");
   if (plan.action === "update") check("...only resized, active untouched", !("active" in plan.patch));
 }

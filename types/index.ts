@@ -381,6 +381,21 @@ export interface Course {
   startDate?: string;
   endDate?: string;
   targetMinutesPerWeek?: number;
+  /** plan/16 §5.4, settling §8 Q8 — whether this course's `targetMinutesPerWeek` may turn itself
+   *  into recurring "Revise <course>" tasks that land on days without anyone choosing a time.
+   *
+   *  Off is the default for a new course, which is the behavior change: that passive path is
+   *  precisely the "course things appearing on the timeline nobody chose" this plan is about, and
+   *  with weekly planning able to place revision deliberately (§5.3) it is no longer the only way
+   *  the target becomes real work. The target itself keeps its real job either way — it is
+   *  `bucketWeeklyTarget`'s "revision" input and therefore drives the weekly planner's proposals.
+   *
+   *  Absent is read as off for a course with no auto template, and as *on* for one that already has
+   *  one (`planRevisionTemplateSync`'s `!autoEnabled && !existing` rule): the plan's stronger
+   *  option was to remove the mechanism outright, and the cost it named — a user who sets a target
+   *  and never opens the planner gets zero revision work — is real. Existing courses keep working;
+   *  new ones opt in. Nothing is ever deleted: turning it off pauses the template. */
+  autoRevisionTasks?: boolean;
   /** The "assignment"/"backlog" weekly buckets (lib/courses.ts's `bucketWeeklyTarget`) — additive alongside `targetMinutesPerWeek`, which stays the "revision" bucket's target unchanged (still read by `planRevisionTemplateSync`/`courseTargetMinutesForDay`). The "goal" bucket has no stored target here — it's derived from linked Goals' own `targetHoursPerWeek`. */
   weeklyTargets?: { assignment?: number; backlog?: number };
   sessions: CourseSession[];
@@ -976,6 +991,8 @@ export interface UserSettings {
    *  the browser permission at the time the user opted in; it is a UI hint only, never the
    *  authorization source — the live `Notification.permission` always is. */
   sittingNotifications?: { enabled: boolean; leadMinutes: number; granted?: boolean };
+  /** plan/16 §5.4 — how many days ahead weekly planning's "What's coming" looks. Absent = 14. */
+  upcomingHorizonDays?: number;
   updatedAt: string;
 }
 

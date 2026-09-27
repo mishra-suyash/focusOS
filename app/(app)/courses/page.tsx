@@ -24,6 +24,7 @@ import {
   completedMinutesThisWeek,
   courseSlotsForDate,
   currentWeekDateKeys,
+  plannedMinutesThisWeek,
   dayOfWeekLabels,
   effectiveCourseStatus,
   resyncFutureClassSlots,
@@ -48,11 +49,12 @@ import {
   updateTopic
 } from "@/lib/firestore";
 import type {
-  ClassLog,
   Checkpoint,
   CheckpointStatus,
+  ClassLog,
   Course,
   CourseSession,
+  DailySchedule,
   Goal,
   NewCourse,
   Paper,
@@ -85,6 +87,10 @@ function CoursesPageContent() {
   // plan/14 §6.4 — completedMinutesThisWeek now measures real session minutes instead of a
   // pomodoro-count estimate, so it needs every session, not just this course's tasks.
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
+  // plan/16 §5.4 — a revision target with no minutes *planned* on a day this week now says so, which
+  // is the mitigation the plan pairs with making the auto template opt-in: with nothing generating
+  // the work passively, an unplanned target must be visible rather than quietly doing nothing.
+  const { items: schedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
 
   /** A new course's revision hours (if set at creation) get their auto "Revise" template the same
    * turn it's created — `createCourse` returns the new id specifically so this doesn't need a
@@ -129,6 +135,7 @@ function CoursesPageContent() {
                 papers={papers.filter((item) => item.relatedCourseId === course.id)}
                 courseTasks={tasks.filter((item) => item.courseId === course.id)}
                 sessions={sessions}
+                schedules={schedules}
                 openTasks={tasks.filter((item) => item.courseId === course.id && item.status !== "done")}
                 linkedGoals={goals.filter((item) => item.linked.courseIds.includes(course.id))}
               />
@@ -152,7 +159,8 @@ function CourseCard({
   courseTasks,
   openTasks,
   linkedGoals,
-  sessions
+  sessions,
+  schedules
 }: {
   course: Course;
   terms: Term[];
@@ -168,6 +176,8 @@ function CourseCard({
   linkedGoals: Goal[];
   /** Every session in the app — `completedMinutesThisWeek` (plan/14 §6.4) filters to this course/bucket itself. */
   sessions: PomodoroSession[];
+  /** Every day's saved schedule — `plannedMinutesThisWeek` (plan/16 §5.8) filters to this course/bucket. */
+  schedules: DailySchedule[];
 }) {
   const { user } = useAuth();
   const [editingSessions, setEditingSessions] = useState(false);
@@ -182,6 +192,7 @@ function CourseCard({
   // and `/plan/day` already warn about this; the course card — the one page where the sessions were
   // configured — showed no warning and actively contradicted them with an ACTIVE badge.
   const classesWontShow = status === "active" && course.sessions.length > 0 && isBreakMode(terms, today);
+  const plannedRevisionMinutes = plannedMinutesThisWeek(schedules, course.id, "revision", currentWeekDateKeys());
 
   // plan/14 §6.3 — Class time is real course time but not focus time, so it's summed separately
   // from the buckets above rather than folded into `completedMinutesThisWeek`. Gated by
@@ -299,15 +310,17 @@ function CourseCard({
           if (bucket === "revision") {
             const revisionTemplate = recurringTemplates.find((template) => template.generatedFrom === "courseRevisionTarget");
             return (
-              <BucketRow
-                key={bucket}
-                label={taskBucketLabels[bucket]}
-                infoHint="revisionHoursPerWeek"
-                target={target}
-                scheduled={scheduled}
-                done={done}
-                paused={Boolean(revisionTemplate && !revisionTemplate.active)}
-              />
+              <div key={bucket}>
+                <BucketRow
+                  label={taskBucketLabels[bucket]}
+                  infoHint="revisionHoursPerWeek"
+                  target={target}
+                  scheduled={scheduled}
+                  done={done}
+                  paused={Boolean(revisionTemplate && !revisionTemplate.active)}
+                />
+                <AutoRevisionRow course={course} target={target} plannedThisWeek={plannedRevisionMinutes} hasTemplate={Boolean(revisionTemplate)} workMinutes={workMinutes} recurringTemplates={recurringTemplates} />
+              </div>
             );
           }
           return <BucketRow key={bucket} label={taskBucketLabels[bucket]} infoHint="bucketAssignmentBacklog" target={target} scheduled={scheduled} done={done} />;
@@ -612,5 +625,77 @@ export default function CoursesPage() {
     <ModuleGate moduleId="courses">
       <CoursesPageContent />
     </ModuleGate>
+  );
+}
+
+/**
+ * plan/16 §5.4, settling §8 Q8 — the per-course switch for the auto revision template, plus the one
+ * line that has to exist alongside it.
+ *
+ * With the switch off, a course's `targetMinutesPerWeek` stops silently becoming recurring tasks
+ * that land on days nobody picked a time for. The target keeps its real job — it is the weekly
+ * planner's revision input — but that makes weekly planning the only route by which it becomes
+ * real, so an unplanned target has to be *visible*. Hence the second line: a target with no minutes
+ * on any day this week says so, and links to the planner, rather than looking pursued because a
+ * number is set.
+ *
+ * Turning the switch off pauses the template and never deletes it; the tasks it already generated
+ * are the user's and are left exactly where they are.
+ */
+function AutoRevisionRow({
+  course,
+  target,
+  plannedThisWeek,
+  hasTemplate,
+  workMinutes,
+  recurringTemplates
+}: {
+  course: Course;
+  target: number;
+  plannedThisWeek: number;
+  hasTemplate: boolean;
+  workMinutes: number;
+  recurringTemplates: RecurringTaskTemplate[];
+}) {
+  const { user } = useAuth();
+  const [saving, setSaving] = useState(false);
+  // Absent reads as on for a course that already has a template (nothing regresses) and off for one
+  // that doesn't — the same rule `syncRevisionTemplate` applies, kept identical here so the switch
+  // never shows a state the sync wouldn't act on.
+  const enabled = course.autoRevisionTasks ?? hasTemplate;
+
+  async function toggle(next: boolean) {
+    if (!user) return;
+    setSaving(true);
+    try {
+      await updateCourse(user.uid, course.id, { autoRevisionTasks: next });
+      await syncRevisionTemplate(
+        user.uid,
+        { ...course, autoRevisionTasks: next },
+        recurringTemplates.filter((template) => template.courseId === course.id),
+        workMinutes
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (target <= 0) return null;
+  return (
+    <div className="mt-1 space-y-1 pl-2 text-[11px] text-ink-500">
+      <label className="flex items-center gap-2">
+        <input type="checkbox" className="h-3 w-3" checked={enabled} disabled={saving} onChange={(event) => toggle(event.target.checked)} />
+        <span>Generate revision tasks automatically each week</span>
+      </label>
+      {!enabled && plannedThisWeek === 0 ? (
+        <p className="text-amber-700 dark:text-amber-400">
+          This target isn&apos;t scheduled yet this week.{" "}
+          <Link href="/plan/week" className="underline">
+            Plan it
+          </Link>
+          .
+        </p>
+      ) : null}
+    </div>
   );
 }

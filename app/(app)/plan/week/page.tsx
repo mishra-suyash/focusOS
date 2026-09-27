@@ -8,6 +8,8 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { InfoHint } from "@/components/info-hint";
 import { ModuleGate } from "@/components/module-gate";
 import { SectionHeader } from "@/components/section-header";
+import { ProposalInspector, WeekGrid, type WeekGridPlacement } from "@/components/plan/week-grid";
+import { TypedTimeInput } from "@/components/plan/typed-time-input";
 import { useAuth } from "@/components/auth-provider";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -31,12 +33,14 @@ import { taskBucketLabels } from "@/lib/options";
 import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, estimatedReviewMinutes } from "@/lib/revision";
 import { isTemplateDueOn } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
-import { minutesFromTime, sortedSlots, validateSlots } from "@/lib/schedule";
+import { describeObjective, objectiveChipText } from "@/lib/objectives";
+import { minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
 import { isBreakMode } from "@/lib/terms";
 import { loggedMinutesForTask } from "@/lib/tracking";
 import { DEFAULT_MAX_CHUNK_MINUTES, DEFAULT_MIN_CHUNK_MINUTES, sittingTitle, splitIntoChunks, taskBlockMinutes, taskChunkMinutes } from "@/lib/timeline";
 import {
   DEFAULT_WORKING_WINDOW,
+  placeInWindow,
   placeProposals,
   weekCapacity,
   weeklyPlanningSlotForDate,
@@ -56,6 +60,7 @@ import type {
   RecurringTaskTemplate,
   RevisionItem,
   ScheduleSlot,
+  SlotObjectiveRef,
   Task,
   TaskBucket,
   Term,
@@ -64,6 +69,26 @@ import type {
 } from "@/types";
 
 const COURSE_BUCKETS: TaskBucket[] = ["revision", "assignment", "backlog"];
+/** plan/16 §5.4 — how far ahead "What's coming" looks. Configurable per account; 14 days is the
+ *  plan's default, and is roughly two planning cycles, so a thing appears there before the week it
+ *  is due rather than in the week it is due. */
+const DEFAULT_UPCOMING_HORIZON_DAYS = 14;
+
+/** plan/16 §5.4 — one real, dated thing in the horizon, with an estimate and the days it would
+ *  prefer. The tentative *time* isn't stored on the row: it depends on what the chosen day already
+ *  contains, so it's derived in `tentativeTime` from whichever day the row currently points at. */
+type UpcomingRow = {
+  id: string;
+  title: string;
+  detail: string;
+  minutes: number;
+  type: WeekProposalCandidate["type"];
+  preferredDateKeys: string[];
+  courseId?: string;
+  bucket?: TaskBucket;
+  taskId?: string;
+  objectiveRef?: SlotObjectiveRef;
+};
 const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function formatHours(minutes: number): string {
@@ -490,7 +515,181 @@ function PlanWeekContent() {
     }
   }
 
-  const freshProposals = placeProposals(candidates, weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys);
+  /**
+   * plan/16 §5.4 — "What's coming": every real, dated thing in the next `horizonDays`, each with an
+   * estimate and a **prefilled tentative day and time the user confirms or edits**.
+   *
+   * This is the other half of detaching derived course work from the timeline. Step 4 used to place
+   * that work invisibly and write it to a day on one click; now the app still does the thinking —
+   * the suggested day comes from exactly the preferences plan/15 §5.2 already places by (lead time
+   * back from a deadline, a course's own lecture days for revision, the weekend for leftovers) and
+   * the suggested time is the first gap that actually fits it — but the suggestion is visible and
+   * editable instead of applied behind the user's back.
+   *
+   * Accepting a row generates *candidates*, never slots: the first sitting pinned to the confirmed
+   * day and time, its siblings preferring the days after it, all of them flowing into the same
+   * placement pass and the same grid as everything else. Nothing reaches a day's schedule without
+   * passing through Accept in Step 4.
+   */
+  const horizonDays = settings.upcomingHorizonDays ?? DEFAULT_UPCOMING_HORIZON_DAYS;
+  const horizonEnd = addDaysToKey(todayK, horizonDays);
+  const [upcomingDrafts, setUpcomingDrafts] = useState<Record<string, { minutes: number; dateKey: string; startTime: string }>>({});
+  const [acceptedUpcoming, setAcceptedUpcoming] = useState<string[]>([]);
+  const [extraCandidates, setExtraCandidates] = useState<WeekProposalCandidate[]>([]);
+  useEffect(() => {
+    setUpcomingDrafts({});
+    setAcceptedUpcoming([]);
+    setExtraCandidates([]);
+  }, [weekStart]);
+
+  /** The first day in `preferred` that is a workable day this week, else the first workable day. */
+  function firstUsableDay(preferred: string[]): string {
+    const workable = weekDateKeys.filter((d) => !offDateKeys.has(d) && workingWindow.daysOfWeek.includes(getDay(parseISO(d))));
+    return preferred.find((d) => workable.includes(d)) ?? workable[0] ?? weekDateKeys[0];
+  }
+
+  /** The tentative clock time: the first gap on that day that actually fits, so the prefill is a
+   *  time the placement search itself could have chosen — not a guess the user has to fix. */
+  function tentativeTime(dateKey: string, minutes: number): string {
+    const start = placeInWindow(
+      claimedSlotsByDate[dateKey] ?? [],
+      minutesFromTime(workingWindow.startTime),
+      minutesFromTime(workingWindow.endTime),
+      minutes
+    );
+    return minutesToTime(start ?? minutesFromTime(workingWindow.startTime));
+  }
+
+  const upcomingRows: UpcomingRow[] = [];
+  for (const cp of allCheckpoints) {
+    if (!cp.dueAt || cp.dueAt < todayK || cp.dueAt > horizonEnd) continue;
+    if (cp.status === "done" || cp.status === "missed") continue;
+    const minutes = cp.requiresPrep ? cp.prepEstimateMin : 0;
+    if (minutes <= 0) continue;
+    upcomingRows.push({
+      id: `checkpoint:${cp.id}`,
+      title: `Prep: ${cp.title}`,
+      detail: `Checkpoint · due ${cp.dueAt}`,
+      minutes,
+      type: "deep_work",
+      // Lead time back from the deadline, the same spread plan/15 §5.2 already uses for prep.
+      preferredDateKeys: weekDateKeys.filter((d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt),
+      objectiveRef: { kind: "checkpoint", id: cp.id }
+    });
+  }
+  for (const course of activeCourses) {
+    const lectureDays = weekDateKeys.filter((d) => !isBreakMode(terms, d) && courseSlotsForDate([course], d).length > 0);
+    for (const bucket of COURSE_BUCKETS) {
+      const target = hoursFor(course, bucket);
+      const already =
+        scheduledMinutesThisWeek(tasks, course.id, bucket, workMinutes, weekDateKeys) + plannedMinutesThisWeek(schedules, course.id, bucket, weekDateKeys);
+      const outstanding = Math.max(0, target - already);
+      if (outstanding <= 0) continue;
+      upcomingRows.push({
+        id: `bucket:${course.id}:${bucket}`,
+        title: `${course.name} — ${taskBucketLabels[bucket]}`,
+        detail: `${formatHours(already)} of ${formatHours(target)} planned this week`,
+        minutes: outstanding,
+        type: "deep_work",
+        courseId: course.id,
+        bucket,
+        preferredDateKeys: bucket === "revision" ? lectureDays : bucket === "backlog" ? weekend : []
+      });
+    }
+  }
+  for (const task of tasks) {
+    if (task.status === "done" || !task.dueDate || task.dueDate < todayK || task.dueDate > horizonEnd) continue;
+    const outstanding = Math.max(
+      0,
+      taskBlockMinutes(task, workMinutes) - Math.max(loggedMinutesForTask(sessions, task.id), plannedMinutesForTask(schedules, task.id, weekDateKeys))
+    );
+    if (outstanding <= 0) continue;
+    upcomingRows.push({
+      id: `task:${task.id}`,
+      title: task.title,
+      detail: `${task.kind === "external" ? "External · " : ""}Task · due ${task.dueDate}`,
+      minutes: outstanding,
+      type: "deep_work",
+      taskId: task.id,
+      courseId: task.courseId,
+      bucket: task.bucket,
+      // A couple of days of runway before the deadline, clamped into this week.
+      preferredDateKeys: weekDateKeys.filter((d) => d <= task.dueDate!)
+    });
+  }
+  for (const goal of activeGoals) {
+    for (const milestone of goal.milestones) {
+      if (milestone.done || !milestone.dueAt || milestone.dueAt < todayK || milestone.dueAt > horizonEnd) continue;
+      upcomingRows.push({
+        id: `milestone:${goal.id}:${milestone.id}`,
+        title: `${goal.title} — ${milestone.title}`,
+        detail: `Milestone · due ${milestone.dueAt}`,
+        minutes: Math.max(30, Math.round((goal.targetHoursPerWeek ?? 1) * 60)),
+        type: "deep_work",
+        preferredDateKeys: weekDateKeys.filter((d) => d <= milestone.dueAt!),
+        objectiveRef: { kind: "goal", id: goal.id, milestoneId: milestone.id }
+      });
+    }
+  }
+  if (dueRevisionCount > 0 && revisionQueueMinutesPerDay > 0) {
+    upcomingRows.push({
+      id: "revisionQueue",
+      title: `Review ${dueRevisionCount} due item${dueRevisionCount === 1 ? "" : "s"}`,
+      detail: "Spaced repetition queue",
+      minutes: revisionQueueMinutesPerDay,
+      type: "deep_work",
+      preferredDateKeys: [],
+      objectiveRef: { kind: "revisionQueue" }
+    });
+  }
+  for (const paper of stalePapers) {
+    upcomingRows.push({
+      id: `paper:${paper.id}`,
+      title: `Read: ${paper.title}`,
+      detail: `Untouched ${paper.daysSinceUpdate} days`,
+      minutes: 45,
+      type: "reading",
+      preferredDateKeys: paper.weeklyTargetDay != null ? weekDateKeys.filter((d) => getDay(parseISO(d)) === paper.weeklyTargetDay) : [],
+      objectiveRef: { kind: "paper", id: paper.id }
+    });
+  }
+
+  /** A row's current values: the derived prefill, overridden by whatever the user has typed. */
+  function upcomingValues(row: UpcomingRow): { minutes: number; dateKey: string; startTime: string } {
+    const draft = upcomingDrafts[row.id];
+    if (draft) return draft;
+    const dateKey = firstUsableDay(row.preferredDateKeys);
+    const minutes = row.minutes;
+    return { minutes, dateKey, startTime: tentativeTime(dateKey, Math.min(minutes, chunkOpts.maxChunkMinutes)) };
+  }
+
+  function acceptUpcoming(row: UpcomingRow) {
+    const { minutes, dateKey, startTime } = upcomingValues(row);
+    const sittings = splitIntoChunks(minutes, chunkOpts);
+    if (sittings.length === 0) return;
+    const groupId = `upcoming:${row.id}:${weekStart}`;
+    const laterDays = weekDateKeys.filter((d) => d >= dateKey && !offDateKeys.has(d));
+    const added: WeekProposalCandidate[] = sittings.map((sittingMinutes, index) => ({
+      title: sittings.length > 1 ? sittingTitle(row.title, index + 1, sittings.length) : row.title,
+      type: row.type,
+      durationMinutes: sittingMinutes,
+      plannedMinutes: sittingMinutes,
+      key: `upcoming:${row.id}:${index}`,
+      capGroup: `upcoming:${row.id}`,
+      ...(row.courseId ? { courseId: row.courseId } : {}),
+      ...(row.bucket ? { bucket: row.bucket } : {}),
+      ...(row.taskId ? { taskId: row.taskId } : {}),
+      ...(row.objectiveRef ? { objectiveRef: row.objectiveRef } : {}),
+      ...(sittings.length > 1 ? { chunk: { groupId, index: index + 1, total: sittings.length } } : {}),
+      // The first sitting goes exactly where the user said. The rest prefer the days from there on,
+      // so a confirmed time anchors the work without pinning every sibling to the same hour.
+      ...(index === 0 ? { dateKey, fixedStartTime: startTime } : { preferredDateKeys: laterDays })
+    }));
+    setExtraCandidates((current) => [...current.filter((c) => !c.key?.startsWith(`upcoming:${row.id}:`)), ...added]);
+    setAcceptedUpcoming((current) => [...current, row.id]);
+  }
+
+  const freshProposals = placeProposals([...candidates, ...extraCandidates], weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys);
   const proposals: WeekProposal[] = committed
     ? (existingReview!.plan!.proposedBlocks.map((p, index) => ({ ...p, key: p.key ?? `${index}`, fits: true })) as WeekProposal[])
     : freshProposals;
@@ -508,6 +707,83 @@ function PlanWeekContent() {
     setDecisions(existingReview?.plan?.blockDecisions ?? {});
      
   }, [weekStart, existingReview?.plan?.blockDecisions]);
+
+  /**
+   * plan/16 §5.3 — where the user has dragged (or typed) a proposal, keyed by its stable `key`.
+   * Local only: a move writes nothing until Accept, because `WeekPlan.proposedBlocks` is a Firestore
+   * array field whose `merge: true` write replaces it wholesale, so persisting each drag would mean
+   * rewriting the entire array on every pointer-up. Accept was already the commit point.
+   *
+   * Cleared when the week changes. Not cleared when the candidate list shifts, which is exactly why
+   * the keys had to become stable first (see `WeekProposalCandidate.key`).
+   */
+  const [placements, setPlacements] = useState<Record<string, WeekGridPlacement>>({});
+  useEffect(() => setPlacements({}), [weekStart]);
+  const [gridMessage, setGridMessage] = useState("");
+
+  /**
+   * A proposal as the user has last left it: the placement search's answer, overridden by any move.
+   * A proposal the search couldn't fit anywhere (`fits: false`) becomes acceptable the moment it is
+   * given a position by hand — which is the point of the inspector, and the only route that existed
+   * for such a proposal before this was Dismiss.
+   */
+  const effectiveProposals: WeekProposal[] = proposals.map((p) => {
+    const placement = placements[p.key];
+    if (!placement) return p;
+    return {
+      ...p,
+      dateKey: placement.dateKey,
+      startTime: minutesToTime(placement.startMinutes),
+      endTime: minutesToTime(placement.startMinutes + placement.durationMinutes),
+      durationMinutes: placement.durationMinutes,
+      plannedMinutes: placement.durationMinutes,
+      fits: true
+    };
+  });
+  const undecidedProposals = effectiveProposals.filter((p) => !decisions[p.key]);
+
+  /** Why a proposal can't be accepted where it currently sits — the sentence the inspector shows,
+   *  and the reason its Accept button is disabled. Checked against the same two layers the grid
+   *  refuses drops over: what the day already contains, and every other proposal still standing. */
+  function placementProblem(p: WeekProposal): string | null {
+    if (!p.fits && !placements[p.key]) {
+      return p.fixedStartTime
+        ? `Its fixed time (${p.fixedStartTime}) on ${p.dateKey.slice(5)} is already taken — pick another day or time.`
+        : `No free gap of ${p.durationMinutes}m was found — pick a day and time.`;
+    }
+    if (offDateKeys.has(p.dateKey)) return "That day is marked off.";
+    const start = minutesFromTime(p.startTime);
+    const end = minutesFromTime(p.endTime);
+    if (start < minutesFromTime(workingWindow.startTime) || end > minutesFromTime(workingWindow.endTime)) {
+      return `Outside your working window (${workingWindow.startTime}–${workingWindow.endTime}).`;
+    }
+    const others = [
+      ...(claimedSlotsByDate[p.dateKey] ?? []),
+      ...undecidedProposals.filter((other) => other.key !== p.key && other.dateKey === p.dateKey)
+    ];
+    const clash = others.find((other) => start < minutesFromTime(other.endTime) && minutesFromTime(other.startTime) < end);
+    return clash ? `Overlaps "${clash.title}" (${clash.startTime}–${clash.endTime}).` : null;
+  }
+
+  const objectiveCtx = { courses, papers, checkpoints: allCheckpoints, tasks, goals };
+  /** plan/16 §5.2 — the objective chip a proposal shows, read off the slot it *would* become so the
+   *  grid, the day timeline and the Now card can never word the same block differently. */
+  function chipForProposal(p: WeekProposal): string | null {
+    const asSlot: ScheduleSlot = {
+      id: p.key,
+      title: p.title,
+      type: p.type,
+      startTime: p.startTime,
+      endTime: p.endTime,
+      status: "upcoming",
+      ...(p.courseId ? { courseId: p.courseId } : {}),
+      ...(p.bucket ? { bucket: p.bucket } : {}),
+      ...(p.taskId ? { assignedTaskIds: [p.taskId] } : {}),
+      ...(p.objectiveRef ? { objectiveRef: p.objectiveRef } : {}),
+      ...(p.chunk ? { chunk: p.chunk } : {})
+    };
+    return objectiveChipText(asSlot, describeObjective(asSlot, objectiveCtx));
+  }
 
   const [acceptError, setAcceptError] = useState("");
   const [accepting, setAccepting] = useState(false);
@@ -685,8 +961,6 @@ function PlanWeekContent() {
     }
   }
 
-  const workingByDate = new Map(candidatesGroupedByDate(proposals));
-
   return (
     <>
       <SectionHeader title="Weekly planning" eyebrow={`Week of ${weekStart}`} />
@@ -819,6 +1093,95 @@ function PlanWeekContent() {
         </p>
       </section>
 
+      <section className="card mb-6 max-w-5xl p-5">
+        <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-base font-semibold">2.5 What&apos;s coming</h2>
+          <label className="flex items-center gap-2 text-xs text-ink-500">
+            Next
+            <input
+              className="input w-16 py-1 text-xs"
+              type="number"
+              min={1}
+              max={60}
+              value={horizonDays}
+              onChange={(e) => updateSettings({ upcomingHorizonDays: Math.max(1, Math.min(60, Number(e.target.value))) })}
+            />
+            days
+          </label>
+        </div>
+        <p className="mb-3 text-xs text-ink-500">
+          Everything real and dated in the window, with a suggested day and time you can change. Accepting a row adds it to the
+          week below as sittings — it still doesn&apos;t touch any day until you accept it there.
+        </p>
+        {upcomingRows.length === 0 ? (
+          <p className="text-sm text-ink-500">Nothing dated in the next {horizonDays} days.</p>
+        ) : (
+          <div className="space-y-1">
+            {upcomingRows.map((row) => {
+              const values = upcomingValues(row);
+              const accepted = acceptedUpcoming.includes(row.id);
+              const sittings = splitIntoChunks(values.minutes, chunkOpts);
+              return (
+                <div key={row.id} className="flex flex-wrap items-center gap-2 rounded-md bg-ink-50 px-3 py-2 text-xs dark:bg-ink-800">
+                  <span className="min-w-48 flex-1">
+                    <span className="block truncate font-medium">{row.title}</span>
+                    <span className="block truncate text-ink-500">
+                      {row.detail}
+                      {sittings.length > 1 ? ` · ${sittings.length} sittings` : ""}
+                    </span>
+                  </span>
+                  <label className="flex items-center gap-1">
+                    <input
+                      className="input w-16 py-1 text-xs"
+                      type="number"
+                      min={5}
+                      step={5}
+                      aria-label={`Minutes for ${row.title}`}
+                      value={values.minutes}
+                      disabled={accepted || committed}
+                      onChange={(e) => setUpcomingDrafts((current) => ({ ...current, [row.id]: { ...values, minutes: Math.max(5, Number(e.target.value)) } }))}
+                    />
+                    <span className="text-ink-500">min</span>
+                  </label>
+                  <select
+                    className="input w-28 py-1 text-xs"
+                    aria-label={`Day for ${row.title}`}
+                    value={values.dateKey}
+                    disabled={accepted || committed}
+                    onChange={(e) =>
+                      setUpcomingDrafts((current) => ({
+                        ...current,
+                        [row.id]: { ...values, dateKey: e.target.value, startTime: tentativeTime(e.target.value, Math.min(values.minutes, chunkOpts.maxChunkMinutes)) }
+                      }))
+                    }
+                  >
+                    {weekDateKeys.map((d, i) => (
+                      <option key={d} value={d} disabled={offDateKeys.has(d)}>
+                        {DAY_LABELS[i]} {d.slice(5)}
+                        {offDateKeys.has(d) ? " (off)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <TypedTimeInput
+                    className="input w-20 py-1 text-xs"
+                    value={values.startTime}
+                    disabled={accepted || committed}
+                    onChange={(time) => setUpcomingDrafts((current) => ({ ...current, [row.id]: { ...values, startTime: time } }))}
+                  />
+                  {accepted ? (
+                    <span className="text-ink-500">added below</span>
+                  ) : (
+                    <button className="btn-secondary px-2 py-1" onClick={() => acceptUpcoming(row)} disabled={committed}>
+                      Add to week
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
       <section className="card mb-6 max-w-4xl p-5">
         <h2 className="mb-3 text-base font-semibold">3. Set this week&apos;s hours</h2>
         <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-ink-500">
@@ -898,14 +1261,16 @@ function PlanWeekContent() {
         </button>
       </section>
 
-      <section className="card mb-6 max-w-5xl p-5">
-        <h2 className="mb-3 text-base font-semibold">4. Assign the week</h2>
+      <section className="card mb-6 max-w-6xl p-5">
+        <h2 className="mb-1 text-base font-semibold">4. Assign the week</h2>
+        <p className="mb-3 text-xs text-ink-500">
+          Drag a sitting to a different day or time, or use the list below — both do the same thing. Nothing is written to a day
+          until you accept it.
+        </p>
         {acceptError ? <p className="mb-2 text-sm text-red-600">{acceptError}</p> : null}
-        <div className="mb-3">
-          <button className="btn-primary" onClick={() => acceptProposals(proposals)} disabled={accepting || committed}>
-            {accepting ? "Accepting..." : "Accept all"}
-          </button>
-        </div>
+        <p className="sr-only" role="status" aria-live="polite">
+          {gridMessage}
+        </p>
         {stalePapers.length > 0 || backlogTasks.length > 0 ? (
           <div className="mb-4 space-y-1">
             <p className="label mb-1 inline-flex items-center gap-1">
@@ -930,58 +1295,102 @@ function PlanWeekContent() {
             ))}
           </div>
         ) : null}
-        <div className="space-y-4">
-          {weekDateKeys.map((d, i) => {
-            const dayProposals = (workingByDate.get(d) ?? []).filter((p) => p.fits);
-            if (dayProposals.length === 0) return null;
-            return (
-              <div key={d}>
-                <div className="mb-1 flex items-center justify-between">
-                  <p className="text-sm font-medium">{DAY_LABELS[i]} {d.slice(5)}</p>
-                  <button className="btn-secondary px-2 py-1 text-xs" onClick={() => acceptProposals(dayProposals)} disabled={accepting || committed}>
-                    Accept day
-                  </button>
-                </div>
-                <div className="space-y-1">
-                  {dayProposals.map((p) => (
-                    <div key={p.key} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-ink-50 px-3 py-2 text-xs dark:bg-ink-800">
-                      <span>
-                        {p.startTime}–{p.endTime} · {p.title}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        {decisions[p.key] ? (
-                          <span className="text-ink-500">{decisions[p.key]}</span>
-                        ) : (
-                          <>
-                            <button className="btn-secondary px-2 py-1" onClick={() => acceptProposals([p])} disabled={accepting || committed}>
-                              Accept
-                            </button>
-                            <button className="btn-secondary px-2 py-1" onClick={() => dismissProposal(p)} disabled={accepting || committed}>
-                              Dismiss
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+
+        {/* plan/16 §5.3 — the grid is the enhancement; the list below is the floor. The grid is
+            hidden rather than squeezed on narrow screens, where seven columns can't be read. */}
+        <div className="mb-4 hidden lg:block">
+          <WeekGrid
+            weekDateKeys={weekDateKeys}
+            dayLabels={DAY_LABELS}
+            workingWindow={workingWindow}
+            offDateKeys={offDateKeys}
+            fixedSlotsByDate={claimedSlotsByDate}
+            proposals={undecidedProposals.filter((p) => p.fits)}
+            decisions={decisions}
+            onPlace={(key, placement) => setPlacements((current) => ({ ...current, [key]: placement }))}
+            onAccept={(key) => {
+              const proposal = effectiveProposals.find((p) => p.key === key);
+              if (proposal) acceptProposals([proposal]);
+            }}
+            disabled={accepting || committed}
+            chipFor={chipForProposal}
+            dayScoreFor={(dateKey) => (dateKey < todayK ? weekDayDocs.get(dateKey)?.game?.score ?? null : null)}
+            announce={setGridMessage}
+          />
         </div>
-        {proposals.some((p) => !p.fits) ? (
+
+        {undecidedProposals.length === 0 ? (
+          <p className="text-sm text-ink-500">Nothing left to assign this week.</p>
+        ) : (
+          <div className="space-y-4">
+            {weekDateKeys.map((d, i) => {
+              const dayProposals = undecidedProposals.filter((p) => p.fits && p.dateKey === d);
+              if (dayProposals.length === 0) return null;
+              return (
+                <div key={d}>
+                  <p className="mb-1 text-sm font-medium">
+                    {DAY_LABELS[i]} {d.slice(5)}
+                  </p>
+                  <div className="space-y-1">
+                    {dayProposals.map((p) => (
+                      <ProposalInspector
+                        key={p.key}
+                        proposal={p}
+                        weekDateKeys={weekDateKeys}
+                        dayLabels={DAY_LABELS}
+                        offDateKeys={offDateKeys}
+                        decision={decisions[p.key]}
+                        onPlace={(key, placement) => setPlacements((current) => ({ ...current, [key]: placement }))}
+                        onAccept={(key) => {
+                          const proposal = effectiveProposals.find((item) => item.key === key);
+                          if (proposal) acceptProposals([proposal]);
+                        }}
+                        onDismiss={(key) => {
+                          const proposal = effectiveProposals.find((item) => item.key === key);
+                          if (proposal) dismissProposal(proposal);
+                        }}
+                        disabled={accepting || committed}
+                        chip={chipForProposal(p)}
+                        invalidReason={placementProblem(p)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* plan/16 §5.3 — "Didn't fit" is no longer a dead end. A proposal the search couldn't place
+            keeps its own row with a day and time to choose, so the only route out of it stopped
+            being Dismiss. */}
+        {undecidedProposals.some((p) => !p.fits) ? (
           <div className="mt-4">
-            <p className="label mb-1">Didn&apos;t fit</p>
+            <p className="label mb-1">Didn&apos;t fit — pick a day and time</p>
             <div className="space-y-1">
-              {proposals
+              {undecidedProposals
                 .filter((p) => !p.fits)
                 .map((p) => (
-                  <p key={p.key} className="rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
-                    {p.title} —{" "}
-                    {p.fixedStartTime
-                      ? `its fixed time (${p.fixedStartTime}) on ${p.dateKey.slice(5)} is already taken.`
-                      : `no free gap of ${p.durationMinutes}m inside the working window.`}
-                  </p>
+                  <ProposalInspector
+                    key={p.key}
+                    proposal={p}
+                    weekDateKeys={weekDateKeys}
+                    dayLabels={DAY_LABELS}
+                    offDateKeys={offDateKeys}
+                    decision={decisions[p.key]}
+                    onPlace={(key, placement) => setPlacements((current) => ({ ...current, [key]: placement }))}
+                    onAccept={(key) => {
+                      const proposal = effectiveProposals.find((item) => item.key === key);
+                      if (proposal) acceptProposals([proposal]);
+                    }}
+                    onDismiss={(key) => {
+                      const proposal = effectiveProposals.find((item) => item.key === key);
+                      if (proposal) dismissProposal(proposal);
+                    }}
+                    disabled={accepting || committed}
+                    chip={chipForProposal(p)}
+                    invalidReason={placementProblem(p)}
+                  />
                 ))}
             </div>
           </div>
@@ -1001,15 +1410,6 @@ function PlanWeekContent() {
       </section>
     </>
   );
-}
-
-function candidatesGroupedByDate(proposals: WeekProposal[]): [string, WeekProposal[]][] {
-  const map = new Map<string, WeekProposal[]>();
-  for (const p of proposals) {
-    if (!map.has(p.dateKey)) map.set(p.dateKey, []);
-    map.get(p.dateKey)!.push(p);
-  }
-  return Array.from(map.entries());
 }
 
 function Stat({ label, value }: { label: string; value: string }) {

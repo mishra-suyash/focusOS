@@ -69,12 +69,15 @@ export const dayOfWeekLabels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thu
  */
 export async function syncRevisionTemplate(
   uid: string,
-  course: Pick<Course, "id" | "name" | "targetMinutesPerWeek" | "startDate" | "endDate">,
+  course: Pick<Course, "id" | "name" | "targetMinutesPerWeek" | "startDate" | "endDate" | "autoRevisionTasks">,
   courseTemplates: RecurringTaskTemplate[],
   workMinutes: number
 ) {
   const existing = courseTemplates.find((template) => template.generatedFrom === "courseRevisionTarget");
-  const plan = planRevisionTemplateSync(course, existing, workMinutes);
+  // plan/16 §5.4 — absent reads as "on" only for a course that already has an auto template, so
+  // pre-`16` courses keep generating and new ones don't start.
+  const autoEnabled = course.autoRevisionTasks ?? Boolean(existing);
+  const plan = planRevisionTemplateSync(course, existing, workMinutes, autoEnabled);
   // "create" goes through setRecurringTaskTemplate's deterministic id, not createRecurringTaskTemplate's
   // addDoc — see revisionTemplateId's comment: two overlapping "Save" clicks must land on one document.
   if (plan.action === "create") await setRecurringTaskTemplate(uid, plan.templateId, plan.template);
