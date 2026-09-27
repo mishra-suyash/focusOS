@@ -109,6 +109,15 @@ export function planRevisionTemplateSync(
   // Matches lib/timeline.ts's taskBlockMinutes inverse: a task's real duration is
   // estimatedPomodoros * workMinutes, floored at one pomodoro so a small hours target never
   // rounds down to a task with nothing to actually do.
+  //
+  // Deliberately *not* capped at one sitting here, although plan/16 §5.1 lists this function among
+  // the call sites that inherit the cap. Capping the estimate would not shorten a block, it would
+  // silently shrink the target: a 3-hour revision commitment would become a 50-minute one and two
+  // and a half hours of intended work would vanish. The cap belongs where a task becomes a *block*
+  // — `taskChunkMinutes`/`createTaskBlock` (lib/timeline.ts) and the weekly planner's own candidate
+  // generation — and every one of those paths now applies it, so the generated task still cannot
+  // produce a block longer than one sitting. This stays the honest total.
+  
   const estimatedPomodoros = Math.max(1, Math.round(minutesPerWeek / workMinutes));
 
   if (!existing) {

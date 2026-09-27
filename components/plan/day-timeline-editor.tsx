@@ -15,6 +15,7 @@ import { useDay } from "@/hooks/use-day";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { clearDayOff, createDayTemplate, saveDayFields, setDayOff } from "@/lib/firestore";
+import { describeObjective, objectiveChipText } from "@/lib/objectives";
 import {
   createSlot,
   formatMinutes,
@@ -31,7 +32,7 @@ import {
 } from "@/lib/schedule";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 import { MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay } from "@/lib/timeline";
-import type { Course, DailySchedule, DayTemplate, PomodoroSession, ScheduleSlot, Task } from "@/types";
+import type { Checkpoint, Course, DailySchedule, DayTemplate, Goal, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 const DEFAULT_SCROLL_MINUTE = 8 * 60;
 const DELETE_UNDO_WINDOW_MS = 6_000;
@@ -66,6 +67,9 @@ export function DayTimelineEditor({
   wantedLockedSlots,
   tasks,
   courses,
+  papers = [],
+  checkpoints = [],
+  goals = [],
   templates,
   onSlotsChange
 }: {
@@ -88,6 +92,11 @@ export function DayTimelineEditor({
   /** Phase 1 (plan/14 §11) — only used to gate `BlockInspector`'s course/bucket picker (rendered
    *  only when the user has courses at all), the same conditional `TaskForm`'s course select uses. */
   courses: Course[];
+  /** plan/16 §5.2 — the rest of the objective context, forwarded to the grid's chips and the block
+   *  inspector. Optional: `describeObjective` degrades to an objective's label without them. */
+  papers?: Paper[];
+  checkpoints?: Checkpoint[];
+  goals?: Goal[];
   /** plan/13 A18 — turning this editor on hid the classic aside's whole Templates panel, taking its
    * only "Browse templates"/Apply action with it (this editor previously offered "Save as
    * template" but nothing that pulled a template back onto the day). Passed in so that capability
@@ -636,6 +645,7 @@ export function DayTimelineEditor({
           Command Z to undo.
         </p>
         <TimeGrid
+          chipFor={(slot) => objectiveChipText(slot, describeObjective(slot, { courses, papers, checkpoints, tasks, goals }))}
           ref={gridRef}
           slots={slots}
           selectedId={selectedId}
@@ -674,6 +684,9 @@ export function DayTimelineEditor({
               allSlots={slots}
               tasks={tasks}
               courses={courses}
+              papers={papers}
+              checkpoints={checkpoints}
+              goals={goals}
               onChange={updateSlot}
               onDelete={() => deleteSelected(selectedSlot.id)}
               autoFocusTitle={selectedSlot.id === justCreatedId}

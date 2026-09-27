@@ -993,6 +993,14 @@ export interface UserSettings {
   sittingNotifications?: { enabled: boolean; leadMinutes: number; granted?: boolean };
   /** plan/16 §5.4 — how many days ahead weekly planning's "What's coming" looks. Absent = 14. */
   upcomingHorizonDays?: number;
+  /** plan/16 §6 Phase 1's callout — whether the one-time "your week is shaped differently now"
+   *  notice on /plan/week has been dismissed. Phase 1 changed the shape of every existing weekly
+   *  plan with no flag: a 3-hour revision target went from seven 25-minute chunks to four 45-minute
+   *  sittings, because 25 was only ever a *timer* default and never a considered statement about
+   *  how long a block of revision should be. That is the intended improvement, and it is also the
+   *  most visible consequence of the earliest phase, so it is announced once rather than simply
+   *  turning up. Absent = not yet seen. */
+  seenSittingsNotice?: boolean;
   updatedAt: string;
 }
 

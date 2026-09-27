@@ -12,6 +12,7 @@ import { ProposalInspector, WeekGrid, type WeekGridPlacement } from "@/component
 import { TypedTimeInput } from "@/components/plan/typed-time-input";
 import { useAuth } from "@/components/auth-provider";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
+import { useFeatures } from "@/hooks/use-features";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { averageFocusRating } from "@/lib/analytics";
@@ -121,6 +122,11 @@ function PlanWeekContent() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
   const { settings, update: updateSettings } = useUserSettings();
+  // plan/16 §5.6 / AC #24 — every score surface is gated on the one module, including the two on
+  // this page. A module toggle that leaves a score still showing somewhere is the coherence bug
+  // plan/13 C1 already had to fix once for Workload.
+  const { isEnabled } = useFeatures();
+  const dayScoreOn = isEnabled("dayScore");
   const todayK = todayKey();
 
   // Memoized end to end (weekStart -> priorWeekStart -> the where-clause constraints below) so
@@ -1009,6 +1015,25 @@ function PlanWeekContent() {
         </button>
       </div>
 
+      {!settings.seenSittingsNotice ? (
+        <section className="card mb-6 max-w-5xl border-l-2 border-l-moss-600 p-4 text-sm">
+          <p className="font-medium">Your week is shaped differently now.</p>
+          <p className="mt-1 text-ink-500">
+            Work is planned in <strong>sittings</strong> — blocks capped at {chunkOpts.maxChunkMinutes} minutes, split across the week and
+            labelled &ldquo;2 of 7&rdquo;. A three-hour revision target used to become seven 25-minute blocks, because 25 is the focus
+            timer&apos;s default, not a considered length for a block of revision; it now becomes a few longer ones. Big tasks that
+            never fit anywhere are split instead of landing under &ldquo;Didn&apos;t fit&rdquo;. Change the cap in{" "}
+            <Link href="/settings" className="underline">
+              Settings
+            </Link>
+            .
+          </p>
+          <button className="btn-secondary mt-3 px-2 py-1 text-xs" onClick={() => updateSettings({ seenSittingsNotice: true })}>
+            Got it
+          </button>
+        </section>
+      ) : null}
+
       <ModuleGate moduleId="weeklyCheckin">
         <section className="card mb-6 max-w-4xl p-5">
           <h2 className="mb-3 text-base font-semibold">1. Look back — week of {priorWeekStart}</h2>
@@ -1022,7 +1047,7 @@ function PlanWeekContent() {
             <Stat label="Stale papers (14d+)" value={`${priorStalePapers.length}`} />
             <Stat label="Tasks still open" value={`${overdueOpenTasks.length}`} />
             <Stat label="Focus average" value={avgFocus ? `${avgFocus}` : "-"} />
-            <Stat label="Average day score" value={avgDayScore != null ? `${avgDayScore}` : "-"} />
+            {dayScoreOn ? <Stat label="Average day score" value={avgDayScore != null ? `${avgDayScore}` : "-"} /> : null}
           </div>
           {overdueOpenTasks.length > 0 ? (
             <p className="mb-3 text-sm text-ink-500">
@@ -1341,7 +1366,7 @@ function PlanWeekContent() {
             }}
             disabled={accepting || committed}
             chipFor={chipForProposal}
-            dayScoreFor={(dateKey) => (dateKey < todayK ? weekDayDocs.get(dateKey)?.game?.score ?? null : null)}
+            dayScoreFor={dayScoreOn ? (dateKey) => (dateKey < todayK ? weekDayDocs.get(dateKey)?.game?.score ?? null : null) : undefined}
             announce={setGridMessage}
           />
         </div>

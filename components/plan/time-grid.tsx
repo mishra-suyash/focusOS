@@ -97,9 +97,13 @@ export const TimeGrid = forwardRef<
     suggestions?: { key: string; title: string; type: ScheduleSlotType; start: number; end: number }[];
     onAcceptSuggestion?: (key: string) => void;
     onDismissSuggestion?: (key: string) => void;
+    /** plan/16 §5.2 — "what is this block for", as chip text. Passed in rather than derived, so this
+     *  component needs none of the course/paper/checkpoint context — the same contract `WeekGrid`
+     *  uses, and the reason `describeObjective` stays the one place that knows how to read it all. */
+    chipFor?: (slot: ScheduleSlot) => string | null;
   }
 >(function TimeGrid(
-  { slots, selectedId, onSelect, onCommit, isToday, nowMinute, initialScrollMinute, onViewportChange, announce, suggestions, onAcceptSuggestion, onDismissSuggestion },
+  { slots, selectedId, onSelect, onCommit, isToday, nowMinute, initialScrollMinute, onViewportChange, announce, suggestions, onAcceptSuggestion, onDismissSuggestion, chipFor },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -400,6 +404,7 @@ export const TimeGrid = forwardRef<
             const ariaLabel = `${slot.title}, ${slotTypeLabels[slot.type]}, ${minutesToTime(start)} to ${minutesToTime(end)}, ${STATUS_WORDS[status]}${
               taskCount > 0 ? `, ${taskCount} task${taskCount > 1 ? "s" : ""}` : ""
             }${slot.chunk ? `, sitting ${slot.chunk.index} of ${slot.chunk.total}` : ""}`;
+            const objectiveChip = chipFor?.(slot) ?? null;
             return (
               <div
                 key={slot.id}
@@ -444,10 +449,13 @@ export const TimeGrid = forwardRef<
                 <span className="block truncate opacity-80">
                   {minutesToTime(start)}–{minutesToTime(end)} · {STATUS_WORDS[status]}
                   {/* plan/16 §5.1 — which sitting of a split this block is. Read straight off the
-                      slot, so the grid needs no course/paper context to show it; the full objective
-                      chip lives in the inspector, which already has that data. */}
+                      slot, so this line needs no course/paper context at all. */}
                   {slot.chunk ? ` · ${slot.chunk.index} of ${slot.chunk.total}` : ""}
                 </span>
+                {/* plan/16 §5.2 — the objective, on its own line and only when the block is tall
+                    enough to carry one without pushing the time out of view. The inspector always
+                    shows it; this is the glanceable half. */}
+                {objectiveChip && end - start >= 45 ? <span className="block truncate opacity-70">{objectiveChip}</span> : null}
                 {isBeingDragged && !preview!.valid && preview!.hintStart != null ? (
                   <span className="block truncate font-medium text-red-700 dark:text-red-300">Free at {minutesToTime(preview!.hintStart)}</span>
                 ) : null}

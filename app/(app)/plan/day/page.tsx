@@ -12,6 +12,7 @@ import { MoreOptions } from "@/components/more-options";
 import { SectionHeader } from "@/components/section-header";
 import { TemplateGalleryDialog } from "@/components/template-gallery";
 import { useAuth } from "@/components/auth-provider";
+import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useDay } from "@/hooks/use-day";
 import { useFeatures } from "@/hooks/use-features";
 import { useTemplateCatalog } from "@/hooks/use-template-catalog";
@@ -45,7 +46,7 @@ import { rangeOverlapsSlots } from "@/lib/timeline";
 import { friendlyDate, todayKey } from "@/lib/dates";
 import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
-import type { Course, DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotType, Task, Term } from "@/types";
+import type { Course, DailySchedule, DayTemplate, Goal, Paper, ScheduleSlot, ScheduleSlotType, Task, Term } from "@/types";
 
 type CatalogDayEntry = PublicCatalog["templates"][number] & { payload: DayTemplatePayload };
 
@@ -68,6 +69,13 @@ function DayPlannerContent() {
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses, loading: coursesLoading } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: terms, loading: termsLoading } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
+  // plan/16 §5.2 — the rest of the objective context. Without these a reading block on this page
+  // rendered "Paper reading" with no idea *which* paper: `describeObjective` degrades to the label
+  // when it can't resolve a reference, which is the right fallback but the wrong outcome here,
+  // since /plan/day is one of the four surfaces the plan names for objectives.
+  const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { allCheckpoints } = useCourseCheckpoints(courses);
   const { settings, loaded: settingsLoaded, update: updateSettings } = useUserSettings();
   const { catalog } = useTemplateCatalog();
   const schedule = schedules.find((item) => item.dateKey === dateKey);
@@ -296,6 +304,9 @@ function DayPlannerContent() {
                 wantedLockedSlots={wantedLockedSlots}
                 tasks={tasks}
                 courses={courses}
+                papers={papers}
+                checkpoints={allCheckpoints}
+                goals={goals}
                 templates={templates}
                 onSlotsChange={setSlots}
               />
