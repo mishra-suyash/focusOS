@@ -5,10 +5,11 @@ import { Lock, Play } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { MoreOptions } from "@/components/more-options";
 import { TypedTimeInput } from "@/components/plan/typed-time-input";
+import { describeObjective, objectiveChipText } from "@/lib/objectives";
 import { taskBucketLabels, taskBuckets } from "@/lib/options";
 import { isLockedSlot, minutesFromTime, slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
 import { categoryForSlotType, rangeOverlapsSlots } from "@/lib/timeline";
-import type { Course, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
+import type { Checkpoint, Course, Goal, Paper, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
 
 /**
  * plan/05.FocusOS-v2-Plan-Day-Timeline.md §4.3 — opens for whichever block is selected in TimeGrid.
@@ -28,6 +29,9 @@ export function BlockInspector({
   allSlots,
   tasks,
   courses,
+  papers = [],
+  checkpoints = [],
+  goals = [],
   onChange,
   onDelete,
   autoFocusTitle = false
@@ -39,6 +43,13 @@ export function BlockInspector({
   /** Phase 1 (plan/14 §11) — gates the course/bucket picker below: only rendered when the user has
    *  courses at all, the same conditional `TaskForm`'s course select already uses. */
   courses: Course[];
+  /** plan/16 §5.2 — context for the objective chip. All optional: `describeObjective` still returns
+   *  the objective's *label* without them ("Paper reading", "Prep"), it just can't name the specific
+   *  paper or checkpoint, so a caller that doesn't load them degrades to the label rather than
+   *  showing nothing. */
+  papers?: Paper[];
+  checkpoints?: Checkpoint[];
+  goals?: Goal[];
   onChange: (slot: ScheduleSlot) => void;
   onDelete: () => void;
   /** Create → type → done (§4.3) — the parent should give this component `key={slot.id}` so a fresh selection remounts it and this one-time mount effect fires again. */
@@ -50,6 +61,9 @@ export function BlockInspector({
   const [timeError, setTimeError] = useState<string | null>(null);
   const isLocked = isLockedSlot(slot);
   const isClass = slot.type === "class";
+  // plan/16 §5.2 — what this block is for, and its "3 of 7" when it is one sitting of a split.
+  const objective = describeObjective(slot, { courses, papers, checkpoints, tasks, goals });
+  const chip = objectiveChipText(slot, objective);
 
   useEffect(() => {
     if (autoFocusTitle) titleRef.current?.focus();
@@ -90,6 +104,17 @@ export function BlockInspector({
         onChange={(event) => onChange({ ...slot, title: event.target.value })}
         placeholder="Block title"
       />
+      {chip ? (
+        <p className="-mt-1 text-xs font-medium text-moss-700 dark:text-moss-400">
+          {objective?.href ? (
+            <Link href={objective.href} className="underline decoration-dotted">
+              {chip}
+            </Link>
+          ) : (
+            chip
+          )}
+        </p>
+      ) : null}
       <div className="grid grid-cols-2 gap-2">
         <TypedTimeInput value={slot.startTime} onChange={(startTime) => commitTime("startTime", startTime)} disabled={isLocked} />
         <TypedTimeInput value={slot.endTime} onChange={(endTime) => commitTime("endTime", endTime)} disabled={isLocked} />

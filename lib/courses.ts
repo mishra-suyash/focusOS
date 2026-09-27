@@ -2,7 +2,7 @@ import { getDay, parseISO } from "date-fns";
 import { weekDates, weekStartKey } from "@/lib/dates";
 import { fetchCollection, saveDailySchedule, setRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/firestore";
 import { planRevisionTemplateSync } from "@/lib/recurring-tasks";
-import { sortedSlots } from "@/lib/schedule";
+import { minutesFromTime, sortedSlots } from "@/lib/schedule";
 import type { Course, CourseStatus, DailySchedule, Goal, PomodoroSession, RecurringTaskTemplate, ScheduleSlot, Task, TaskBucket } from "@/types";
 
 /** `status` as stored can go stale (nobody flips it when a course's end date passes) — derive the real one. */
@@ -133,6 +133,64 @@ export function scheduledMinutesThisWeek(
   weekDateKeys: string[] = currentWeekDateKeys()
 ): number {
   return tasksDueThisWeek(tasks, courseId, bucket, weekDateKeys).reduce((sum, task) => sum + (task.estimatedPomodoros ?? 1) * workMinutes, 0);
+}
+
+/**
+ * plan/16 §5.8 — minutes *already placed on a day* this week for one course/bucket, summed from the
+ * real `ScheduleSlot`s on that week's schedules.
+ *
+ * This is the missing half of `scheduledMinutesThisWeek` above, and the fix for plan/16 §2.2's bug:
+ * accepting a weekly-planner proposal writes a `ScheduleSlot` carrying `courseId`/`bucket`, never a
+ * `Task`, so the task-based count above could not see accepted work at all. Step 4 therefore
+ * subtracted nothing after an accept and re-proposed the identical set of chunks, with only
+ * `blockDecisions` (keyed by a candidate's *array index*, so it re-targets the moment the candidate
+ * list shifts) standing between the user and a duplicate.
+ *
+ * A slot's `plannedMinutes` wins over its own duration where present, so resizing a block on the
+ * timeline after planning doesn't rewrite what the week was understood to have committed.
+ */
+export function plannedMinutesThisWeek(
+  schedules: Pick<DailySchedule, "dateKey" | "slots">[],
+  courseId: string,
+  bucket: TaskBucket,
+  weekDateKeys: string[] = currentWeekDateKeys()
+): number {
+  const inWeek = new Set(weekDateKeys);
+  return schedules
+    .filter((schedule) => inWeek.has(schedule.dateKey))
+    .flatMap((schedule) => schedule.slots)
+    // Task-derived blocks are deliberately excluded. `scheduledMinutesThisWeek` above already counts
+    // task-shaped work (via the task's own estimate), and `createTaskBlock` copies the task's
+    // `courseId`/`bucket` onto the block it creates — so without this filter a course task that has
+    // been dropped onto a day is counted by both functions and the bucket reads satisfied when it
+    // isn't. The two pools have to stay disjoint or their sum lies, and they are separable by
+    // construction: a planner-accepted *bucket* proposal carries no `assignedTaskIds` (bucket
+    // candidates have no `taskId`), while every task-derived block does.
+    .filter((slot) => slot.courseId === courseId && slot.bucket === bucket && !slot.assignedTaskIds?.length)
+    .reduce((sum, slot) => sum + (slot.plannedMinutes ?? Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime))), 0);
+}
+
+/**
+ * plan/16 §5.1 — minutes already placed on a day this week for one *task*, the task-shaped sibling
+ * of `plannedMinutesThisWeek` above.
+ *
+ * Without it, a task's sittings are re-proposed after being accepted: `remainingMinutes` subtracts
+ * only *logged* session minutes, an undated backlog task doesn't change when its blocks are created,
+ * and nothing else looks at the slots now carrying `assignedTaskIds: [task.id]` — so re-opening the
+ * weekly planner offers all seven sittings again, and accepting twice duplicates them. That is
+ * exactly the §2.2 bug this doc set out to fix, in its task form rather than its bucket form.
+ */
+export function plannedMinutesForTask(
+  schedules: Pick<DailySchedule, "dateKey" | "slots">[],
+  taskId: string,
+  weekDateKeys: string[] = currentWeekDateKeys()
+): number {
+  const inWeek = new Set(weekDateKeys);
+  return schedules
+    .filter((schedule) => inWeek.has(schedule.dateKey))
+    .flatMap((schedule) => schedule.slots)
+    .filter((slot) => slot.assignedTaskIds?.includes(taskId))
+    .reduce((sum, slot) => sum + (slot.plannedMinutes ?? Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime))), 0);
 }
 
 type BucketedSession = Pick<PomodoroSession, "mode" | "minutes" | "completedAt" | "courseId" | "bucket" | "taskId">;

@@ -16,6 +16,7 @@ import { useWorkdaySession } from "@/components/workday-session-provider";
 import { downloadFullExportJson, downloadPomodoroCsv } from "@/lib/export";
 import { DEFAULT_TIMEZONE } from "@/lib/google-calendar";
 import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, DEFAULT_LADDER } from "@/lib/revision";
+import { DEFAULT_MAX_CHUNK_MINUTES, DEFAULT_MIN_CHUNK_MINUTES } from "@/lib/timeline";
 import { useUserTier } from "@/lib/tiers";
 import type { DayTemplate } from "@/types";
 
@@ -115,6 +116,45 @@ export default function SettingsPage() {
               <span className="text-xs text-ink-500">min</span>
             </label>
             <p className="text-xs text-ink-500">Reminders only fire while your day is started and this tab is open. Allow browser notifications when prompted to get alerts outside the tab.</p>
+          </div>
+        </section>
+        <section className="card p-5">
+          <h2 className="mb-4 text-lg font-semibold">Sittings</h2>
+          <p className="mb-3 text-xs text-ink-500">
+            How long one block of work may be. Anything bigger is split into several sittings across the week, each planned and
+            timed separately, so a six-hour task becomes blocks you can actually sit down to instead of one that never fits.
+          </p>
+          <div className="space-y-3">
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>Longest sitting</span>
+              <input
+                className="input w-24"
+                type="number"
+                min={15}
+                max={240}
+                step={5}
+                value={settings.maxChunkMinutes ?? DEFAULT_MAX_CHUNK_MINUTES}
+                onChange={(e) => updateSettings({ maxChunkMinutes: Math.max(15, Math.min(240, Number(e.target.value))) })}
+              />
+              <span className="text-xs text-ink-500">min</span>
+            </label>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>Shortest sitting</span>
+              <input
+                className="input w-24"
+                type="number"
+                min={5}
+                max={60}
+                step={5}
+                value={settings.minChunkMinutes ?? DEFAULT_MIN_CHUNK_MINUTES}
+                onChange={(e) => updateSettings({ minChunkMinutes: Math.max(5, Math.min(60, Number(e.target.value))) })}
+              />
+              <span className="text-xs text-ink-500">min</span>
+            </label>
+            <p className="text-xs text-ink-500">
+              A remainder shorter than this is merged into the sitting before it rather than scheduled on its own. Changing either
+              number reshapes next week&apos;s proposals; blocks already on a day are left alone.
+            </p>
           </div>
         </section>
         <section className="card p-5">

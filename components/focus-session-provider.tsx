@@ -7,6 +7,7 @@ import { useFocusContext } from "@/hooks/use-focus-context";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { todayKey } from "@/lib/dates";
 import { fetchCollection, incrementTaskCompletedPomodoros, savePomodoro, saveDailySchedule } from "@/lib/firestore";
+import { DEFAULT_MAX_CHUNK_MINUTES } from "@/lib/timeline";
 import { slotAutoStatus } from "@/lib/tracking";
 import type { Category, DailySchedule, PomodoroSession, TaskBucket, TimerMode, TimerPresetId } from "@/types";
 
@@ -27,6 +28,11 @@ interface PendingSession {
   slotId?: string;
   courseId?: string;
   bucket?: TaskBucket;
+  /** plan/16 §5.5 — `PomodoroSession` has carried `paperId`/`passNo` since the paper-pass timer
+   *  shipped, but `startFocus` had no way to set them, so a reading block started from the timeline
+   *  logged a session with no idea which paper it was reading. */
+  paperId?: string;
+  passNo?: 1 | 2 | 3;
 }
 
 /**
@@ -57,6 +63,11 @@ interface StoredSession {
   slotId?: string;
   courseId?: string;
   bucket?: TaskBucket;
+  paperId?: string;
+  passNo?: 1 | 2 | 3;
+  /** plan/16 §5.5 — the sitting length this countdown was armed with, so a restore after a reload
+   *  resumes the sitting rather than snapping back to the settings default. */
+  armedMinutes?: number;
 }
 
 function readStoredSession(): StoredSession | null {
@@ -143,7 +154,25 @@ interface FocusSessionContextValue {
    * lives in this provider (not a component that mounts/unmounts with the dashboard page), there's
    * no "consume once" dance needed — the caller (the dashboard page, reacting to its own
    * `?startFocus=1` query param) just calls this and clears the param itself. */
-  startFocus: (opts: { label: string; category: Category; slotId?: string; taskId?: string; courseId?: string; bucket?: TaskBucket }) => void;
+  startFocus: (opts: {
+    label: string;
+    category: Category;
+    slotId?: string;
+    taskId?: string;
+    courseId?: string;
+    bucket?: TaskBucket;
+    paperId?: string;
+    passNo?: 1 | 2 | 3;
+    /** plan/16 §5.5 — this sitting's length. Absent = `work`, the settings length, which is every
+     *  pre-`16` caller's behavior unchanged. Clamped to [5, maxChunkMinutes] so a mis-sized or
+     *  stale block can't arm a multi-hour "pomodoro". */
+    minutes?: number;
+  }) => void;
+  /** plan/16 §5.5 — set only for a session armed from a sitting (`startFocus` with `minutes`), so a
+   *  surface can say "50-minute sitting" rather than implying the settings length. */
+  armedMinutes?: number;
+  paperId?: string;
+  passNo?: 1 | 2 | 3;
 }
 
 const FocusSessionContext = createContext<FocusSessionContextValue | null>(null);
@@ -202,6 +231,14 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   const [slotId, setSlotIdRaw] = useState<string | undefined>(undefined);
   const [courseId, setCourseIdRaw] = useState<string | undefined>(undefined);
   const [bucket, setBucketRaw] = useState<TaskBucket | undefined>(undefined);
+  // plan/16 §5.5 — the paper context a reading sitting attributes to, and the sitting length this
+  // countdown was armed with. `armedMinutes` overrides the settings work length for exactly one
+  // session: a 50-minute sitting on the timeline used to arm a 25-minute timer, so the sitting ended
+  // half-covered and `slotAutoStatus`'s 60% rule left the block incomplete for a reason the user
+  // never chose. Cleared whenever the session ends or is reset, so the manual timer is untouched.
+  const [paperId, setPaperIdRaw] = useState<string | undefined>(undefined);
+  const [passNo, setPassNoRaw] = useState<1 | 2 | 3 | undefined>(undefined);
+  const [armedMinutes, setArmedMinutes] = useState<number | undefined>(undefined);
 
   function setTaskId(next: string) {
     setContextTouched(true);
@@ -225,7 +262,12 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   // never fires on the pre-restore render and stomps a saved session with the provider's defaults.
   const [hydrated, setHydrated] = useState(false);
 
-  const duration = useMemo(() => (mode === "work" ? work : mode === "short_break" ? shortBreak : longBreak), [longBreak, mode, shortBreak, work]);
+  // plan/16 §5.5 — a sitting's own length wins over the settings work length, and only in work mode:
+  // breaks are always the configured break, never a fraction of the sitting.
+  const duration = useMemo(
+    () => (mode === "work" ? armedMinutes ?? work : mode === "short_break" ? shortBreak : longBreak),
+    [armedMinutes, longBreak, mode, shortBreak, work]
+  );
   const progress = 100 - (secondsLeft / (duration * 60)) * 100;
 
   useEffect(() => {
@@ -256,6 +298,9 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       setSlotIdRaw(stored.slotId);
       setCourseIdRaw(stored.courseId);
       setBucketRaw(stored.bucket);
+      setPaperIdRaw(stored.paperId);
+      setPassNoRaw(stored.passNo);
+      setArmedMinutes(stored.armedMinutes);
       setRunning(stored.running);
       setTargetEndTime(stored.targetEndTime);
       setSecondsLeft(
@@ -287,6 +332,12 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     setCourseIdRaw(focusContext.courseId);
     setBucketRaw(focusContext.bucket);
     setTaskIdRaw(focusContext.taskId ?? "");
+    // plan/16 §5.5 — the auto-follow owns the whole context while idle, so paper/sitting state from
+    // a previous block must clear here too. Leaving them would attribute the next manual session to
+    // whatever paper happened to be open an hour ago.
+    setPaperIdRaw(undefined);
+    setPassNoRaw(undefined);
+    setArmedMinutes(undefined);
   }, [focusContext, running, contextTouched]);
 
   // L3 — keeps the persisted snapshot current. `secondsLeft` is deliberately not a dependency: a
@@ -295,8 +346,8 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   // still gets captured correctly here whenever `running` itself changes (e.g. on pause).
   useEffect(() => {
     if (!hydrated) return;
-    writeStoredSession({ mode, running, targetEndTime, secondsLeft, totalSeconds, cycle, category, label, contextTouched, taskId, slotId, courseId, bucket });
-  }, [hydrated, mode, running, targetEndTime, totalSeconds, cycle, category, label, contextTouched, taskId, slotId, courseId, bucket]);
+    writeStoredSession({ mode, running, targetEndTime, secondsLeft, totalSeconds, cycle, category, label, contextTouched, taskId, slotId, courseId, bucket, paperId, passNo, armedMinutes });
+  }, [hydrated, mode, running, targetEndTime, totalSeconds, cycle, category, label, contextTouched, taskId, slotId, courseId, bucket, paperId, passNo, armedMinutes]);
 
   // Pulls saved lengths (and built-in preset choices) in once settings load, so a preset applied
   // in Settings takes effect here without a refresh.
@@ -397,8 +448,14 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       taskId: taskId || undefined,
       slotId,
       courseId,
-      bucket
+      bucket,
+      paperId,
+      passNo
     };
+    // plan/16 §5.5 — one sitting, one armed length: the next session falls back to the settings
+    // length unless a caller arms it again. Without this, finishing a 50-minute sitting would leave
+    // every later manual session silently armed at 50.
+    setArmedMinutes(undefined);
     if (mode === "work") {
       setPendingSession(data);
     } else {
@@ -438,15 +495,35 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     if (!data.taskId) setContextTouched(false);
   }
 
-  function startFocus(opts: { label: string; category: Category; slotId?: string; taskId?: string; courseId?: string; bucket?: TaskBucket }) {
+  function startFocus(opts: {
+    label: string;
+    category: Category;
+    slotId?: string;
+    taskId?: string;
+    courseId?: string;
+    bucket?: TaskBucket;
+    paperId?: string;
+    passNo?: 1 | 2 | 3;
+    minutes?: number;
+  }) {
     setLabel(opts.label);
     setCategory(opts.category);
     setSlotId(opts.slotId);
     setTaskId(opts.taskId ?? "");
     setCourseId(opts.courseId);
     setBucket(opts.bucket);
+    setContextTouched(true);
+    setPaperIdRaw(opts.paperId);
+    setPassNoRaw(opts.passNo);
     setMode("work");
-    const freshTotalSeconds = work * 60;
+    // plan/16 §5.5 — arm the sitting's own length when the caller knows it. Clamped: below 5 minutes
+    // a sitting is not worth arming a timer for (and `finalizeSession`'s task credit needs 5 anyway),
+    // and above the sitting cap a stale or mis-sized block could otherwise arm a multi-hour
+    // "pomodoro". `armedMinutes` stays undefined when no length is given, which is every pre-plan/16
+    // caller — those keep using the settings work length exactly as before.
+    const armed = opts.minutes != null ? Math.max(5, Math.min(Math.round(opts.minutes), settings.maxChunkMinutes ?? DEFAULT_MAX_CHUNK_MINUTES)) : undefined;
+    setArmedMinutes(armed);
+    const freshTotalSeconds = (armed ?? work) * 60;
     setSecondsLeft(freshTotalSeconds);
     setTargetEndTime(Date.now() + freshTotalSeconds * 1000);
     setTotalSeconds(freshTotalSeconds);
@@ -467,6 +544,9 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     slotId,
     courseId,
     bucket,
+    paperId,
+    passNo,
+    armedMinutes,
     work,
     shortBreak,
     longBreak,

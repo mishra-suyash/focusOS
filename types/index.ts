@@ -179,6 +179,21 @@ export interface Task {
    *  week being planned, the same lead-time pattern checkpoint prep already uses, instead of landing
    *  wherever the general placement search finds room. Absent = today's floating behavior, unchanged. */
   weeklyTargetDay?: number;
+  /** plan/16 §5.1 — longest single sitting this task may be scheduled in, minutes. Absent =
+   *  `UserSettings.maxChunkMinutes`, itself defaulting to `DEFAULT_MAX_CHUNK_MINUTES` (50,
+   *  lib/timeline.ts). Set per-task only to override; a task that genuinely must happen in one
+   *  sitting sets `splittable: false` instead. */
+  maxChunkMinutes?: number;
+  /** plan/16 §5.1 — false = never split, place as one block or not at all (a fixed-time meeting,
+   *  an exam sitting, a lab). Absent/true = split whenever the work exceeds the maximum sitting.
+   *  Always implied false when `fixedTime` is set. */
+  splittable?: boolean;
+  /** plan/16 §5.1/§2.1 — the clock time this task must happen at, if any. Closes the hole where
+   *  `RecurringTaskTemplate.time` had nowhere to land, so `taskFromTemplate`
+   *  (lib/admin-recurring-tasks.ts) silently dropped it and a fixed 14:00–15:00 TA meeting
+   *  materialized as a generic 25-minute block placed wherever the search found room. When set,
+   *  the planner hard-pins the block to this time and never splits it. */
+  fixedTime?: { startTime: string; endTime: string; location?: string };
   createdAt: string;
   updatedAt: string;
 }
@@ -203,6 +218,20 @@ export interface PomodoroSession {
   courseId?: string;
   bucket?: TaskBucket;
 }
+
+/**
+ * plan/16 §4/§5.2 — what a block is FOR, in a form that survives being accepted onto a day.
+ * Widens `ProposedSlot`'s existing `refType`/`refId` pair (lib/weekplan.ts) with the two cases it
+ * never covered (a paper, a goal milestone) and — unlike before, where `acceptProposals` dropped
+ * both on the floor — is actually copied onto the slot. `ScheduleSlot.courseId`/`bucket` stay the
+ * carriers for course work; this is for the objectives that aren't a course bucket, so nothing
+ * here duplicates them.
+ */
+export type SlotObjectiveRef =
+  | { kind: "checkpoint"; id: string }
+  | { kind: "paper"; id: string; passNo?: 1 | 2 | 3 }
+  | { kind: "goal"; id: string; milestoneId?: string }
+  | { kind: "revisionQueue" };
 
 export interface ScheduleSlot {
   id: string;
@@ -229,6 +258,20 @@ export interface ScheduleSlot {
   /** Which of the course's four weekly planning buckets this block counts against. Only meaningful
    *  alongside `courseId`; absent on a class block (class time is not a planned bucket — see §6.3). */
   bucket?: TaskBucket;
+  /** plan/16 §4/§5.2 — absent on every block that is only what its `type` says it is. */
+  objectiveRef?: SlotObjectiveRef;
+  /** plan/16 §5.1 — this block is one sitting of a larger piece of work. `groupId` is shared by
+   *  every sibling sitting of the same split (a fresh uuid minted per split, not derived from the
+   *  work's id, so re-splitting the same task in a later week produces a distinct set instead of
+   *  colliding with the old one). `index`/`total` are 1-based and exist for display and ordering
+   *  only — never as the source of progress, which is always derived from real logged minutes
+   *  (`remainingMinutes`, lib/tracking.ts). Absent = an ordinary single block, unchanged. */
+  chunk?: { groupId: string; index: number; total: number };
+  /** plan/16 §5.1 — minutes this sitting was *planned* to contribute, as distinct from
+   *  `endTime - startTime`. Normally identical; they diverge when a sitting is resized on the
+   *  timeline after planning, and the planner needs the original intent to compute what's left.
+   *  Absent = fall back to the block's own duration. */
+  plannedMinutes?: number;
 }
 
 /**
@@ -724,6 +767,15 @@ export interface ProposedSlot {
   endTime: string;
   refType?: "checkpoint" | "revision";
   refId?: string;
+  /** plan/16 §5.2 — carried so a committed `WeekPlan.proposedBlocks` entry re-read on a later visit
+   *  still knows what it was for, instead of degrading to a bare title the way it used to. */
+  objectiveRef?: SlotObjectiveRef;
+  chunk?: { groupId: string; index: number; total: number };
+  plannedMinutes?: number;
+  /** plan/16 §5.3 — the candidate's own stable key (`WeekProposalCandidate.key`), stored so a
+   *  committed week's `blockDecisions` keep resolving against the same proposals when the plan is
+   *  re-opened. Absent on anything written before `16`, which falls back to the array index. */
+  key?: string;
 }
 
 export type ProposalDecision = "accepted" | "dismissed";
@@ -776,6 +828,21 @@ export interface Day {
     /** Distinguishes "marked in advance" from "reported after the fact" only for display (Look
      *  back's "Days off" stat) — both work identically everywhere else. */
     markedAt: string;
+  };
+  /** plan/16 §5.6 — the day's score snapshot, written at the same points `loadIndex` already is
+   *  (End day, the evening rollup cron) and for the same reason: a historical record that must not
+   *  silently change when a later edit changes what "today" would compute to. Every field is
+   *  derived from data already stored elsewhere (`computeDayScore`, lib/gamify.ts) — nothing here
+   *  is the source of truth for anything, and a missing snapshot is simply recomputed for display.
+   *  `score` is null for a day with nothing planned and for a day off: an unplanned day is not a
+   *  failed one, the same distinction plan/15 §5.1 drew for `computeRequiredMinutes`. */
+  game?: {
+    score: number | null;
+    sittingsClosed: number;
+    sittingsPlanned: number;
+    minutesLogged: number;
+    minutesPlanned: number;
+    computedAt: string;
   };
   updatedAt: string;
 }
@@ -898,6 +965,17 @@ export interface UserSettings {
    *  (lib/weekplan.ts). Read by the weekly planner's capacity meter and its block placement bounds —
    *  without it, "free time" means every waking minute, which is not a number anyone plans against. */
   workingWindow?: { startTime: string; endTime: string; daysOfWeek: number[] };
+  /** plan/16 §5.1 — global cap on one sitting, minutes. Absent = `DEFAULT_MAX_CHUNK_MINUTES` (50,
+   *  lib/timeline.ts). A per-task `Task.maxChunkMinutes` overrides it. */
+  maxChunkMinutes?: number;
+  /** plan/16 §5.1 — never propose a sitting shorter than this; a remainder below it is folded back
+   *  into its siblings rather than scheduled on its own. Absent = `DEFAULT_MIN_CHUNK_MINUTES` (15),
+   *  which matches `placeInWindow`'s own 15-minute search step (lib/weekplan.ts). */
+  minChunkMinutes?: number;
+  /** plan/16 §5.7 — OS-level notifications at sitting boundaries. Absent = off. `granted` mirrors
+   *  the browser permission at the time the user opted in; it is a UI hint only, never the
+   *  authorization source — the live `Notification.permission` always is. */
+  sittingNotifications?: { enabled: boolean; leadMinutes: number; granted?: boolean };
   updatedAt: string;
 }
 

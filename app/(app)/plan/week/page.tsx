@@ -13,7 +13,16 @@ import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { averageFocusRating } from "@/lib/analytics";
-import { bucketWeeklyTarget, completedMinutesThisWeek, courseSlotsForDate, effectiveCourseStatus, scheduledMinutesThisWeek, syncRevisionTemplate } from "@/lib/courses";
+import {
+  bucketWeeklyTarget,
+  completedMinutesThisWeek,
+  courseSlotsForDate,
+  effectiveCourseStatus,
+  plannedMinutesForTask,
+  plannedMinutesThisWeek,
+  scheduledMinutesThisWeek,
+  syncRevisionTemplate
+} from "@/lib/courses";
 import { addDaysToKey, todayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { clearDayOff, fetchCourseClassLogs, saveDailySchedule, saveWeeklyReviewFields, setDayOff, updateCourse, updateGoal, updatePaper, updateTask } from "@/lib/firestore";
 import { isGoalActiveForDate } from "@/lib/goals";
@@ -22,9 +31,10 @@ import { taskBucketLabels } from "@/lib/options";
 import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, estimatedReviewMinutes } from "@/lib/revision";
 import { isTemplateDueOn } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
-import { sortedSlots, validateSlots } from "@/lib/schedule";
+import { minutesFromTime, sortedSlots, validateSlots } from "@/lib/schedule";
 import { isBreakMode } from "@/lib/terms";
-import { taskBlockMinutes } from "@/lib/timeline";
+import { loggedMinutesForTask } from "@/lib/tracking";
+import { DEFAULT_MAX_CHUNK_MINUTES, DEFAULT_MIN_CHUNK_MINUTES, sittingTitle, splitIntoChunks, taskBlockMinutes, taskChunkMinutes } from "@/lib/timeline";
 import {
   DEFAULT_WORKING_WINDOW,
   placeProposals,
@@ -97,6 +107,13 @@ function PlanWeekContent() {
   const priorWeekStart = useMemo(() => addDaysToKey(weekStart, -7), [weekStart]);
   const priorWeekDateKeys = useMemo(() => weekDates(priorWeekStart), [priorWeekStart]);
   const workMinutes = settings.workMinutes ?? 25;
+  // plan/16 §5.1 — the sitting bounds every candidate below is split under. `chunkOpts` is passed
+  // verbatim into `taskChunkMinutes`/`splitIntoChunks`, so a change on /settings reshapes the whole
+  // week's proposals with no other code path to keep in sync.
+  const chunkOpts = {
+    maxChunkMinutes: settings.maxChunkMinutes ?? DEFAULT_MAX_CHUNK_MINUTES,
+    minChunkMinutes: settings.minChunkMinutes ?? DEFAULT_MIN_CHUNK_MINUTES
+  };
   const workingWindow = settings.workingWindow ?? DEFAULT_WORKING_WINDOW;
 
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
@@ -252,10 +269,48 @@ function PlanWeekContent() {
     for (const d of windowDays) {
       if (remaining <= 0) break;
       const minutes = Math.min(perDay, remaining);
-      result.push({ title, type, durationMinutes: minutes, dateKey: d, ...extra });
+      // plan/16 §5.3 — one call spreads one piece of work across several days, so the caller's own
+      // stable key has to be made unique per day here or every sibling would share one key.
+      result.push({ title, type, durationMinutes: minutes, dateKey: d, ...extra, ...(extra.key ? { key: `${extra.key}:${d}` } : {}) });
       remaining -= minutes;
     }
     return result;
+  }
+
+  /**
+   * plan/16 §5.1 — one course bucket's outstanding minutes, as sittings.
+   *
+   * Two changes from the pre-`16` version this replaces. First, chunk size: it used to emit
+   * `round(remaining / workMinutes)` candidates of exactly `workMinutes` each, so a 3h revision
+   * target became seven 25-minute blocks — 25 being a *timer* default, never a considered statement
+   * about how long a block of revision should be. It now splits under the sitting cap, giving four
+   * 45-minute sittings instead. Second, and the actual bug fix (§2.2): `alreadyScheduled` now
+   * subtracts `plannedMinutesThisWeek` as well, so minutes already accepted onto a day stop being
+   * re-proposed. Before this, accepting a bucket's proposals reduced the next regeneration by
+   * nothing at all, and only `blockDecisions` — keyed by array index, so it re-targets whenever the
+   * candidate list shifts — kept the duplicates off the screen.
+   */
+  function bucketCandidates(course: Course, bucket: TaskBucket, preferredDateKeys: string[] | undefined): WeekProposalCandidate[] {
+    const target = hoursFor(course, bucket);
+    const alreadyScheduled =
+      scheduledMinutesThisWeek(tasks, course.id, bucket, workMinutes, weekDateKeys) +
+      plannedMinutesThisWeek(schedules, course.id, bucket, weekDateKeys);
+    const outstanding = Math.max(0, target - alreadyScheduled);
+    const sittings = splitIntoChunks(outstanding, chunkOpts);
+    if (sittings.length === 0) return [];
+    const groupId = `${course.id}:${bucket}:${weekStart}`;
+    return sittings.map((minutes, index) => ({
+      title: `${course.name} — ${taskBucketLabels[bucket]}`,
+      type: "deep_work" as const,
+      durationMinutes: minutes,
+      plannedMinutes: minutes,
+      courseId: course.id,
+      bucket,
+      preferredDateKeys,
+      capGroup: `${bucket}:${course.id}`,
+      key: `${bucket}:${course.id}:${index}`,
+      ...(sittings.length > 1 ? { chunk: { groupId, index: index + 1, total: sittings.length } } : {})
+    }));
   }
 
   const candidates: WeekProposalCandidate[] = [];
@@ -266,7 +321,19 @@ function PlanWeekContent() {
     for (const d of windowDays) {
       if (remaining <= 0) break;
       const minutes = Math.min(perDay, remaining);
-      candidates.push({ title: `Prep: ${cp.title}`, type: "deep_work", durationMinutes: minutes, dateKey: d, refType: "checkpoint", refId: cp.id });
+      candidates.push({
+        title: `Prep: ${cp.title}`,
+        type: "deep_work",
+        durationMinutes: minutes,
+        plannedMinutes: minutes,
+        dateKey: d,
+        key: `checkpoint:${cp.id}:${d}`,
+        refType: "checkpoint",
+        refId: cp.id,
+        // plan/16 §5.2 — the reference that used to be dropped by `acceptProposals`, so an accepted
+        // prep block was a string with no way back to the checkpoint it was prepping for.
+        objectiveRef: { kind: "checkpoint", id: cp.id }
+      });
       remaining -= minutes;
     }
   }
@@ -274,19 +341,7 @@ function PlanWeekContent() {
   // around the days revision/backlog have already claimed via their preferences below, not the
   // reverse (today's order let assignment's floating chunks take first pick of every day).
   for (const course of activeCourses) {
-    const target = hoursFor(course, "assignment");
-    const alreadyScheduled = scheduledMinutesThisWeek(tasks, course.id, "assignment", workMinutes, weekDateKeys);
-    const chunks = Math.round(Math.max(0, target - alreadyScheduled) / workMinutes);
-    for (let i = 0; i < chunks; i += 1) {
-      candidates.push({
-        title: `${course.name} — ${taskBucketLabels.assignment}`,
-        type: "deep_work",
-        durationMinutes: workMinutes,
-        courseId: course.id,
-        bucket: "assignment",
-        capGroup: `assignment:${course.id}`
-      });
-    }
+    candidates.push(...bucketCandidates(course, "assignment", undefined));
   }
   // plan/15 §5.2 #3 — revision prefers the course's own lecture days this week (reviewing material
   // near the class it came from), falling back to the general search when the course has none
@@ -294,56 +349,111 @@ function PlanWeekContent() {
   // plan/15 §8's open question on whether that should differ from a course with literally no
   // sessions; for now both cases fall through identically.
   for (const course of activeCourses) {
-    const target = hoursFor(course, "revision");
-    const alreadyScheduled = scheduledMinutesThisWeek(tasks, course.id, "revision", workMinutes, weekDateKeys);
-    const chunks = Math.round(Math.max(0, target - alreadyScheduled) / workMinutes);
     const lectureDays = weekDateKeys.filter((d) => !isBreakMode(terms, d) && courseSlotsForDate([course], d).length > 0);
-    for (let i = 0; i < chunks; i += 1) {
-      candidates.push({
-        title: `${course.name} — ${taskBucketLabels.revision}`,
-        type: "deep_work",
-        durationMinutes: workMinutes,
-        courseId: course.id,
-        bucket: "revision",
-        preferredDateKeys: lectureDays.length > 0 ? lectureDays : undefined,
-        capGroup: `revision:${course.id}`
-      });
-    }
+    candidates.push(...bucketCandidates(course, "revision", lectureDays.length > 0 ? lectureDays : undefined));
   }
   if (revisionQueueMinutesPerDay > 0) {
     for (const d of weekDateKeys.slice(0, 5).filter((d) => !offDateKeys.has(d))) {
-      candidates.push({ title: "Review revisions", type: "deep_work", durationMinutes: revisionQueueMinutesPerDay, dateKey: d, refType: "revision" });
+      candidates.push({
+        title: "Review revisions",
+        type: "deep_work",
+        durationMinutes: revisionQueueMinutesPerDay,
+        plannedMinutes: revisionQueueMinutesPerDay,
+        dateKey: d,
+        key: `revisionQueue:${d}`,
+        refType: "revision",
+        objectiveRef: { kind: "revisionQueue" }
+      });
     }
   }
   // plan/15 §5.2 #3 — backlog (both the bucket and undated tasks) prefers the weekend, the same
   // "leftover work last" instinct a person planning by hand already has.
   const weekend = [weekDateKeys[5], weekDateKeys[6]];
   for (const course of activeCourses) {
-    const target = hoursFor(course, "backlog");
-    const alreadyScheduled = scheduledMinutesThisWeek(tasks, course.id, "backlog", workMinutes, weekDateKeys);
-    const chunks = Math.round(Math.max(0, target - alreadyScheduled) / workMinutes);
-    for (let i = 0; i < chunks; i += 1) {
-      candidates.push({
-        title: `${course.name} — ${taskBucketLabels.backlog}`,
-        type: "deep_work",
-        durationMinutes: workMinutes,
-        courseId: course.id,
-        bucket: "backlog",
-        preferredDateKeys: weekend,
-        capGroup: `backlog:${course.id}`
-      });
-    }
+    candidates.push(...bucketCandidates(course, "backlog", weekend));
   }
   const backlogTasks = tasks.filter((task) => task.status !== "done" && (!task.dueDate || task.dueDate < weekStart));
   for (const task of backlogTasks) {
-    const duration = taskBlockMinutes(task, workMinutes);
+    // plan/16 §5.1 — propose only what's actually left, which is the "tracked across sittings" half
+    // of the ask: the leftover rolls forward into the next week's plan with no bookkeeping of its own.
+    //
+    // Two signals say work is accounted for, and they overlap temporally, so this takes the larger
+    // rather than the sum: `logged` is real session minutes against the task, `planned` is minutes
+    // already placed on a day for it. A 50-minute sitting with 22 logged counts as 50 to `planned`
+    // and 22 to `logged` — summing them would double-subtract the worked part and under-propose.
+    // `max` is deliberately an approximation, and it is correct at both ends: nothing worked yet
+    // (0 logged / 50 planned → 50 accounted), and worked well past what was planned (80 logged /
+    // 50 planned → 80 accounted). It can under-subtract in the middle, which errs toward proposing
+    // slightly too much — the safe direction, since an over-proposal is visible and dismissable
+    // while an under-proposal silently loses work.
+    const logged = loggedMinutesForTask(sessions, task.id);
+    const planned = plannedMinutesForTask(schedules, task.id, weekDateKeys);
+    const total = Math.max(0, taskBlockMinutes(task, workMinutes) - Math.max(logged, planned));
+    if (total <= 0) continue;
+
+    // plan/16 §5.1/§2.1 — a fixed-time task is pinned to its own clock time on its own weekday and
+    // never split. This is the path that used to be lost entirely: `RecurringTaskTemplate.time`
+    // never reached the Task, so a 14:00 meeting arrived here as a timeless backlog task.
+    if (task.fixedTime) {
+      const fixedMinutes = Math.max(15, minutesFromTime(task.fixedTime.endTime) - minutesFromTime(task.fixedTime.startTime));
+      const targetDow = task.weeklyTargetDay ?? (task.dueDate ? getDay(parseISO(task.dueDate)) : null);
+      const dateKey = targetDow != null ? weekDateKeys.find((d) => getDay(parseISO(d)) === targetDow) : task.dueDate;
+      const pinnable = dateKey && !offDateKeys.has(dateKey);
+      candidates.push({
+        title: task.title,
+        type: "deep_work",
+        durationMinutes: fixedMinutes,
+        plannedMinutes: fixedMinutes,
+        taskId: task.id,
+        key: `task:${task.id}:fixed`,
+        // With a day to pin to, this is an exact-time candidate: 14:00 or it doesn't happen. Without
+        // one — a fixed-time task with neither a target weekday nor a due date, or one whose day is
+        // marked off — it still has to appear *somewhere*. It floats at its own fixed length instead,
+        // never split (`splittable: false` is set on every task `taskFromTemplate` gives a time to).
+        // Dropping it here instead would delete the work from the planner with not even a "Didn't
+        // fit" row to notice, which is worse than placing it at an approximate time the user can move.
+        ...(pinnable ? { dateKey, fixedStartTime: task.fixedTime.startTime } : { preferredDateKeys: weekend, capGroup: "fixed-time-unpinned" })
+      });
+      continue;
+    }
+
+    const sittings = taskChunkMinutes({ ...task, estimatedPomodoros: Math.max(1, Math.ceil(total / workMinutes)) }, workMinutes, chunkOpts);
+    const groupId = `task:${task.id}:${weekStart}`;
+    const chunkOf = (index: number) =>
+      sittings.length > 1 ? { chunk: { groupId, index: index + 1, total: sittings.length } } : {};
+
     if (task.weeklyTargetDay != null) {
-      candidates.push(...leadTimeCandidates(task.title, "deep_work", duration, task.weeklyTargetDay, { taskId: task.id }));
+      // Each sitting keeps the lead-time spread, so "by Wednesday" still means the work lands across
+      // the days leading up to Wednesday rather than all at once on it.
+      sittings.forEach((minutes, index) => {
+        candidates.push(
+          ...leadTimeCandidates(sittingTitle(task.title, index + 1, sittings.length), "deep_work", minutes, task.weeklyTargetDay!, {
+            taskId: task.id,
+            plannedMinutes: minutes,
+            key: `task:${task.id}:${index}`,
+            ...chunkOf(index)
+          })
+        );
+      });
     } else {
       // plan/15 — every undated backlog task shares one cap pool: many small individual tasks
       // piling onto the same emptiest day is the exact §2.2 failure mode, just with tasks instead
       // of a single heavy bucket, so they still need to compete for one shared per-day allowance.
-      candidates.push({ title: task.title, type: "deep_work", durationMinutes: duration, taskId: task.id, preferredDateKeys: weekend, capGroup: "backlog-tasks" });
+      // plan/16: a single task's own sittings additionally share `task:<id>`, so one big task can no
+      // longer sidestep the cap by arriving as one indivisible block.
+      sittings.forEach((minutes, index) => {
+        candidates.push({
+          title: sittingTitle(task.title, index + 1, sittings.length),
+          type: "deep_work",
+          durationMinutes: minutes,
+          plannedMinutes: minutes,
+          taskId: task.id,
+          preferredDateKeys: weekend,
+          capGroup: `task:${task.id}`,
+          key: `task:${task.id}:${index}`,
+          ...chunkOf(index)
+        });
+      });
     }
   }
   const stalePapers = papers
@@ -353,18 +463,46 @@ function PlanWeekContent() {
     .sort((a, b) => b.daysSinceUpdate - a.daysSinceUpdate)
     .slice(0, 3);
   for (const paper of stalePapers) {
+    const readingMinutes = splitIntoChunks(45, chunkOpts);
+    const paperObjective = { objectiveRef: { kind: "paper" as const, id: paper.id }, refId: paper.id };
     if (paper.weeklyTargetDay != null) {
-      candidates.push(...leadTimeCandidates(`Read: ${paper.title}`, "reading", 45, paper.weeklyTargetDay, { refId: paper.id }));
+      readingMinutes.forEach((minutes, index) => {
+        candidates.push(
+          ...leadTimeCandidates(`Read: ${paper.title}`, "reading", minutes, paper.weeklyTargetDay!, {
+            ...paperObjective,
+            plannedMinutes: minutes,
+            key: `paper:${paper.id}:${index}`
+          })
+        );
+      });
     } else {
-      candidates.push({ title: `Read: ${paper.title}`, type: "reading", durationMinutes: 45, refId: paper.id, capGroup: "papers" });
+      readingMinutes.forEach((minutes, index) => {
+        candidates.push({
+          title: `Read: ${paper.title}`,
+          type: "reading",
+          durationMinutes: minutes,
+          plannedMinutes: minutes,
+          ...paperObjective,
+          capGroup: "papers",
+          key: `paper:${paper.id}:${index}`
+        });
+      });
     }
   }
 
   const freshProposals = placeProposals(candidates, weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys);
   const proposals: WeekProposal[] = committed
-    ? (existingReview!.plan!.proposedBlocks.map((p, index) => ({ ...p, key: `${index}`, fits: true })) as WeekProposal[])
+    ? (existingReview!.plan!.proposedBlocks.map((p, index) => ({ ...p, key: p.key ?? `${index}`, fits: true })) as WeekProposal[])
     : freshProposals;
 
+  /**
+   * plan/16 §5.3 — keyed by each proposal's own stable `key` now (see `WeekProposalCandidate.key`),
+   * not by its array index. One consequence, deliberately not migrated: a `blockDecisions` map
+   * written before this change is keyed `"0"`/`"1"`/... and no longer resolves, so those proposals
+   * read as undecided and can simply be accepted or dismissed again. That is a week-scoped map with
+   * a one-week useful life, and re-deciding a handful of rows once is a smaller cost than a
+   * migration that would have to guess which index meant which piece of work.
+   */
   const [decisions, setDecisions] = useState<Record<string, ProposalDecision>>({});
   useEffect(() => {
     setDecisions(existingReview?.plan?.blockDecisions ?? {});
@@ -412,6 +550,11 @@ function PlanWeekContent() {
       const writes: { dateKey: string; templateId?: string; slots: ScheduleSlot[] }[] = [];
       for (const [dateKey, props] of byDate) {
         const existingSlots = schedules.find((s) => s.dateKey === dateKey)?.slots ?? claimedSlotsForDate(dateKey);
+        // plan/16 §5.2 — `objectiveRef`, `chunk`, and `plannedMinutes` are copied here. Before this
+        // they were silently dropped (along with `refType`/`refId`, which `ScheduleSlot` had no field
+        // for at all), so an accepted "Prep: Midterm" block was a bare string with no way back to its
+        // checkpoint, an accepted reading block lost its paper, and seven sittings of one task became
+        // seven unrelated slots with identical titles.
         const newSlots: ScheduleSlot[] = props.map((p) => ({
           id: crypto.randomUUID(),
           title: p.title,
@@ -421,7 +564,10 @@ function PlanWeekContent() {
           status: "upcoming",
           ...(p.courseId ? { courseId: p.courseId } : {}),
           ...(p.bucket ? { bucket: p.bucket } : {}),
-          ...(p.taskId ? { assignedTaskIds: [p.taskId] } : {})
+          ...(p.taskId ? { assignedTaskIds: [p.taskId] } : {}),
+          ...(p.objectiveRef ? { objectiveRef: p.objectiveRef } : {}),
+          ...(p.chunk ? { chunk: p.chunk } : {}),
+          ...(p.plannedMinutes != null ? { plannedMinutes: p.plannedMinutes } : {})
         }));
         const merged = sortedSlots([...existingSlots, ...newSlots]);
         const errors = validateSlots(merged);
@@ -469,7 +615,10 @@ function PlanWeekContent() {
       await patchPlan({
         targets,
         capacity,
-        proposedBlocks: proposals.map(({ key, fits, ...rest }) => rest),
+        // plan/16 §5.3 — `key` is kept (it's part of `ProposedSlot` now) so a committed week's
+        // `blockDecisions` still resolve when the plan is re-opened; only `fits`, which is a property
+        // of this render's placement search rather than of the proposal, is dropped.
+        proposedBlocks: proposals.map(({ fits, ...rest }) => rest),
         completedAt: new Date().toISOString()
       });
     } finally {
@@ -828,7 +977,10 @@ function PlanWeekContent() {
                 .filter((p) => !p.fits)
                 .map((p) => (
                   <p key={p.key} className="rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
-                    {p.title} — no free gap of {p.durationMinutes}m inside the working window.
+                    {p.title} —{" "}
+                    {p.fixedStartTime
+                      ? `its fixed time (${p.fixedStartTime}) on ${p.dateKey.slice(5)} is already taken.`
+                      : `no free gap of ${p.durationMinutes}m inside the working window.`}
                   </p>
                 ))}
             </div>

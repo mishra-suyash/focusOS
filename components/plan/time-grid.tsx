@@ -399,7 +399,7 @@ export const TimeGrid = forwardRef<
             // focusable button whose label carries type/time/status/task-count, not just color.
             const ariaLabel = `${slot.title}, ${slotTypeLabels[slot.type]}, ${minutesToTime(start)} to ${minutesToTime(end)}, ${STATUS_WORDS[status]}${
               taskCount > 0 ? `, ${taskCount} task${taskCount > 1 ? "s" : ""}` : ""
-            }`;
+            }${slot.chunk ? `, sitting ${slot.chunk.index} of ${slot.chunk.total}` : ""}`;
             return (
               <div
                 key={slot.id}
@@ -443,6 +443,10 @@ export const TimeGrid = forwardRef<
                 </span>
                 <span className="block truncate opacity-80">
                   {minutesToTime(start)}–{minutesToTime(end)} · {STATUS_WORDS[status]}
+                  {/* plan/16 §5.1 — which sitting of a split this block is. Read straight off the
+                      slot, so the grid needs no course/paper context to show it; the full objective
+                      chip lives in the inspector, which already has that data. */}
+                  {slot.chunk ? ` · ${slot.chunk.index} of ${slot.chunk.total}` : ""}
                 </span>
                 {isBeingDragged && !preview!.valid && preview!.hintStart != null ? (
                   <span className="block truncate font-medium text-red-700 dark:text-red-300">Free at {minutesToTime(preview!.hintStart)}</span>

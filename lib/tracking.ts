@@ -58,3 +58,57 @@ export function slotAutoStatus(
   if (slotDuration <= 0) return null;
   return slotCoverageMinutes(slot, sessions) / slotDuration >= threshold ? "completed" : null;
 }
+
+/**
+ * plan/16 §5.1 — minutes still owed on a piece of work: its planned total minus the real session
+ * minutes logged against it.
+ *
+ * Deliberately minutes, not `estimatedPomodoros - completedPomodoros`. That counter advances once
+ * per work session over a 5-minute floor (`finalizeSession`, components/focus-session-provider.tsx),
+ * so a 6-minute session and a 50-minute session move it by exactly the same amount — the same
+ * defect plan/14 §6.4 already fixed for course totals by switching them to real
+ * `PomodoroSession.minutes`, which was never applied to tasks. `Task.completedPomodoros` stays as
+ * it is: "how many times have I sat with this" is a genuinely useful number, just not this one.
+ *
+ * Break-mode sessions never count. Clamped at 0 — a task worked past its estimate owes nothing, it
+ * does not owe negative time.
+ */
+export function loggedMinutesForTask(sessions: Pick<PomodoroSession, "mode" | "minutes" | "taskId">[], taskId: string): number {
+  return sessions
+    .filter((session) => session.mode === "work" && session.taskId === taskId)
+    .reduce((sum, session) => sum + Math.max(0, session.minutes), 0);
+}
+
+export function remainingMinutes(totalMinutes: number, sessions: Pick<PomodoroSession, "mode" | "minutes" | "taskId">[], taskId: string): number {
+  return Math.max(0, Math.round(totalMinutes - loggedMinutesForTask(sessions, taskId)));
+}
+
+/**
+ * plan/16 §5.5 — how a sitting actually went, in the one vocabulary the day score (lib/gamify.ts)
+ * and the sitting notification (§5.7) both count in. "Closed" is deliberately `slotAutoStatus`'s
+ * own definition (real sessions covering at least 60% of the block, or an attended class) rather
+ * than a second threshold living in a second place: one rule, one implementation, so a block shown
+ * as complete on the timeline can never be counted as unfinished by the score beside it.
+ */
+export function sittingOutcome(
+  slot: Pick<ScheduleSlot, "id" | "type" | "startTime" | "endTime">,
+  sessions: Pick<PomodoroSession, "slotId" | "mode" | "minutes">[],
+  classAttended = false
+): "closed" | "partial" | "untouched" {
+  if (slotAutoStatus(slot, sessions, classAttended) === "completed") return "closed";
+  return slotCoverageMinutes(slot, sessions) > 0 ? "partial" : "untouched";
+}
+
+/**
+ * plan/16 §5.1/§5.5 — minutes of this sitting still to do: what it was planned to contribute
+ * (`plannedMinutes`, falling back to its own duration) minus what real sessions have already
+ * covered. This is what arms the focus timer when a sitting is resumed, so a block already 22
+ * minutes in starts a 28-minute timer rather than restarting the whole thing (§5.5).
+ */
+export function sittingRemainingMinutes(
+  slot: Pick<ScheduleSlot, "id" | "startTime" | "endTime" | "plannedMinutes">,
+  sessions: Pick<PomodoroSession, "slotId" | "mode" | "minutes">[]
+): number {
+  const planned = slot.plannedMinutes ?? Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime));
+  return Math.max(0, planned - slotCoverageMinutes(slot, sessions));
+}

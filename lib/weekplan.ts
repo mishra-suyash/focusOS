@@ -1,6 +1,6 @@
 import { getDay, parseISO } from "date-fns";
 import { minutesFromTime, minutesToTime } from "@/lib/schedule";
-import type { ScheduleSlot, ScheduleSlotType, TaskBucket, UserSettings } from "@/types";
+import type { ScheduleSlot, ScheduleSlotType, SlotObjectiveRef, TaskBucket, UserSettings } from "@/types";
 
 export type WorkingWindow = NonNullable<UserSettings["workingWindow"]>;
 
@@ -147,6 +147,35 @@ export interface WeekProposalCandidate {
   taskId?: string;
   refType?: "checkpoint" | "revision";
   refId?: string;
+  /** plan/16 §5.2 — what this candidate is FOR, in the one shape that survives being accepted onto
+   *  a day. `refType`/`refId` above are kept for the `14`-era callers and the stored `WeekPlan`
+   *  shape; this is what `acceptProposals` actually copies onto the slot. */
+  objectiveRef?: SlotObjectiveRef;
+  /** plan/16 §5.1 — set when this candidate is one sitting of a split piece of work. Every sibling
+   *  sitting of the same split shares `groupId`; `index`/`total` are 1-based, for display only. */
+  chunk?: { groupId: string; index: number; total: number };
+  /** plan/16 §5.1 — minutes this sitting is planned to contribute. Normally equal to
+   *  `durationMinutes`; carried separately so a later resize on the timeline can't rewrite what the
+   *  week was understood to have committed. */
+  plannedMinutes?: number;
+  /** plan/16 §5.1 — an exact clock time this candidate must land at, not merely an exact day
+   *  (`dateKey`). Set from `Task.fixedTime`: a 14:00 TA meeting is at 14:00 or it does not happen,
+   *  so unlike every other candidate there is nothing for the gap search to decide. Requires
+   *  `dateKey`; if the pinned range is already occupied the candidate comes back `fits: false`
+   *  rather than being quietly moved, because moving it would discard the one fact that mattered. */
+  fixedStartTime?: string;
+  /** plan/16 §5.3 — a stable identity for this candidate, minted by its generator from what the
+   *  candidate is *about* (`task:<id>:2`, `revision:<courseId>:0`, `paper:<id>:1`) rather than from
+   *  where it landed in the array. Absent = the array index, which is what every pre-`16` caller
+   *  got and what `verify-weekplan.ts` still pins.
+   *
+   *  This exists because plan/16 §8 Q2's "mostly moot" stopped being true once the week grid landed
+   *  (§5.3). An index key silently re-targets whenever the candidate list shifts — accept a "What's
+   *  coming" row (which appends candidates), add a course, mark a day off, or log a session that
+   *  zeroes a task's outstanding minutes, and every stored drag position and accept/dismiss decision
+   *  now applies to a different proposal than the one it was made about. Latent as a wrong row in a
+   *  list; unusable as "I dragged this block and another one moved". */
+  key?: string;
   /** plan/15 §5.2's cap, revised — which pool this candidate's per-day allowance is computed
    *  against. Candidates sharing a `capGroup` compete for one shared cap; every candidate that
    *  omits it falls into one implicit shared pool instead (the original behavior, before this
@@ -241,7 +270,22 @@ export function placeProposals(
   }
 
   return candidates.map((candidate, index) => {
-    const key = `${index}`;
+    // plan/16 §5.3 — the generator's own stable key where it minted one, the array index otherwise.
+    const key = candidate.key ?? `${index}`;
+
+    if (candidate.dateKey && candidate.fixedStartTime) {
+      // plan/16 §5.1 — an exact-time pin: the only question is whether that exact range is free.
+      const start = minutesFromTime(candidate.fixedStartTime);
+      const end = start + candidate.durationMinutes;
+      const occupied = (simulated[candidate.dateKey] ?? []).some(
+        (slot) => start < minutesFromTime(slot.endTime) && minutesFromTime(slot.startTime) < end
+      );
+      if (!occupied) {
+        const slot = commit(candidate.dateKey, start, candidate.durationMinutes, null);
+        return { ...candidate, key, dateKey: candidate.dateKey, ...slot, fits: true };
+      }
+      return { ...candidate, key, dateKey: candidate.dateKey, startTime: candidate.fixedStartTime, endTime: minutesToTime(end), fits: false };
+    }
 
     if (candidate.dateKey) {
       const start = tryPlace(candidate.dateKey, candidate.durationMinutes);

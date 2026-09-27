@@ -7,7 +7,9 @@ import { useAuth } from "@/components/auth-provider";
 import { useFocusSession } from "@/components/focus-session-provider";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { clearDayOff, updateTask } from "@/lib/firestore";
+import { describeObjective, objectiveChipText } from "@/lib/objectives";
 import { categoryForSlotType } from "@/lib/timeline";
+import { sittingRemainingMinutes, slotCoverageMinutes } from "@/lib/tracking";
 import { computeStatusPatch } from "@/lib/tasks";
 import {
   computeSlotStatus,
@@ -20,7 +22,7 @@ import {
   slotTypeStyles,
   sortedSlots
 } from "@/lib/schedule";
-import type { Course, DailySchedule, Day, Task } from "@/types";
+import type { Checkpoint, Course, DailySchedule, Day, Goal, Paper, PomodoroSession, Task } from "@/types";
 
 /**
  * plan/14 §7.2 — replaces `DailyScheduleWidget`'s compact three-metric grid and duplicate
@@ -35,13 +37,24 @@ export function NowCard({
   schedule,
   tasks,
   courses,
-  dayOff
+  dayOff,
+  sessions = [],
+  papers = [],
+  checkpoints = [],
+  goals = []
 }: {
   date: string;
   schedule?: DailySchedule;
   tasks: Task[];
   courses: Course[];
   dayOff?: Day["dayOff"];
+  /** plan/16 §5.5 — today's sessions, so "Start focus" can arm what's *left* of the active sitting
+   *  rather than restarting it, and the card can say how much of it is already covered. Defaults to
+   *  empty, which reproduces the pre-plan/16 behavior for any caller that doesn't pass them. */
+  sessions?: PomodoroSession[];
+  papers?: Paper[];
+  checkpoints?: Checkpoint[];
+  goals?: Goal[];
 }) {
   const { user } = useAuth();
   const { startFocus, running } = useFocusSession();
@@ -81,6 +94,13 @@ export function NowCard({
   const next = getNextSlot(slots, minute);
   const assignedTasks = active ? (active.assignedTaskIds ?? []).map((id) => tasks.find((t) => t.id === id)).filter((t): t is Task => Boolean(t)) : [];
   const activeCourse = active?.courseId ? courses.find((c) => c.id === active.courseId) : undefined;
+  // plan/16 §5.2/§5.5 — what this block is for, and how much of it is left. `describeObjective`'s
+  // `attribution` is exactly `startFocus`'s context arguments, so the button below passes it straight
+  // through instead of rebuilding the mapping per objective kind.
+  const objective = active ? describeObjective(active, { courses, papers, checkpoints, tasks, goals }) : null;
+  const chip = active ? objectiveChipText(active, objective) : null;
+  const sittingLeft = active ? sittingRemainingMinutes(active, sessions) : 0;
+  const sittingCovered = active ? slotCoverageMinutes(active, sessions) : 0;
 
   function primaryAction() {
     if (!active) return null;
@@ -104,11 +124,18 @@ export function NowCard({
             slotId: active.id,
             taskId: assignedTasks.length === 1 ? assignedTasks[0].id : undefined,
             courseId: active.courseId,
-            bucket: active.bucket
+            bucket: active.bucket,
+            // plan/16 §5.2 — paper/pass context the block carries, which `startFocus` could not
+            // accept before, so a reading block logged a session with no idea which paper it was for.
+            paperId: objective?.attribution.paperId,
+            passNo: objective?.attribution.passNo,
+            // plan/16 §5.5 — arm what's left of this sitting, not the settings default. A 50-minute
+            // block used to arm a 25-minute timer; a block already 22 minutes covered now arms 28.
+            minutes: sittingLeft > 0 ? sittingLeft : undefined
           })
         }
       >
-        Start focus
+        {sittingLeft > 0 ? `Start focus · ${formatMinutes(sittingLeft)}` : "Start focus"}
       </button>
     );
   }
@@ -126,12 +153,27 @@ export function NowCard({
             {activeCourse ? <span className="rounded bg-ink-100 px-1.5 py-0.5 text-xs text-ink-600 dark:bg-ink-800 dark:text-ink-300">{activeCourse.code || activeCourse.name}</span> : null}
           </div>
           <h2 className="mt-2 text-lg font-semibold leading-snug">{active.title}</h2>
+          {chip ? (
+            <p className="mt-1 text-xs font-medium text-moss-700 dark:text-moss-400">
+              {objective?.href ? (
+                <Link href={objective.href} className="underline decoration-dotted">
+                  {chip}
+                </Link>
+              ) : (
+                chip
+              )}
+            </p>
+          ) : null}
           <div className="mt-3 h-2 overflow-hidden rounded-full bg-ink-100 dark:bg-ink-800">
             <div className="h-full bg-amberline" style={{ width: `${slotProgressPercent(active, minute)}%` }} />
           </div>
           <p className="mt-2 text-sm text-ink-500">
             {formatMinutes(Math.max(0, minute - minutesFromTime(active.startTime)))} elapsed ·{" "}
             {formatMinutes(Math.max(0, minutesFromTime(active.endTime) - minute))} remaining
+            {/* plan/16 §5.5 — real logged coverage, distinct from wall-clock elapsed above: sitting
+                through a block is not the same as working it, and the 60% rule that completes a block
+                counts only the latter. */}
+            {sittingCovered > 0 ? ` · ${formatMinutes(sittingCovered)} logged` : ""}
           </p>
           {assignedTasks.length > 0 ? (
             <div className="mt-3 space-y-1">

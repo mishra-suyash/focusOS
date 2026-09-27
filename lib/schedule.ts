@@ -206,7 +206,13 @@ export function createSlot(partial: Partial<ScheduleSlot> = {}): ScheduleSlot {
     status: partial.status ?? "upcoming",
     color: partial.color,
     courseId: partial.courseId,
-    bucket: partial.bucket
+    bucket: partial.bucket,
+    // plan/16 §5.2 — these three must survive every path that builds a slot, or an objective/sitting
+    // is silently dropped the moment a block is created through `createSlot` rather than by hand.
+    // That is exactly how `acceptProposals` used to lose `refType`/`refId` (plan/16 §2.2).
+    objectiveRef: partial.objectiveRef,
+    chunk: partial.chunk,
+    plannedMinutes: partial.plannedMinutes
   };
 }
 

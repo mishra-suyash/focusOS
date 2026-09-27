@@ -23,7 +23,7 @@ import {
   QUICK_BLOCK_PRESETS,
   rangeOverlapsSlots,
   snapMinutes,
-  taskBlockMinutes,
+  taskChunkPlan,
   type QuickBlockPreset
 } from "@/lib/timeline";
 import { BUILTIN_DAY_TEMPLATES, materializeBuiltinDayTemplate, type BuiltinDayTemplate } from "@/lib/templates/builtin";
@@ -103,6 +103,27 @@ export function PlanTray({
 }) {
   const { user } = useAuth();
   const { settings } = useUserSettings();
+  /**
+   * plan/16 §5.1 — every sizing decision on this tray goes through the *split*, not through the
+   * task's whole estimate. It used to call `taskBlockMinutes` directly, which is the uncapped total:
+   * a 14-pomodoro task sized its drop preview, its overlap check, and its "Schedule" gap search at
+   * 350 minutes while `createTaskBlock` would have built a 50-minute "1 of 7". The overlap check
+   * refused every drop on any ordinary day, so the gesture silently did nothing and the button was
+   * dead — Phase 1's fix landed everywhere except the one path a person actually drags on.
+   */
+  const chunkSettings = { maxChunkMinutes: settings.maxChunkMinutes, minChunkMinutes: settings.minChunkMinutes };
+  const sittingPlanFor = (task: Task) => taskChunkPlan(task, workMinutes, chunkSettings);
+  /** "50m" for work that fits one sitting, "50m · 1 of 7" for work that doesn't — so the tray row
+   *  advertises the block that will actually be created rather than the task's whole estimate. */
+  function sittingLabel(task: Task): string {
+    const plan = sittingPlanFor(task);
+    return plan.total > 1 ? `${plan.firstMinutes}m · 1 of ${plan.total}` : `${plan.firstMinutes}m`;
+  }
+  /** The one sentence a split drop owes the user: it placed the first sitting, not the whole task. */
+  function announceSplit(task: Task, total: number) {
+    if (total <= 1) return;
+    announce?.(`Scheduled sitting 1 of ${total} for "${task.title}" — ${total - 1} still to plan.`);
+  }
   const { items: userTemplates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
   const dragRef = useRef<TrayGesture | null>(null);
@@ -154,10 +175,16 @@ export function PlanTray({
         }
         return;
       }
-      const duration = taskBlockMinutes(gesture.task, workMinutes);
+      const plan = sittingPlanFor(gesture.task);
       const start = snapMinutes(hit.minute, 15);
-      const end = start + duration;
-      grid.setExternalPreview({ kind: "single", start, end, valid: end <= MINUTES_PER_DAY && !rangeOverlapsSlots(start, end, slots), label: gesture.task.title });
+      const end = start + plan.firstMinutes;
+      grid.setExternalPreview({
+        kind: "single",
+        start,
+        end,
+        valid: end <= MINUTES_PER_DAY && !rangeOverlapsSlots(start, end, slots),
+        label: plan.total > 1 ? `${gesture.task.title} (1 of ${plan.total})` : gesture.task.title
+      });
       return;
     }
 
@@ -205,11 +232,12 @@ export function PlanTray({
         onCommit(slots.map((slot) => (slot.id === target.id ? { ...slot, assignedTaskIds: Array.from(ids) } : slot)));
         return;
       }
-      const duration = taskBlockMinutes(gesture.task, workMinutes);
+      const plan = sittingPlanFor(gesture.task);
       const start = snapMinutes(hit.minute, 15);
-      const end = start + duration;
+      const end = start + plan.firstMinutes;
       if (end > MINUTES_PER_DAY || rangeOverlapsSlots(start, end, slots)) return; // policy A: refuse, never touch `slots`
-      onCommit([...slots, createTaskBlock(gesture.task, workMinutes, start)]);
+      onCommit([...slots, createTaskBlock(gesture.task, workMinutes, start, chunkSettings)]);
+      announceSplit(gesture.task, plan.total);
       return;
     }
 
@@ -227,10 +255,11 @@ export function PlanTray({
   }
 
   function scheduleTaskNow(task: Task) {
-    const duration = taskBlockMinutes(task, workMinutes);
-    const gapStart = nearestFreeGap(slots, anchorMinute, duration);
+    const plan = sittingPlanFor(task);
+    const gapStart = nearestFreeGap(slots, anchorMinute, plan.firstMinutes);
     if (gapStart === null) return;
-    onCommit([...slots, createTaskBlock(task, workMinutes, gapStart)]);
+    onCommit([...slots, createTaskBlock(task, workMinutes, gapStart, chunkSettings)]);
+    announceSplit(task, plan.total);
   }
 
   function scheduleQuickNow(preset: QuickBlockPreset) {
@@ -375,7 +404,7 @@ export function PlanTray({
                 className="flex touch-none items-center gap-2 rounded-md border border-ink-200 px-2 py-1.5 text-xs dark:border-ink-800"
               >
                 <span className="flex-1 truncate">
-                  {task.title} · {taskBlockMinutes(task, workMinutes)}m
+                  {task.title} · {sittingLabel(task)}
                 </span>
                 <button className="btn-secondary px-1.5 py-1 text-[11px]" onClick={() => scheduleTaskNow(task)} aria-label={`Schedule ${task.title}`}>
                   Schedule

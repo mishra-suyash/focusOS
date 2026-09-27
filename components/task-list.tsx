@@ -3,7 +3,9 @@
 import { Check, Circle, Clock, Repeat, Trash2 } from "lucide-react";
 import { InfoHint } from "@/components/info-hint";
 import { categoryLabels } from "@/lib/options";
-import type { Course, Task, TaskStatus } from "@/types";
+import { DEFAULT_MAX_CHUNK_MINUTES, taskBlockMinutes } from "@/lib/timeline";
+import { loggedMinutesForTask } from "@/lib/tracking";
+import type { Course, PomodoroSession, Task, TaskStatus } from "@/types";
 import { clsx } from "clsx";
 
 export function TaskList({
@@ -11,7 +13,9 @@ export function TaskList({
   onStatus,
   onDelete,
   empty = "No tasks here yet.",
-  courses = []
+  courses = [],
+  sessions,
+  workMinutes = 25
 }: {
   tasks: Task[];
   onStatus: (task: Task, status: TaskStatus) => Promise<void>;
@@ -19,6 +23,10 @@ export function TaskList({
   empty?: string;
   /** plan/10.FocusOS-v2-Connected-Flow-Plan.md §5.3 — resolves Task.courseId to a name/color chip. Absent tasks just show no chip, same as before this prop existed. */
   courses?: Course[];
+  /** plan/16 §5.1 — real focus-session history, for the minutes line beside the session count.
+   *  Absent = the session count alone, exactly as this list read before `16`. */
+  sessions?: PomodoroSession[];
+  workMinutes?: number;
 }) {
   if (tasks.length === 0) {
     return <div className="rounded-md border border-dashed border-ink-300 p-5 text-sm text-ink-500 dark:border-ink-700">{empty}</div>;
@@ -81,6 +89,13 @@ export function TaskList({
                       {task.status !== "done" ? ` · ${Math.max(0, task.estimatedPomodoros - (task.completedPomodoros ?? 0))} left` : ""}
                     </span>
                   ) : null}
+                  {/* plan/16 §5.1 — the minutes line, beside the session count rather than instead of
+                      it. The count answers "how many times have I sat with this", which is genuinely
+                      useful; it just can't answer "how much is left", because it advances once per
+                      session over a 5-minute floor, so a 6-minute session and a 50-minute one move it
+                      identically. The minutes are real logged `PomodoroSession.minutes`, and they are
+                      the number the weekly planner subtracts when deciding what to propose. */}
+                  {sessions && task.estimatedPomodoros ? <MinutesLine task={task} sessions={sessions} workMinutes={workMinutes} /> : null}
                   <button
                     className={clsx(
                       "rounded px-1.5 py-0.5 font-medium",
@@ -105,5 +120,23 @@ export function TaskList({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * plan/16 §5.1 — "logged of planned, n min left", in minutes, plus how many sittings that much work
+ * splits into so the figure connects to the blocks the planner will actually propose. Every number
+ * here is derived: nothing about a task's stored `completedPomodoros` changes.
+ */
+function MinutesLine({ task, sessions, workMinutes }: { task: Task; sessions: PomodoroSession[]; workMinutes: number }) {
+  const total = taskBlockMinutes(task, workMinutes);
+  const logged = loggedMinutesForTask(sessions, task.id);
+  const left = Math.max(0, total - logged);
+  const sittings = Math.ceil(left / (task.maxChunkMinutes ?? DEFAULT_MAX_CHUNK_MINUTES));
+  return (
+    <span className="inline-flex items-center gap-1">
+      {logged} of {total} min
+      {task.status !== "done" && left > 0 ? ` · ${left} min left${sittings > 1 ? ` (${sittings} sittings)` : ""}` : ""}
+    </span>
   );
 }

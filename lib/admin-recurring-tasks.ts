@@ -12,7 +12,15 @@ function isAlreadyExistsError(error: unknown): boolean {
 }
 
 /** Exported for scripts/verify-recurring-tasks.ts — the other half of L2 (plan/14 §2.4): the
- * generate-time copy that gets a fresh instance's `bucket` right from the start. */
+ * generate-time copy that gets a fresh instance's `bucket` right from the start.
+ *
+ * plan/16 §2.1/§5.1 — `template.time` is now copied through as `Task.fixedTime`. It used to be
+ * dropped here silently, because `Task` had no field to receive it: a commitment the user gave a
+ * specific clock time to (a 14:00–15:00 TA meeting, a fixed office hour) materialized as a
+ * *timeless* task, which the weekly planner then sized with `taskBlockMinutes` and placed wherever
+ * its gap search found room — at an unrelated time, at the generic default length. That was
+ * observed in live use, and it is the one bug in this area that no pure-function test could have
+ * caught, since the loss happened in the copy rather than in any calculation. */
 export function taskFromTemplate(template: RecurringTaskTemplate, dateKey: string): NewTask {
   return {
     title: template.title,
@@ -24,7 +32,8 @@ export function taskFromTemplate(template: RecurringTaskTemplate, dateKey: strin
     estimatedPomodoros: template.estimatedPomodoros,
     courseId: template.courseId,
     bucket: template.bucket,
-    seriesId: template.id
+    seriesId: template.id,
+    ...(template.time ? { fixedTime: template.time, splittable: false } : {})
   };
 }
 

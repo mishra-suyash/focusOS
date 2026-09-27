@@ -34,7 +34,9 @@ import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak } from
 import { pickNextAction } from "@/lib/next-action";
 import { downloadDailyFramePdf } from "@/lib/pdf";
 import { createSlot, currentMinute, getActiveSlot, getNextSlot, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
-import { createTaskBlock, nearestFreeGap, taskBlockMinutes } from "@/lib/timeline";
+import { describeObjective } from "@/lib/objectives";
+import { createTaskBlock, nearestFreeGap, taskChunkPlan } from "@/lib/timeline";
+import { sittingRemainingMinutes } from "@/lib/tracking";
 import { isBreakMode } from "@/lib/terms";
 import type { Course, DailySchedule, Day, Goal, Paper, PomodoroSession, ScheduleSlotType, Task, Term } from "@/types";
 
@@ -130,7 +132,23 @@ function DashboardContent() {
     const linkedTaskIds = slotId ? dailySchedule?.slots.find((slot) => slot.id === slotId)?.assignedTaskIds ?? [] : [];
     const courseId = searchParams.get("courseId") ?? undefined;
     const bucket = (searchParams.get("bucket") as Task["bucket"] | null) ?? undefined;
-    startFocus({ label, category, slotId, taskId: linkedTaskIds.length === 1 ? linkedTaskIds[0] : undefined, courseId, bucket });
+    // plan/16 §5.5 — the sitting's own length and its paper context are read off the real slot we
+    // just looked up, not passed through the URL: the slot is already in hand here, and a link
+    // carrying a duration would go stale the moment the block was resized.
+    const linkedSlot = slotId ? dailySchedule?.slots.find((slot) => slot.id === slotId) : undefined;
+    const objective = linkedSlot ? describeObjective(linkedSlot, { courses, papers, checkpoints: allCheckpoints, tasks, goals }) : null;
+    const sittingLeft = linkedSlot ? sittingRemainingMinutes(linkedSlot, todaysSessions) : 0;
+    startFocus({
+      label,
+      category,
+      slotId,
+      taskId: linkedTaskIds.length === 1 ? linkedTaskIds[0] : undefined,
+      courseId,
+      bucket,
+      paperId: objective?.attribution.paperId,
+      passNo: objective?.attribution.passNo,
+      minutes: sittingLeft > 0 ? sittingLeft : undefined
+    });
     router.replace("/dashboard", { scroll: false });
   }, [searchParams, dailySchedule, dailySchedulesLoading]);
 
@@ -143,10 +161,17 @@ function DashboardContent() {
     if (nextAction.kind === "task" && nextAction.taskId) {
       const task = tasks.find((item) => item.id === nextAction.taskId);
       if (!task) return;
-      const duration = taskBlockMinutes(task, workMinutes);
-      const gapStart = nearestFreeGap(currentSlots, currentMinute(), duration);
+      // plan/16 §5.1 — schedule the task's *first sitting*, not the whole estimate. A 14-pomodoro
+      // task used to produce one 350-minute block here, which `nearestFreeGap` could essentially
+      // never place; it now places a single sitting and says how many are left to plan, so dropping
+      // work larger than one sitting is explicit rather than silent.
+      const chunkSettings = { maxChunkMinutes: settings.maxChunkMinutes, minChunkMinutes: settings.minChunkMinutes };
+      const plan = taskChunkPlan(task, workMinutes, chunkSettings);
+      // The created block is titled "(1 of n)" by `createTaskBlock`, so the split is visible on the
+      // timeline we navigate to rather than needing a toast the redirect would immediately discard.
+      const gapStart = nearestFreeGap(currentSlots, currentMinute(), plan.firstMinutes);
       if (gapStart === null) return;
-      block = createTaskBlock(task, workMinutes, gapStart);
+      block = createTaskBlock(task, workMinutes, gapStart, chunkSettings);
     } else {
       const duration = 45;
       const type: ScheduleSlotType = nextAction.kind === "revision" ? "reading" : "admin";
@@ -328,7 +353,17 @@ function DashboardContent() {
         </div>
 
         <div className="space-y-4">
-          <NowCard date={today} schedule={dailySchedule} tasks={tasks} courses={courses} dayOff={day?.dayOff} />
+          <NowCard
+            date={today}
+            schedule={dailySchedule}
+            tasks={tasks}
+            courses={courses}
+            dayOff={day?.dayOff}
+            sessions={todaysSessions}
+            papers={papers}
+            checkpoints={allCheckpoints}
+            goals={goals}
+          />
         </div>
 
         <div className="space-y-4">

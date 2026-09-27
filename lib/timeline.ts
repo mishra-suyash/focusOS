@@ -220,9 +220,108 @@ export function parseTypedTime(input: string): string | null {
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
-/** §4.4 tray — "Tasks to schedule" dropped on empty grid: `estimatedPomodoros x work length`, min 25min (a task with no estimate defaults to 1 pomodoro). */
+/** §4.4 tray — "Tasks to schedule" dropped on empty grid: `estimatedPomodoros x work length`, min
+ * 25min (a task with no estimate defaults to 1 pomodoro). This is the *total* minutes a task is
+ * worth, which is why it has no upper bound; it is `splitIntoChunks` below that turns that total
+ * into placeable sittings. Before plan/16 this value was used directly as a block duration, so a
+ * 14-pomodoro task became one 350-minute block that `placeInWindow` could never fit and the weekly
+ * planner silently filed under "Didn't fit" — see plan/16 §2.1. */
 export function taskBlockMinutes(task: Pick<Task, "estimatedPomodoros">, workMinutes: number): number {
   return Math.max(25, (task.estimatedPomodoros ?? 1) * workMinutes);
+}
+
+/** plan/16 §5.1 — "Write related-work section (3 of 7)". The suffix is omitted for unsplit work, so
+ *  a single-sitting block reads exactly as it always did. Shared by the weekly planner and the
+ *  drag/drop path so a sitting is labeled the same way wherever it was created. */
+export function sittingTitle(title: string, index: number, total: number): string {
+  return total > 1 ? `${title} (${index} of ${total})` : title;
+}
+
+/** plan/16 §5.1 — longest single sitting, minutes. Two classic pomodoros; long enough to be real
+ *  deep work, short enough to fit between typical routine blocks. Overridable globally
+ *  (`UserSettings.maxChunkMinutes`) and per task (`Task.maxChunkMinutes`). */
+export const DEFAULT_MAX_CHUNK_MINUTES = 50;
+/** plan/16 §5.1 — shortest sitting worth scheduling on its own. Matches `placeInWindow`'s 15-minute
+ *  search step (lib/weekplan.ts), so every sitting length is one the placement search can land. */
+export const DEFAULT_MIN_CHUNK_MINUTES = 15;
+
+/**
+ * plan/16 §5.1 — splits `totalMinutes` of work into sittings of at most `maxChunkMinutes`.
+ *
+ * Sittings are deliberately *equal-sized* rather than "max, max, max, remainder": the count is
+ * `ceil(total / max)` and each sitting is that total divided evenly, so 120 minutes under a
+ * 50-minute cap gives 3x40 rather than 50+50+20. A trailing stub is both harder to place (it needs
+ * its own gap for very little work) and less useful than three even sittings, and the even split
+ * keeps every sitting above half the cap, so `minChunkMinutes` is satisfied for free at any floor up
+ * to half the cap (it is 15 against a 50 default): 55 minutes under a 50 cap becomes 28+27, never
+ * 50+5. Where a floor *above* half the cap genuinely conflicts with the cap, the cap wins — see the
+ * loop below.
+ *
+ * Returns a single-element array for work that already fits, and — importantly — for unsplittable
+ * work regardless of its length. Refusing to split something the user said must happen in one
+ * sitting is the right behavior even though it means `placeProposals` may come back with
+ * `fits: false`: that is a visible, explainable refusal, not a silent override of an explicit
+ * instruction.
+ *
+ * Rounding is handled by giving the earlier sittings the extra minute(s), so the returned array
+ * always sums to exactly `totalMinutes` — the invariant that stops minutes being created or
+ * destroyed by planning (scripts/verify-chunking.ts sweeps it).
+ */
+export function splitIntoChunks(
+  totalMinutes: number,
+  opts: { maxChunkMinutes?: number; minChunkMinutes?: number; splittable?: boolean } = {}
+): number[] {
+  const total = Math.max(0, Math.round(totalMinutes));
+  if (total === 0) return [];
+
+  const max = Math.max(1, Math.round(opts.maxChunkMinutes ?? DEFAULT_MAX_CHUNK_MINUTES));
+  const min = Math.max(1, Math.round(opts.minChunkMinutes ?? DEFAULT_MIN_CHUNK_MINUTES));
+
+  if (opts.splittable === false) return [total];
+  if (total <= max) return [total];
+
+  // `ceil(total / max)` is the fewest sittings that can respect the cap, and the cap is strict: it
+  // is the whole point of the feature ("can't schedule a big chunk"), so nothing below is allowed to
+  // raise a sitting above it. The floor is a preference against useless fragments, applied only
+  // where it doesn't conflict — hence the guard on the second condition below. An earlier version
+  // clamped the count by `floor(total / min)` unconditionally, which produced a sitting *over* the
+  // cap whenever the two constraints disagreed (41 minutes under a 20/15 came out as 21+20); the
+  // swept invariant in scripts/verify-chunking.ts is what caught it.
+  let count = Math.ceil(total / max);
+  while (count > 1 && total / count < min && total / (count - 1) <= max) count -= 1;
+  if (count <= 1) return [total];
+
+  const base = Math.floor(total / count);
+  let remainder = total - base * count;
+  const chunks: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const extra = remainder > 0 ? 1 : 0;
+    remainder -= extra;
+    chunks.push(base + extra);
+  }
+  return chunks;
+}
+
+/**
+ * plan/16 §5.1 — the sittings a task should be scheduled in: its total minutes (`taskBlockMinutes`)
+ * split under the effective cap. `Task.fixedTime` and `splittable: false` both force one sitting,
+ * since a block pinned to a clock time cannot be spread across the week. The per-task
+ * `maxChunkMinutes` wins over the account-wide setting, which in turn wins over the default.
+ */
+export function taskChunkMinutes(
+  task: Pick<Task, "estimatedPomodoros" | "maxChunkMinutes" | "splittable" | "fixedTime">,
+  workMinutes: number,
+  settings: { maxChunkMinutes?: number; minChunkMinutes?: number } = {}
+): number[] {
+  if (task.fixedTime) {
+    const fixed = minutesFromTime(task.fixedTime.endTime) - minutesFromTime(task.fixedTime.startTime);
+    return [Math.max(1, fixed)];
+  }
+  return splitIntoChunks(taskBlockMinutes(task, workMinutes), {
+    maxChunkMinutes: task.maxChunkMinutes ?? settings.maxChunkMinutes,
+    minChunkMinutes: settings.minChunkMinutes,
+    splittable: task.splittable
+  });
 }
 
 const CATEGORY_SLOT_TYPE: Record<Category, ScheduleSlotType> = {
@@ -322,11 +421,26 @@ export function freshTemplateSlots(slots: ScheduleSlot[]): ScheduleSlot[] {
   return sortedSlots(slots).map((slot) => ({ ...slot, id: crypto.randomUUID(), status: "upcoming" }));
 }
 
-/** Builds the new block a task-drop creates — factored out so `TimeGrid`'s drop handler and any non-drag equivalent size/type it identically. */
-export function createTaskBlock(task: Task, workMinutes: number, startMinutes: number): ScheduleSlot {
-  const duration = taskBlockMinutes(task, workMinutes);
+/**
+ * Builds the new block a task-drop creates — factored out so `TimeGrid`'s drop handler and any
+ * non-drag equivalent size/type it identically.
+ *
+ * plan/16 §5.1: this now builds the *first sitting* of the task rather than one block for the whole
+ * thing. A 14-pomodoro task dropped on the grid used to become a single 350-minute block; it now
+ * becomes a 50-minute "1 of 7" and the caller reports how many sittings remain to plan. Dropping
+ * work larger than one sitting is the one interaction where a silent split would be surprising, so
+ * `taskChunkPlan` below exists to let the caller say so out loud.
+ */
+export function createTaskBlock(
+  task: Task,
+  workMinutes: number,
+  startMinutes: number,
+  settings: { maxChunkMinutes?: number; minChunkMinutes?: number } = {}
+): ScheduleSlot {
+  const chunks = taskChunkMinutes(task, workMinutes, settings);
+  const duration = chunks[0] ?? taskBlockMinutes(task, workMinutes);
   return createSlot({
-    title: task.title,
+    title: sittingTitle(task.title, 1, chunks.length),
     type: slotTypeForCategory(task.category),
     startTime: minutesToTime(startMinutes),
     endTime: minutesToTime(startMinutes + duration),
@@ -334,8 +448,24 @@ export function createTaskBlock(task: Task, workMinutes: number, startMinutes: n
     // plan/14 §6.1 — lets a focus session started inside this block attribute itself to the
     // course/bucket the task already carries, without the user touching the timer's dropdown.
     courseId: task.courseId,
-    bucket: task.bucket
+    bucket: task.bucket,
+    plannedMinutes: duration,
+    ...(chunks.length > 1 ? { chunk: { groupId: crypto.randomUUID(), index: 1, total: chunks.length } } : {})
   });
+}
+
+/**
+ * plan/16 §5.1 — what a caller needs to know before dropping a task on a day: how long the first
+ * sitting is, and how many more there are to plan. Separated from `createTaskBlock` so a UI can
+ * say "1 of 7 scheduled, 6 left to plan" without recomputing the split.
+ */
+export function taskChunkPlan(
+  task: Pick<Task, "estimatedPomodoros" | "maxChunkMinutes" | "splittable" | "fixedTime">,
+  workMinutes: number,
+  settings: { maxChunkMinutes?: number; minChunkMinutes?: number } = {}
+): { firstMinutes: number; total: number; remainingSittings: number } {
+  const chunks = taskChunkMinutes(task, workMinutes, settings);
+  return { firstMinutes: chunks[0] ?? 0, total: chunks.length, remainingSittings: Math.max(0, chunks.length - 1) };
 }
 
 const SLOT_TYPE_CATEGORY: Record<ScheduleSlotType, Category> = {

@@ -11,17 +11,22 @@ import { TaskList } from "@/components/task-list";
 import { TaskPackDialog } from "@/components/task-pack-dialog";
 import { useAuth } from "@/components/auth-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
+import { useUserSettings } from "@/hooks/use-user-settings";
 import { categories, priorities, statuses } from "@/lib/options";
 import { createRecurringTaskTemplate, createTask, deleteTask, updateTask } from "@/lib/firestore";
 import { computeStatusPatch } from "@/lib/tasks";
 import { todayKey, weekDates, weekStartKey } from "@/lib/dates";
-import type { Category, Course, Priority, RecurringTaskTemplate, Task, TaskStatus } from "@/types";
+import type { Category, Course, PomodoroSession, Priority, RecurringTaskTemplate, Task, TaskStatus } from "@/types";
 
 export default function TasksPage() {
   const { user } = useAuth();
   const { items: tasks, loading: tasksLoading } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: recurringTemplates } = useUserCollection<RecurringTaskTemplate>("recurringTaskTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
+  // plan/16 §5.1 — real logged minutes for the list's minutes line. Subscribed here rather than
+  // derived inside `TaskList` so the component stays presentational and usable without it.
+  const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
+  const { settings } = useUserSettings();
   const [view, setView] = useState("all");
   const [category, setCategory] = useState<Category | "all">("all");
   const [priority, setPriority] = useState<Priority | "all">("all");
@@ -107,6 +112,8 @@ export default function TasksPage() {
             <TaskList
               tasks={filtered}
               courses={courses}
+              sessions={sessions}
+              workMinutes={settings.workMinutes ?? 25}
               onStatus={(task, next) => updateTask(user!.uid, task.id, computeStatusPatch(task, next))}
               onDelete={(task) => deleteTask(user!.uid, task.id)}
             />
