@@ -253,7 +253,7 @@ export const DEFAULT_MIN_CHUNK_MINUTES = 15;
  * 50-minute cap gives 3x40 rather than 50+50+20. A trailing stub is both harder to place (it needs
  * its own gap for very little work) and less useful than three even sittings, and the even split
  * keeps every sitting above half the cap, so `minChunkMinutes` is satisfied for free at any floor up
- * to half the cap (it is 15 against a 50 default): 55 minutes under a 50 cap becomes 28+27, never
+ * to half the cap (it is 15 against a 50 default): 55 minutes under a 50 cap becomes 30+25, never
  * 50+5. Where a floor *above* half the cap genuinely conflicts with the cap, the cap wins — see the
  * loop below.
  *
@@ -290,6 +290,18 @@ export function splitIntoChunks(
   let count = Math.ceil(total / max);
   while (count > 1 && total / count < min && total / (count - 1) <= max) count -= 1;
   if (count <= 1) return [total];
+
+  // Whole 5-minute sittings where the total allows it: 360 minutes in seven reads as 55,55,50,50,
+  // 50,50,50 rather than 52,52,51,51,51,51,51 — the same minutes, but lengths a person would choose
+  // and a 15-minute placement grid doesn't leave 8-minute slivers between. Falls back to the
+  // minute-exact split below whenever the rounded one would breach the cap or the floor.
+  if (total % 5 === 0) {
+    const units = total / 5;
+    const unitBase = Math.floor(units / count);
+    const unitRemainder = units - unitBase * count;
+    const rounded = Array.from({ length: count }, (_, i) => (unitBase + (i < unitRemainder ? 1 : 0)) * 5);
+    if (rounded[0] <= max && rounded[count - 1] >= Math.min(min, max)) return rounded;
+  }
 
   const base = Math.floor(total / count);
   let remainder = total - base * count;

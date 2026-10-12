@@ -65,6 +65,46 @@ function coveredMinutesInWindow(windowStart: number, windowEnd: number, slots: P
 }
 
 /**
+ * The moment planning is measured from. A week being planned on its own Monday at 07:21 cannot use
+ * 05:30–07:21 of that Monday, nor any earlier day — counting them made the meter promise hours that
+ * were already gone, and the placement search proposed sittings into the past. Absent = no floor
+ * (a future week, and every pure-function test that predates this).
+ */
+export type NowFloor = { dateKey: string; minutes: number };
+
+/** The part of the working window on `dateKey` that is still usable: the whole window on a future
+ *  date, the window from the next 15-minute mark on today, `null` on a past date or once today's
+ *  window has run out. Says nothing about `daysOfWeek` or days off — callers decide those. */
+export function usableWindow(workingWindow: WorkingWindow, dateKey: string, now?: NowFloor): { start: number; end: number } | null {
+  const end = minutesFromTime(workingWindow.endTime);
+  let start = minutesFromTime(workingWindow.startTime);
+  if (now) {
+    if (dateKey < now.dateKey) return null;
+    if (dateKey === now.dateKey) start = Math.max(start, Math.ceil(now.minutes / 15) * 15);
+  }
+  return end > start ? { start, end } : null;
+}
+
+/**
+ * Free minutes on one day: the usable window minus whatever of `slots` falls inside it, overlaps
+ * merged. The one definition of "free" — the capacity meter sums it over the week with the locked
+ * layer, the week grid shows it per day with the proposals added — so the two can only differ by
+ * what they were asked to subtract, never by how they count.
+ */
+export function freeMinutesOnDay(
+  workingWindow: WorkingWindow,
+  dateKey: string,
+  slots: Pick<ScheduleSlot, "startTime" | "endTime">[],
+  opts: { offDateKeys?: ReadonlySet<string>; now?: NowFloor } = {}
+): number {
+  if (!workingWindow.daysOfWeek.includes(getDay(parseISO(dateKey)))) return 0;
+  if (opts.offDateKeys?.has(dateKey)) return 0;
+  const window = usableWindow(workingWindow, dateKey, opts.now);
+  if (!window) return 0;
+  return Math.max(0, window.end - window.start - coveredMinutesInWindow(window.start, window.end, slots));
+}
+
+/**
  * plan/14 §5.3 — the capacity meter's `free`, deliberately not "the week minus what's booked" (that
  * formula counts 03:00 on a Tuesday as available and yields a number that tells the user they have
  * room to spare — the opposite of what this step exists to produce). `free` is the hours the user
@@ -85,18 +125,14 @@ export function weekCapacity(params: {
    *  same as a date outside `workingWindow.daysOfWeek` — a day off isn't "fully claimed," it's not
    *  a working day at all for this week, and the distinction matters for the meter's own wording. */
   offDateKeys?: ReadonlySet<string>;
+  /** Hours already behind you this week are not free. */
+  now?: NowFloor;
 }): { freeMinutes: number; committedMinutes: number } {
-  const { workingWindow, weekDateKeys, claimedSlotsByDate, committedMinutes, offDateKeys } = params;
-  const windowStart = minutesFromTime(workingWindow.startTime);
-  const windowEnd = minutesFromTime(workingWindow.endTime);
-  const windowLength = Math.max(0, windowEnd - windowStart);
-
-  const freeMinutes = weekDateKeys.reduce((sum, dateKey) => {
-    if (!workingWindow.daysOfWeek.includes(getDay(parseISO(dateKey)))) return sum;
-    if (offDateKeys?.has(dateKey)) return sum;
-    const covered = coveredMinutesInWindow(windowStart, windowEnd, claimedSlotsByDate[dateKey] ?? []);
-    return sum + Math.max(0, windowLength - covered);
-  }, 0);
+  const { workingWindow, weekDateKeys, claimedSlotsByDate, committedMinutes, offDateKeys, now } = params;
+  const freeMinutes = weekDateKeys.reduce(
+    (sum, dateKey) => sum + freeMinutesOnDay(workingWindow, dateKey, claimedSlotsByDate[dateKey] ?? [], { offDateKeys, now }),
+    0
+  );
 
   return { freeMinutes, committedMinutes };
 }
@@ -238,11 +274,12 @@ export function placeProposals(
   weekDateKeys: string[],
   claimedSlotsByDate: Record<string, Pick<ScheduleSlot, "startTime" | "endTime">[]>,
   workingWindow: WorkingWindow,
-  offDateKeys: ReadonlySet<string> = new Set()
+  offDateKeys: ReadonlySet<string> = new Set(),
+  now?: NowFloor
 ): WeekProposal[] {
-  const windowStart = minutesFromTime(workingWindow.startTime);
-  const windowEnd = minutesFromTime(workingWindow.endTime);
-  const workingDates = weekDateKeys.filter((d) => workingWindow.daysOfWeek.includes(getDay(parseISO(d))) && !offDateKeys.has(d));
+  const workingDates = weekDateKeys.filter(
+    (d) => workingWindow.daysOfWeek.includes(getDay(parseISO(d))) && !offDateKeys.has(d) && usableWindow(workingWindow, d, now) !== null
+  );
   const simulated: Record<string, { startTime: string; endTime: string }[]> = {};
   for (const d of weekDateKeys) simulated[d] = [...(claimedSlotsByDate[d] ?? [])];
 
@@ -261,7 +298,8 @@ export function placeProposals(
   const cappedGroupDays = new Set<string>();
 
   function tryPlace(dateKey: string, durationMinutes: number): number | null {
-    return placeInWindow(simulated[dateKey] ?? [], windowStart, windowEnd, durationMinutes);
+    const window = usableWindow(workingWindow, dateKey, now);
+    return window ? placeInWindow(simulated[dateKey] ?? [], window.start, window.end, durationMinutes) : null;
   }
 
   function commit(dateKey: string, start: number, durationMinutes: number, capGroup: string | null) {
@@ -283,10 +321,14 @@ export function placeProposals(
       // plan/16 §5.1 — an exact-time pin: the only question is whether that exact range is free.
       const start = minutesFromTime(candidate.fixedStartTime);
       const end = start + candidate.durationMinutes;
+      const window = usableWindow(workingWindow, candidate.dateKey, now);
       const occupied = (simulated[candidate.dateKey] ?? []).some(
         (slot) => start < minutesFromTime(slot.endTime) && minutesFromTime(slot.startTime) < end
       );
-      if (!occupied) {
+      // A pinned time that has already passed is refused like an occupied one: proposing a sitting
+      // into the past is a block that can only ever be missed.
+      const passed = !window || start < window.start;
+      if (!occupied && !passed) {
         const slot = commit(candidate.dateKey, start, candidate.durationMinutes, null);
         return { ...candidate, key, dateKey: candidate.dateKey, ...slot, fits: true };
       }
@@ -348,9 +390,11 @@ export function resolvePlacement(
     workingWindow: WorkingWindow;
     maxChunkMinutes: number;
     minChunkMinutes: number;
+    /** Today's elapsed part of the window is not a place a sitting can start. */
+    now?: NowFloor;
   }
 ): { placement: { dateKey: string; startMinutes: number; durationMinutes: number }; notes: string[] } {
-  const windowStart = minutesFromTime(context.workingWindow.startTime);
+  const windowStart = usableWindow(context.workingWindow, requested.dateKey, context.now)?.start ?? minutesFromTime(context.workingWindow.startTime);
   const windowEnd = minutesFromTime(context.workingWindow.endTime);
   const max = Math.max(1, context.maxChunkMinutes);
   const min = Math.max(1, Math.min(context.minChunkMinutes, max));

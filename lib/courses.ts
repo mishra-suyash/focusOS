@@ -293,7 +293,7 @@ export function completedMinutesThisWeek(
  */
 export function plannedMinutesForObjective(
   schedules: Pick<DailySchedule, "dateKey" | "slots">[],
-  ref: { kind: SlotObjectiveRef["kind"]; id?: string },
+  ref: { kind: SlotObjectiveRef["kind"]; id?: string; milestoneId?: string },
   weekDateKeys: string[] = currentWeekDateKeys()
 ): number {
   return schedules
@@ -303,7 +303,10 @@ export function plannedMinutesForObjective(
       const slotRef = slot.objectiveRef;
       if (!slotRef || slotRef.kind !== ref.kind) return false;
       if (ref.id === undefined) return true;
-      return "id" in slotRef && slotRef.id === ref.id;
+      if (!("id" in slotRef) || slotRef.id !== ref.id) return false;
+      // A milestone is narrower than its goal: two milestones of one goal are separate pieces of
+      // work, so a sitting for one must not read as progress on the other.
+      return ref.milestoneId === undefined || ("milestoneId" in slotRef && slotRef.milestoneId === ref.milestoneId);
     })
     .reduce((sum, slot) => sum + slotMinutes(slot), 0);
 }

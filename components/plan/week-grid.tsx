@@ -8,7 +8,7 @@ import { TypedTimeInput } from "@/components/plan/typed-time-input";
 import { minutesFromTime, minutesToTime, slotTypeStyles } from "@/lib/schedule";
 import { magnetize, minutesToPx, pxToMinutes, snapMinutes } from "@/lib/timeline";
 import type { ProposalDecision, ScheduleSlot } from "@/types";
-import type { WeekProposal, WorkingWindow } from "@/lib/weekplan";
+import { freeMinutesOnDay, usableWindow, type NowFloor, type WeekProposal, type WorkingWindow } from "@/lib/weekplan";
 
 /**
  * plan/16 §5.3 — the week you can actually plan on.
@@ -78,7 +78,8 @@ export function WeekGrid({
   disabled = false,
   chipFor,
   dayScoreFor,
-  announce
+  announce,
+  now
 }: {
   weekDateKeys: string[];
   dayLabels: string[];
@@ -106,6 +107,8 @@ export function WeekGrid({
   /** plan/16 §5.6 — a past day's score, for the per-column readout. Null/absent renders nothing. */
   dayScoreFor?: (dateKey: string) => number | null | undefined;
   announce?: (message: string) => void;
+  /** Elapsed time this week: a drop before it is refused, and the day headers don't count it as free. */
+  now?: NowFloor;
 }) {
   const columnsRef = useRef<HTMLDivElement>(null);
   const gestureRef = useRef<Gesture | null>(null);
@@ -145,7 +148,8 @@ export function WeekGrid({
   function validAt(dateKey: string, startMinutes: number, durationMinutes: number, exceptKey: string): boolean {
     if (offDateKeys.has(dateKey)) return false;
     if (!workingWindow.daysOfWeek.includes(getDay(parseISO(dateKey)))) return false;
-    if (startMinutes < windowStart || startMinutes + durationMinutes > windowEnd) return false;
+    const usable = usableWindow(workingWindow, dateKey, now);
+    if (!usable || startMinutes < usable.start || startMinutes + durationMinutes > usable.end) return false;
     return !overlaps(startMinutes, startMinutes + durationMinutes, blockersFor(dateKey, exceptKey));
   }
 
@@ -232,16 +236,16 @@ export function WeekGrid({
     announce?.(`Moved to ${hit.dateKey} at ${minutesToTime(hit.startMinutes)}.`);
   }
 
-  /** Free minutes left inside the working window on one day, after the locked layer and every
-   *  proposal still sitting there. Recomputed every render, so it follows a drag live (§5.3). */
-  function freeMinutesOn(dateKey: string): number {
-    if (offDateKeys.has(dateKey)) return 0;
-    const taken = [...(fixedSlotsByDate[dateKey] ?? []), ...(proposalsByDate.get(dateKey) ?? [])].reduce((sum, item) => {
-      const start = Math.max(windowStart, minutesFromTime(item.startTime));
-      const end = Math.min(windowEnd, minutesFromTime(item.endTime));
-      return sum + Math.max(0, end - start);
-    }, 0);
-    return Math.max(0, windowEnd - windowStart - taken);
+  /** What a day's header says: why nothing can go there, or the free minutes left after the locked
+   *  layer and every proposal on it. The same `freeMinutesOnDay` the page's meter sums — overlaps
+   *  merged, non-working and past days zero — so the two can only differ by the proposals added here.
+   *  Recomputed every render, so it follows a drag live (§5.3). */
+  function dayReadout(dateKey: string): string {
+    if (offDateKeys.has(dateKey)) return "Day off";
+    if (!workingWindow.daysOfWeek.includes(getDay(parseISO(dateKey)))) return "Not a working day";
+    if (!usableWindow(workingWindow, dateKey, now)) return now && dateKey < now.dateKey ? "Past" : "Window over";
+    const free = freeMinutesOnDay(workingWindow, dateKey, [...(fixedSlotsByDate[dateKey] ?? []), ...(proposalsByDate.get(dateKey) ?? [])], { offDateKeys, now });
+    return `${Math.round(free / 6) / 10}h left`;
   }
 
   return (
@@ -265,7 +269,7 @@ export function WeekGrid({
                     {dayLabels[index]} {dateKey.slice(5)}
                   </p>
                   <p className="text-[10px] tabular-nums text-ink-400">
-                    {offDateKeys.has(dateKey) ? "Day off" : `${Math.round(freeMinutesOn(dateKey) / 6) / 10}h free`}
+                    {dayReadout(dateKey)}
                     {typeof score === "number" ? ` · ${score}` : ""}
                   </p>
                 </div>

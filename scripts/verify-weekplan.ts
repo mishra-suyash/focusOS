@@ -3,7 +3,7 @@
  * Unit-test stand-in for lib/weekplan.ts (plan/14 §5.3/§5.4/§5.6, §12) — same pattern as
  * scripts/verify-tracking.ts, since this repo has no test runner.
  */
-import { DEFAULT_WORKING_WINDOW, placeInWindow, placeProposals, weekCapacity, weeklyPlanningSlotForDate, type WeekProposalCandidate } from "../lib/weekplan";
+import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, placeInWindow, placeProposals, resolvePlacement, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposalCandidate } from "../lib/weekplan";
 import { minutesFromTime } from "../lib/schedule";
 import type { ScheduleSlot } from "../types";
 
@@ -209,6 +209,52 @@ const SAT = WEEK[5];
   const revisionElsewhere = placed.filter((p) => p.fits && p.capGroup === "revision:course1" && p.dateKey !== MON).length;
   check("a course's own revision cap isn't inflated by an unrelated bucket's volume", revisionOnMonday <= 3, `Monday got ${revisionOnMonday} revision chunks`);
   check("capped revision overflow spills onto other days instead of vanishing", revisionElsewhere > 0, `got ${revisionElsewhere} elsewhere`);
+}
+
+// --- The now floor: planning a week from inside it (Mon 07:21 of the week being planned) ---
+
+{
+  const now = { dateKey: TUE, minutes: 7 * 60 + 21 };
+  check("a past day has no usable window", usableWindow(DEFAULT_WORKING_WINDOW, MON, now) === null);
+  check("today's window starts at the next 15-minute mark after now, not before it", usableWindow({ ...DEFAULT_WORKING_WINDOW, startTime: "05:30" }, TUE, now)?.start === 7 * 60 + 30);
+  check("a future day keeps its whole window", usableWindow(DEFAULT_WORKING_WINDOW, WEEK[2], now)?.start === 9 * 60);
+
+  // 09:00–18:00 Mon–Sat: Mon is past (0), Tue–Sat untouched at 07:21 (5 x 540), Sun isn't a working day.
+  const { freeMinutes } = weekCapacity({ workingWindow: DEFAULT_WORKING_WINDOW, weekDateKeys: WEEK, claimedSlotsByDate: {}, committedMinutes: 0, now });
+  check("capacity excludes days already behind you", freeMinutes === 5 * 540, `got ${freeMinutes}`);
+  const late = weekCapacity({ workingWindow: DEFAULT_WORKING_WINDOW, weekDateKeys: WEEK, claimedSlotsByDate: {}, committedMinutes: 0, now: { dateKey: TUE, minutes: 15 * 60 } });
+  check("capacity excludes the elapsed part of today", late.freeMinutes === 180 + 4 * 540, `got ${late.freeMinutes}`);
+
+  const placed = placeProposals(
+    Array.from({ length: 4 }, (_, i): WeekProposalCandidate => ({ title: `S${i}`, type: "deep_work", durationMinutes: 50, preferredDateKeys: [MON] })),
+    WEEK,
+    {},
+    DEFAULT_WORKING_WINDOW,
+    new Set(),
+    now
+  );
+  check("nothing is proposed onto a past day, even a preferred one", placed.every((p) => p.fits && p.dateKey !== MON), placed.map((p) => `${p.dateKey} ${p.startTime}`).join(", "));
+
+  const pinnedPast = placeProposals([{ title: "Pinned", type: "deep_work", durationMinutes: 30, dateKey: TUE, fixedStartTime: "06:00" }], WEEK, {}, { ...DEFAULT_WORKING_WINDOW, startTime: "05:30" }, new Set(), now);
+  check("a pinned time that has already passed is refused, not placed into the past", pinnedPast[0].fits === false);
+
+  const dragged = resolvePlacement(
+    { dateKey: TUE, startMinutes: 6 * 60, durationMinutes: 45 },
+    { occupied: [], workingWindow: { ...DEFAULT_WORKING_WINDOW, startTime: "05:30" }, maxChunkMinutes: 50, minChunkMinutes: 15, now }
+  );
+  check("a typed start before now is moved up to now", dragged.placement.startMinutes === 7 * 60 + 30, `got ${dragged.placement.startMinutes}`);
+}
+
+{
+  // One definition of free: overlapping locked slots are counted once, and a non-working day is 0
+  // (the grid header used to say Sunday had "10.8h free" while placement refused to use it).
+  const overlapping = [
+    { startTime: "12:00", endTime: "13:00" },
+    { startTime: "12:30", endTime: "13:30" }
+  ];
+  check("overlapping slots are merged, not double-subtracted", freeMinutesOnDay(DEFAULT_WORKING_WINDOW, MON, overlapping) === 540 - 90);
+  check("a non-working day has no free time", freeMinutesOnDay(DEFAULT_WORKING_WINDOW, SUN, []) === 0);
+  check("a day off has no free time", freeMinutesOnDay(DEFAULT_WORKING_WINDOW, MON, [], { offDateKeys: new Set([MON]) }) === 0);
 }
 
 if (failures.length > 0) {

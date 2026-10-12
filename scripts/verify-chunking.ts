@@ -63,6 +63,26 @@ const MON = WEEK[0];
 }
 
 {
+  // Whole 5-minute sittings when the total allows: 6h under a 55 cap is 55,55,50,50,50,50,50, not
+  // 52,52,51,51,51,51,51 — the same 360 minutes in lengths a 15-minute grid can sit flush against.
+  const chunks = splitIntoChunks(360, { maxChunkMinutes: 55, minChunkMinutes: 15 });
+  check("360m at a 55 cap is seven 5-minute-round sittings", chunks.length === 7 && chunks.every((m) => m % 5 === 0), chunks.join(","));
+  check("360m at a 55 cap still sums to 360", chunks.reduce((a, b) => a + b, 0) === 360, chunks.join(","));
+  let bad = "";
+  for (let total = 5; total <= 900 && !bad; total += 5) {
+    for (const max of [20, 25, 30, 45, 50, 53, 55, 60, 90]) {
+      const split = splitIntoChunks(total, { maxChunkMinutes: max, minChunkMinutes: 15 });
+      // Where cap and floor genuinely conflict (25m under 20/15) no split satisfies both, and the
+      // minute-exact fallback is the documented behavior — rounding isn't owed there.
+      const count = split.length;
+      const roundable = Math.floor(total / 5 / count) * 5 >= 15;
+      if (count > 1 && max % 5 === 0 && roundable && split.some((m) => m % 5 !== 0)) bad = `total=${total} max=${max} -> ${split.join(",")}`;
+    }
+  }
+  check("a multiple-of-5 total under a multiple-of-5 cap always splits into multiples of 5", bad === "", bad);
+}
+
+{
   // AC #5 — the invariant that matters most: planning never creates or destroys minutes.
   let bad = "";
   for (let total = 1; total <= 600 && !bad; total += 1) {
