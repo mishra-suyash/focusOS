@@ -40,13 +40,14 @@ import {
   userSelectableSlotTypes,
   validateSlots
 } from "@/lib/schedule";
+import { commitmentSlotsForDate, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { isBreakMode } from "@/lib/terms";
 import { rangeOverlapsSlots } from "@/lib/timeline";
 import { friendlyDate, todayKey } from "@/lib/dates";
 import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
-import type { Course, DailySchedule, DayTemplate, Goal, Paper, ScheduleSlot, ScheduleSlotType, Task, Term } from "@/types";
+import type { Course, DailySchedule, DayTemplate, Goal, Paper, RecurringTaskTemplate, ScheduleSlot, ScheduleSlotType, Task, Term } from "@/types";
 
 type CatalogDayEntry = PublicCatalog["templates"][number] & { payload: DayTemplatePayload };
 
@@ -69,6 +70,7 @@ function DayPlannerContent() {
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses, loading: coursesLoading } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: terms, loading: termsLoading } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
+  const { items: recurringTemplates } = useUserCollection<RecurringTaskTemplate>("recurringTaskTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   // plan/16 §5.2 — the rest of the objective context. Without these a reading block on this page
   // rendered "Paper reading" with no idea *which* paper: `describeObjective` degrades to the label
   // when it can't resolve a reference, which is the right fallback but the wrong outcome here,
@@ -86,14 +88,29 @@ function DayPlannerContent() {
   // Classes win on conflict: a lecture is a fixed external commitment, a routine anchor isn't.
   const wantedLockedSlots = useMemo(() => {
     const classSlots = isBreakMode(terms, dateKey) ? [] : courseSlotsForDate(courses, dateKey);
+    // A TA meeting or office hour (a timed recurring commitment) is fixed the same way a lecture is.
+    const commitmentSlots = commitmentSlotsForDate(recurringTemplates, dateKey, schedule?.slots ?? []);
+    const fixedSlots = [...classSlots, ...commitmentSlots];
+    // Routine yields to every commitment on this date, including one already saved onto it (which
+    // `commitmentSlots` leaves out) — otherwise the merge would re-add the block `withCommitments`
+    // set aside.
+    const yieldTo = [...classSlots, ...commitmentSlotsForDate(recurringTemplates, dateKey)];
     const routineSlots = routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, dateKey).filter(
-      (slot) => !rangeOverlapsSlots(minutesFromTime(slot.startTime), minutesFromTime(slot.endTime), classSlots)
+      (slot) => !rangeOverlapsSlots(minutesFromTime(slot.startTime), minutesFromTime(slot.endTime), yieldTo)
     );
     // plan/14 §5.6 — the fixed weekly-planning anchor, merged in the same "always present, never
     // overwritten once saved" way as class/routine blocks.
     const weeklyPlanningSlot = weeklyPlanningSlotForDate(settings.weeklyPlanning, dateKey);
-    return weeklyPlanningSlot ? [...classSlots, ...routineSlots, weeklyPlanningSlot] : [...classSlots, ...routineSlots];
-  }, [terms, courses, settings.routineBlocks, settings.weeklyPlanning, dateKey]);
+    return weeklyPlanningSlot ? [...fixedSlots, ...routineSlots, weeklyPlanningSlot] : [...fixedSlots, ...routineSlots];
+  }, [terms, courses, recurringTemplates, schedule?.slots, settings.routineBlocks, settings.weeklyPlanning, dateKey]);
+  /** The saved day as the timeline editor should start from: a routine block that a fixed commitment
+   *  now overlaps steps aside (`withCommitments`), rather than the editor appending the commitment on
+   *  top of it as two undeletable overlapping blocks. Written back with the editor's next autosave. */
+  const editorSchedule = useMemo(() => {
+    if (!schedule) return null;
+    const slots = withCommitments(schedule.slots, commitmentSlotsForDate(recurringTemplates, dateKey, schedule.slots));
+    return slots === schedule.slots ? schedule : { ...schedule, slots };
+  }, [schedule, recurringTemplates, dateKey]);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [templateName, setTemplateName] = useState("");
   const [templateDescription, setTemplateDescription] = useState("");
@@ -300,7 +317,7 @@ function DayPlannerContent() {
                 key={dateKey}
                 uid={user!.uid}
                 dateKey={dateKey}
-                schedule={schedule ?? null}
+                schedule={editorSchedule}
                 wantedLockedSlots={wantedLockedSlots}
                 tasks={tasks}
                 courses={courses}

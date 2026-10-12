@@ -237,6 +237,73 @@ export function sittingTitle(title: string, index: number, total: number): strin
   return total > 1 ? `${title} (${index} of ${total})` : title;
 }
 
+/** One block that may be a sitting of a split — the fields `renumberSittings` reads and rewrites. */
+export interface SittingEntry {
+  dateKey: string;
+  startTime: string;
+  title: string;
+  chunk?: { groupId: string; index: number; total: number };
+  /** False for a proposal with no position yet ("Didn't fit") — it sorts after every placed sibling. */
+  placed?: boolean;
+  /** The title before `sittingTitle` numbered it, when the generator knows it. Without it, a title
+   *  is renumbered only if it ends in exactly its current " (i of n)" — so a block renamed by hand,
+   *  or one whose number lives only in its chip (course bucket sittings), keeps its title. */
+  sittingBase?: string;
+}
+
+/**
+ * "1 of 3" means *first in the week*, so the numbers follow the blocks rather than the order they
+ * were generated in: drag sitting 1 after sitting 3 and it becomes 3, and the others close up.
+ *
+ * Every entry sharing a `chunk.groupId` is one split, numbered 1..n by date then start time — the
+ * caller passes saved sittings and proposals together, because a week's split is usually both at
+ * once (accept one of three and the planner regenerates the remainder as its own "1 of 2", which
+ * read as a second first sitting beside the saved one). Unplaced proposals go last, in their given
+ * order. A group of one is not a split, so its `chunk` is dropped — the same "absent = an ordinary
+ * single block" the type documents.
+ *
+ * Display and ordering only, as `ScheduleSlot.chunk` says; nothing derives progress from it. Order
+ * and identity of the entries are unchanged, and an entry whose numbering didn't change is returned
+ * as the same object.
+ */
+export function renumberSittings<T extends SittingEntry>(entries: T[]): T[] {
+  const groups = new Map<string, number[]>();
+  entries.forEach((entry, i) => {
+    if (!entry.chunk) return;
+    const members = groups.get(entry.chunk.groupId) ?? [];
+    members.push(i);
+    groups.set(entry.chunk.groupId, members);
+  });
+
+  const result = entries.slice();
+  for (const members of groups.values()) {
+    const ordered = [...members].sort((a, b) => {
+      const ea = entries[a];
+      const eb = entries[b];
+      const placedA = ea.placed !== false;
+      const placedB = eb.placed !== false;
+      if (placedA !== placedB) return placedA ? -1 : 1;
+      if (!placedA) return a - b;
+      return ea.dateKey.localeCompare(eb.dateKey) || minutesFromTime(ea.startTime) - minutesFromTime(eb.startTime) || a - b;
+    });
+    ordered.forEach((i, position) => {
+      const entry = entries[i];
+      const before = entry.chunk!;
+      const after = ordered.length > 1 ? { groupId: before.groupId, index: position + 1, total: ordered.length } : undefined;
+      if (after && after.index === before.index && after.total === before.total) return;
+      const suffix = ` (${before.index} of ${before.total})`;
+      const base = entry.sittingBase ?? (before.total > 1 && entry.title.endsWith(suffix) ? entry.title.slice(0, -suffix.length) : null);
+      const { chunk: _chunk, ...rest } = entry;
+      result[i] = {
+        ...rest,
+        title: base == null ? entry.title : after ? sittingTitle(base, after.index, after.total) : base,
+        ...(after ? { chunk: after } : {})
+      } as T;
+    });
+  }
+  return result;
+}
+
 /** plan/16 §5.1 — longest single sitting, minutes. Two classic pomodoros; long enough to be real
  *  deep work, short enough to fit between typical routine blocks. Overridable globally
  *  (`UserSettings.maxChunkMinutes`) and per task (`Task.maxChunkMinutes`). */

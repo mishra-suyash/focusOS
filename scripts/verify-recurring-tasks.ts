@@ -5,7 +5,18 @@
  * since this repo has no test runner.
  */
 import { taskFromTemplate } from "../lib/admin-recurring-tasks";
-import { dateKeysInRange, isTemplateDueOn, planRevisionTemplateSync, recurringTaskInstanceId } from "../lib/recurring-tasks";
+import {
+  commitmentSlotId,
+  commitmentSlotsForDate,
+  dateKeysInRange,
+  isFixedCommitmentOccurrence,
+  isTemplateDueOn,
+  planRevisionTemplateSync,
+  recurringTaskInstanceId,
+  withCommitments
+} from "../lib/recurring-tasks";
+import { isScoredSitting } from "../lib/gamify";
+import { isLockedSlot } from "../lib/schedule";
 import type { Course, RecurringTaskTemplate } from "../types";
 
 const failures: string[] = [];
@@ -196,6 +207,57 @@ function course(partial: Partial<Course> & Pick<Course, "id" | "name">): Pick<Co
   const t = template({ id: "t2", daysOfWeek: [2], cadence: "weekly" }); // no bucket set
   const task = taskFromTemplate(t, "2026-09-22");
   check("a template with no bucket generates a task with no bucket", task.bucket === undefined);
+}
+
+// --- Fixed commitments: a timed, unbucketed template is a locked block, and its occurrences are not work ---
+
+{
+  // 2026-10-14 is a Wednesday, 2026-10-13 a Tuesday.
+  const ta = template({ id: "ta", title: "TA meeting", daysOfWeek: [3], cadence: "weekly", time: { startTime: "14:00", endTime: "15:00", location: "Room 4" } });
+  const untimed = template({ id: "grade", title: "Grade problem sets", daysOfWeek: [3], cadence: "weekly" });
+  const bucketed = template({ id: "rev", title: "Revise X", daysOfWeek: [3], cadence: "weekly", courseId: "c1", bucket: "revision", time: { startTime: "10:00", endTime: "11:00" } });
+  const all = [ta, untimed, bucketed];
+
+  const wed = commitmentSlotsForDate(all, "2026-10-14");
+  check("a timed commitment becomes one block on its day", wed.length === 1 && wed[0].id === commitmentSlotId("ta"), JSON.stringify(wed));
+  check("at its own time", wed[0]?.startTime === "14:00" && wed[0]?.endTime === "15:00");
+  check("locked, so the planner treats it as fixed reality", wed[0] ? isLockedSlot(wed[0]) : false);
+  check("not a scored sitting — a meeting isn't run through the focus timer", wed[0] ? !isScoredSitting(wed[0]) : false);
+  check("carries its location", wed[0]?.note === "Room 4");
+  check("nothing on a day it isn't due", commitmentSlotsForDate(all, "2026-10-13").length === 0);
+  check("a paused commitment is not on the calendar", commitmentSlotsForDate([{ ...ta, active: false }], "2026-10-14").length === 0);
+  check("a timed template with a bucket stays planned work, not a fixed block",
+    commitmentSlotsForDate([bucketed], "2026-10-14").length === 0);
+
+  const savedBlock = { ...wed[0] };
+  check("not added twice to a day that already has it", commitmentSlotsForDate(all, "2026-10-14", [savedBlock]).length === 0);
+  const accepted = { id: "s1", title: "TA meeting", type: "deep_work" as const, startTime: "14:00", endTime: "15:00", status: "upcoming" as const, assignedTaskIds: [recurringTaskInstanceId("ta", "2026-10-14")] };
+  check("not added over a block already accepted for this occurrence", commitmentSlotsForDate(all, "2026-10-14", [accepted]).length === 0);
+  const lastWeek = { ...accepted, assignedTaskIds: [recurringTaskInstanceId("ta", "2026-10-07")] };
+  check("a block for a different occurrence doesn't hide this one", commitmentSlotsForDate(all, "2026-10-14", [lastWeek]).length === 1);
+
+  check("an occurrence of a timed commitment is not work", isFixedCommitmentOccurrence({ seriesId: "ta" }, all));
+  const pausedTa: RecurringTaskTemplate = { ...ta, active: false };
+  check("even once the commitment is paused", isFixedCommitmentOccurrence({ seriesId: "ta" }, [pausedTa]));
+  check("an untimed recurring task still is", !isFixedCommitmentOccurrence({ seriesId: "grade" }, all));
+  check("a bucketed timed task still is", !isFixedCommitmentOccurrence({ seriesId: "rev" }, all));
+  check("a one-off task still is", !isFixedCommitmentOccurrence({}, all));
+  check("an orphan occurrence (template deleted) still is", !isFixedCommitmentOccurrence({ seriesId: "gone" }, all));
+
+  // A saved day that already has Lunch 13:30–14:15 when a 14:00 commitment arrives.
+  const lunch = { id: "routine-lunch", title: "Lunch", type: "meal" as const, startTime: "13:30", endTime: "14:15", status: "upcoming" as const, locked: true };
+  const breakfast = { id: "routine-breakfast", title: "Breakfast", type: "meal" as const, startTime: "07:30", endTime: "08:00", status: "upcoming" as const, locked: true };
+  const work = { id: "w1", title: "Revision", type: "deep_work" as const, startTime: "13:00", endTime: "14:30", status: "upcoming" as const };
+  const merged = withCommitments([breakfast, lunch, work], wed);
+  check("a routine block overlapping a commitment steps aside on a saved day", !merged.some((slot) => slot.id === "routine-lunch"), merged.map((slot) => slot.id).join(","));
+  check("a routine block that doesn't overlap stays", merged.some((slot) => slot.id === "routine-breakfast"));
+  check("the user's own blocks are never removed", merged.some((slot) => slot.id === "w1"));
+  check("the commitment is added", merged.some((slot) => slot.id === commitmentSlotId("ta")));
+  const clean = [breakfast, wed[0]];
+  check("a day that already has the commitment is returned as is", withCommitments(clean, wed) === clean);
+  const savedOverlapping = withCommitments([breakfast, lunch, wed[0]], []);
+  check("a day saved with the commitment on top of a routine block is repaired",
+    !savedOverlapping.some((slot) => slot.id === "routine-lunch") && savedOverlapping.some((slot) => slot.id === commitmentSlotId("ta")));
 }
 
 if (failures.length > 0) {

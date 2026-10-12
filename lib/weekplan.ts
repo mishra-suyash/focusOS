@@ -190,6 +190,9 @@ export interface WeekProposalCandidate {
   /** plan/16 §5.1 — set when this candidate is one sitting of a split piece of work. Every sibling
    *  sitting of the same split shares `groupId`; `index`/`total` are 1-based, for display only. */
   chunk?: { groupId: string; index: number; total: number };
+  /** The title before `sittingTitle` numbered it, for a sitting whose title carries its number —
+   *  what lets `renumberSittings` rewrite "(1 of 3)" when the sitting is moved. */
+  sittingBase?: string;
   /** plan/16 §5.1 — minutes this sitting is planned to contribute. Normally equal to
    *  `durationMinutes`; carried separately so a later resize on the timeline can't rewrite what the
    *  week was understood to have committed. */
@@ -239,6 +242,43 @@ export interface WeekProposal extends WeekProposalCandidate {
 
 function totalClaimedMinutes(slots: Pick<ScheduleSlot, "startTime" | "endTime">[]): number {
   return slots.reduce((sum, slot) => sum + Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime)), 0);
+}
+
+const INDEXED_KEY = /^(.*):(\d+)$/;
+const DATED_KEY = /\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Anything keyed by proposal key (the week grid's drag positions and their notes), carried across
+ * an Accept or a Dismiss. A family's keys are `<family>:<index>` over sittings that are regenerated
+ * from what is still owed, so removing `:0` of three makes the next render's `:0` the old `:1`. Left
+ * as they were, an accepted sitting's position would land on whichever sitting inherited its key —
+ * on top of the block just saved — and every later one would sit one sitting off.
+ *
+ * Removed keys are dropped and the later ones in the same family shift down. A key whose last part
+ * is a date (lead-time spreads, `task:<id>:<index>:<dateKey>`) or has no index (`task:<id>:fixed`)
+ * is only dropped if removed; nothing else in that family is renumbered by this.
+ */
+export function keyedAfterRemoval<T>(byKey: Record<string, T>, removedKeys: string[]): Record<string, T> {
+  const removed = new Set(removedKeys);
+  const indexed = (key: string) => (DATED_KEY.test(key) ? null : INDEXED_KEY.exec(key));
+  const removedByFamily = new Map<string, number[]>();
+  for (const key of removedKeys) {
+    const match = indexed(key);
+    if (match) removedByFamily.set(match[1], [...(removedByFamily.get(match[1]) ?? []), Number(match[2])]);
+  }
+  const next: Record<string, T> = {};
+  for (const [key, value] of Object.entries(byKey)) {
+    if (removed.has(key)) continue;
+    const match = indexed(key);
+    const familyRemoved = match ? removedByFamily.get(match[1]) : undefined;
+    if (!match || !familyRemoved) {
+      next[key] = value;
+      continue;
+    }
+    const index = Number(match[2]);
+    next[`${match[1]}:${index - familyRemoved.filter((i) => i < index).length}`] = value;
+  }
+  return next;
 }
 
 /**

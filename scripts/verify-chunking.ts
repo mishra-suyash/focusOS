@@ -11,7 +11,7 @@
  * renders no component, and drives no user flow. A green run says the arithmetic is right and
  * nothing more.
  */
-import { DEFAULT_MAX_CHUNK_MINUTES, splitIntoChunks, taskChunkMinutes, taskBlockMinutes, sittingTitle } from "../lib/timeline";
+import { DEFAULT_MAX_CHUNK_MINUTES, renumberSittings, splitIntoChunks, taskChunkMinutes, taskBlockMinutes, sittingTitle, type SittingEntry } from "../lib/timeline";
 import { loggedMinutesForTask, remainingMinutes, sittingOutcome, sittingRemainingMinutes } from "../lib/tracking";
 import { plannedMinutesForObjective, plannedMinutesForTask, plannedMinutesThisWeek } from "../lib/courses";
 import { describeObjective } from "../lib/objectives";
@@ -622,6 +622,77 @@ const donePass = (minutes: number, output?: unknown) => ({ status: "done" as con
   check("a paper's accepted reading is accounted regardless of which pass the block was labelled",
     plannedMinutesForObjective(schedules, { kind: "paper", id: "p1" }, week) === 60);
   check("a slot outside the week is excluded", plannedMinutesForObjective(schedules, { kind: "checkpoint", id: "k1" }, [WEEK[3]]) === 0);
+}
+
+// --- renumberSittings: "1 of 3" follows where the sitting sits, not the order it was generated ---
+
+{
+  const g = (index: number, total: number, groupId = "rev") => ({ groupId, index, total });
+  const label = (entries: SittingEntry[]) => entries.map((e) => (e.chunk ? `${e.chunk.index}/${e.chunk.total}` : "-")).join(",");
+
+  // Sitting 1 dragged to Thursday, after sitting 3 on Wednesday.
+  const dragged = renumberSittings([
+    { dateKey: WEEK[3], startTime: "10:00", title: "Revision", chunk: g(1, 3) },
+    { dateKey: WEEK[1], startTime: "09:00", title: "Revision", chunk: g(2, 3) },
+    { dateKey: WEEK[2], startTime: "09:00", title: "Revision", chunk: g(3, 3) }
+  ]);
+  check("a sitting dragged after the last becomes the last; the others close up", label(dragged) === "3/3,1/3,2/3", label(dragged));
+
+  const sameDay = renumberSittings([
+    { dateKey: MON, startTime: "14:00", title: "R", chunk: g(1, 2) },
+    { dateKey: MON, startTime: "9:30", title: "R", chunk: g(2, 2) }
+  ]);
+  check("same day orders by clock time, not by string", label(sameDay) === "2/2,1/2", label(sameDay));
+
+  const titled = renumberSittings([
+    { dateKey: WEEK[2], startTime: "09:00", title: sittingTitle("Essay", 1, 2), chunk: g(1, 2, "t"), sittingBase: "Essay" },
+    { dateKey: WEEK[1], startTime: "09:00", title: sittingTitle("Essay", 2, 2), chunk: g(2, 2, "t") }
+  ]);
+  check("a numbered title is renumbered with its chip", titled[0].title === "Essay (2 of 2)" && titled[1].title === "Essay (1 of 2)", titled.map((e) => e.title).join(" | "));
+
+  const renamed = renumberSittings([
+    { dateKey: WEEK[2], startTime: "09:00", title: "My own name", chunk: g(1, 2) },
+    { dateKey: WEEK[1], startTime: "09:00", title: "R", chunk: g(2, 2) }
+  ]);
+  check("a hand-renamed title is left alone", renamed[0].title === "My own name" && renamed[0].chunk?.index === 2);
+
+  // One sitting saved Tuesday as "1 of 3"; the planner regenerated the remaining two as "1 of 2"/"2 of 2".
+  const mixed = renumberSittings([
+    { dateKey: WEEK[1], startTime: "09:00", title: "R", chunk: g(1, 3) },
+    { dateKey: MON, startTime: "09:00", title: "R", chunk: g(1, 2) },
+    { dateKey: WEEK[4], startTime: "09:00", title: "R", chunk: g(2, 2) }
+  ]);
+  check("saved and proposed sittings of one split share one numbering", label(mixed) === "2/3,1/3,3/3", label(mixed));
+
+  // The last remaining sitting is generated alone (total 1) but still belongs to its saved sibling's split.
+  const lone = renumberSittings([
+    { dateKey: WEEK[2], startTime: "09:00", title: sittingTitle("Essay", 1, 2), chunk: g(1, 2, "t") },
+    { dateKey: MON, startTime: "09:00", title: "Essay", chunk: g(1, 1, "t"), sittingBase: "Essay" }
+  ]);
+  check("a lone regenerated sitting joins its saved sibling", lone[0].title === "Essay (2 of 2)" && lone[1].title === "Essay (1 of 2)", lone.map((e) => e.title).join(" | "));
+
+  const single = renumberSittings([{ dateKey: MON, startTime: "09:00", title: "Essay", chunk: g(1, 1, "t"), sittingBase: "Essay" }]);
+  check("a group of one is not a split", !single[0].chunk && single[0].title === "Essay");
+
+  const unplaced = renumberSittings([
+    { dateKey: MON, startTime: "00:00", title: "R", chunk: g(1, 3), placed: false },
+    { dateKey: WEEK[3], startTime: "09:00", title: "R", chunk: g(2, 3) },
+    { dateKey: WEEK[1], startTime: "09:00", title: "R", chunk: g(3, 3) }
+  ]);
+  check("a sitting with no position yet numbers after every placed one", label(unplaced) === "3/3,2/3,1/3", label(unplaced));
+
+  const groups = renumberSittings([
+    { dateKey: WEEK[2], startTime: "09:00", title: "A", chunk: g(1, 2, "a") },
+    { dateKey: MON, startTime: "09:00", title: "B", chunk: g(1, 2, "b") },
+    { dateKey: WEEK[1], startTime: "09:00", title: "A", chunk: g(2, 2, "a") },
+    { dateKey: WEEK[3], startTime: "09:00", title: "B", chunk: g(2, 2, "b") },
+    { dateKey: MON, startTime: "07:00", title: "Lecture" }
+  ]);
+  check("each split is numbered on its own; plain blocks are untouched", label(groups) === "2/2,1/2,1/2,2/2,-", label(groups));
+
+  const settled = [{ dateKey: MON, startTime: "09:00", title: "R", chunk: g(1, 2) }, { dateKey: WEEK[1], startTime: "09:00", title: "R", chunk: g(2, 2) }];
+  const again = renumberSittings(settled);
+  check("already-ordered sittings come back as the same objects", again[0] === settled[0] && again[1] === settled[1]);
 }
 
 if (failures.length > 0) {

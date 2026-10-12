@@ -3,7 +3,7 @@
  * Unit-test stand-in for lib/weekplan.ts (plan/14 §5.3/§5.4/§5.6, §12) — same pattern as
  * scripts/verify-tracking.ts, since this repo has no test runner.
  */
-import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, placeInWindow, placeProposals, resolvePlacement, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposalCandidate } from "../lib/weekplan";
+import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, keyedAfterRemoval, placeInWindow, placeProposals, resolvePlacement, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposalCandidate } from "../lib/weekplan";
 import { minutesFromTime } from "../lib/schedule";
 import type { ScheduleSlot } from "../types";
 
@@ -255,6 +255,21 @@ const SAT = WEEK[5];
   check("overlapping slots are merged, not double-subtracted", freeMinutesOnDay(DEFAULT_WORKING_WINDOW, MON, overlapping) === 540 - 90);
   check("a non-working day has no free time", freeMinutesOnDay(DEFAULT_WORKING_WINDOW, SUN, []) === 0);
   check("a day off has no free time", freeMinutesOnDay(DEFAULT_WORKING_WINDOW, MON, [], { offDateKeys: new Set([MON]) }) === 0);
+}
+
+// --- keyedAfterRemoval: drag positions follow their sittings when an Accept or Dismiss regenerates the family ---
+
+{
+  const placed = { "revision:c1:0": "Mon", "revision:c1:1": "Tue", "revision:c1:2": "Thu", "task:t1:0": "Sat", "task:t2:fixed": "Wed", "task:t3:1:2026-10-14": "Wed" };
+  const one = keyedAfterRemoval(placed, ["revision:c1:0"]);
+  check("the accepted sitting's position is dropped, not inherited by the next", one["revision:c1:0"] === "Tue" && one["revision:c1:1"] === "Thu" && !("revision:c1:2" in one), JSON.stringify(one));
+  check("other families are untouched", one["task:t1:0"] === "Sat" && one["task:t2:fixed"] === "Wed" && one["task:t3:1:2026-10-14"] === "Wed");
+  const middle = keyedAfterRemoval(placed, ["revision:c1:1"]);
+  check("sittings before the accepted one keep their key", middle["revision:c1:0"] === "Mon" && middle["revision:c1:1"] === "Thu", JSON.stringify(middle));
+  const two = keyedAfterRemoval(placed, ["revision:c1:0", "revision:c1:2"]);
+  check("several accepted at once close up together", two["revision:c1:0"] === "Tue" && Object.keys(two).filter((k) => k.startsWith("revision")).length === 1, JSON.stringify(two));
+  const dated = keyedAfterRemoval(placed, ["task:t3:1:2026-10-14"]);
+  check("a dated lead-time key is only dropped, never parsed as an index", !("task:t3:1:2026-10-14" in dated) && dated["revision:c1:0"] === "Mon" && Object.keys(dated).length === 5);
 }
 
 if (failures.length > 0) {

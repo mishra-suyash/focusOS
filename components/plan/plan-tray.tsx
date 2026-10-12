@@ -11,6 +11,7 @@ import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { generateDayTemplate } from "@/lib/ai/client";
 import { plannableTasks } from "@/lib/courses";
+import { isFixedCommitmentOccurrence } from "@/lib/recurring-tasks";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 import { createDayTemplate } from "@/lib/firestore";
 import { createSlot, materializeSlots, minutesFromTime, minutesToTime, shiftTemplateSlots, slotTypeStyles, sortedSlots, validateSlots } from "@/lib/schedule";
@@ -28,16 +29,19 @@ import {
   type QuickBlockPreset
 } from "@/lib/timeline";
 import { BUILTIN_DAY_TEMPLATES, materializeBuiltinDayTemplate, type BuiltinDayTemplate } from "@/lib/templates/builtin";
-import type { Course, DayTemplate, Goal, Priority, ScheduleSlot, Task } from "@/types";
+import type { Course, DayTemplate, Goal, Priority, RecurringTaskTemplate, ScheduleSlot, Task } from "@/types";
 
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, medium: 1, low: 2 };
 
 /** §4.4 "Tasks to schedule" — open tasks due today/this week, or already in progress, priority-sorted.
  *  plan/16: a dropped course's tasks are excluded, the same as everywhere else that *offers* work. */
-function relevantTasks(tasks: Task[], courses: Pick<Course, "id" | "status">[]): Task[] {
+function relevantTasks(tasks: Task[], courses: Pick<Course, "id" | "status">[], recurringTemplates: RecurringTaskTemplate[]): Task[] {
   const weekAhead = addDaysToKey(todayKey(), 7);
   return plannableTasks(tasks, courses)
     .filter((task) => task.status !== "done")
+    // A TA meeting's occurrence is already a locked block at its own time on its day — dragging it
+    // in as a task would make a generic-length duplicate wherever it was dropped.
+    .filter((task) => !isFixedCommitmentOccurrence(task, recurringTemplates))
     .filter((task) => task.status === "in_progress" || (task.dueDate && task.dueDate <= weekAhead))
     .sort((a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || (a.dueDate ?? "9999-12-31").localeCompare(b.dueDate ?? "9999-12-31"));
 }
@@ -132,6 +136,7 @@ export function PlanTray({
   }
   const { items: userTemplates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: recurringTemplates } = useUserCollection<RecurringTaskTemplate>("recurringTaskTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   const dragRef = useRef<TrayGesture | null>(null);
   const [templateDrop, setTemplateDrop] = useState<{ templateId?: string; name: string; slots: ScheduleSlot[] } | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -148,7 +153,7 @@ export function PlanTray({
     return () => gridRef.current?.setExternalPreview(null);
   }, [templateDrop, gridRef]);
 
-  const openTasks = relevantTasks(tasks, courses);
+  const openTasks = relevantTasks(tasks, courses, recurringTemplates);
 
   function beginDrag(event: React.PointerEvent, gesture: TrayGesture) {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -318,7 +323,7 @@ export function PlanTray({
         startTime: slot.startTime,
         endTime: slot.endTime
       }));
-      const openTasks = relevantTasks(tasks, courses).map((task) => ({ title: task.title, priority: task.priority, dueDate: task.dueDate }));
+      const openTasks = relevantTasks(tasks, courses, recurringTemplates).map((task) => ({ title: task.title, priority: task.priority, dueDate: task.dueDate }));
       const activeGoals = goals.filter((goal) => goal.status === "active").map((goal) => ({ title: goal.title }));
       const result = await generateDayTemplate(user, {
         prompt: aiPrompt.trim(),

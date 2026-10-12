@@ -35,15 +35,26 @@ import { computeDebtHours, computeLoadIndexStreak, loadIndexBand, loadIndexBandL
 import { taskBucketLabels } from "@/lib/options";
 import { paperStatusLabels, readingCandidates } from "@/lib/papers";
 import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, estimatedReviewMinutes } from "@/lib/revision";
-import { isTemplateDueOn } from "@/lib/recurring-tasks";
+import { commitmentSlotsForDate, isFixedCommitment, isFixedCommitmentOccurrence, isTemplateDueOn, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { describeObjective, objectiveChipText } from "@/lib/objectives";
 import { minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
 import { isBreakMode } from "@/lib/terms";
 import { loggedMinutesForTask } from "@/lib/tracking";
-import { DEFAULT_MAX_CHUNK_MINUTES, DEFAULT_MIN_CHUNK_MINUTES, sittingTitle, splitIntoChunks, taskBlockMinutes, taskChunkMinutes } from "@/lib/timeline";
+import {
+  DEFAULT_MAX_CHUNK_MINUTES,
+  DEFAULT_MIN_CHUNK_MINUTES,
+  rangeOverlapsSlots,
+  renumberSittings,
+  sittingTitle,
+  splitIntoChunks,
+  taskBlockMinutes,
+  taskChunkMinutes,
+  type SittingEntry
+} from "@/lib/timeline";
 import {
   DEFAULT_WORKING_WINDOW,
+  keyedAfterRemoval,
   placeInWindow,
   placeProposals,
   resolvePlacement,
@@ -113,6 +124,12 @@ function sittingShape(sittings: number[]): string {
   const lo = Math.min(...sittings);
   const hi = Math.max(...sittings);
   return `${sittings.length} × ${lo === hi ? lo : `${lo}–${hi}`}m`;
+}
+
+/** A saved slot under the number `renumberSittings` gave it — no `chunk` at all if it's no longer a split. */
+function withSittingNumber(slot: ScheduleSlot, numbered: Pick<SittingEntry, "title" | "chunk">): ScheduleSlot {
+  const { chunk: _chunk, ...rest } = slot;
+  return { ...rest, title: numbered.title, ...(numbered.chunk ? { chunk: numbered.chunk } : {}) };
 }
 
 function formatHours(minutes: number): string {
@@ -226,8 +243,16 @@ function PlanWeekContent() {
   function claimedSlotsForDate(dateKey: string): ScheduleSlot[] {
     const saved = schedules.find((s) => s.dateKey === dateKey)?.slots ?? [];
     const classSlots = isBreakMode(terms, dateKey) ? [] : courseSlotsForDate(courses, dateKey);
-    const routineSlots = routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, dateKey);
-    const base = saved.length > 0 ? saved : [...classSlots, ...routineSlots];
+    // A TA meeting or office hour is fixed reality the same way a lecture is, so it claims its time
+    // whether the day is saved or not — a saved day is exactly the one with accepted blocks on it.
+    const commitments = commitmentSlotsForDate(recurringTemplates, dateKey, saved);
+    const fixed = [...classSlots, ...commitments];
+    // Routine yields to fixed commitments, as on /plan/day — two overlapping blocks would make the
+    // day fail `validateSlots` the moment anything is accepted onto it.
+    const routineSlots = routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, dateKey).filter(
+      (slot) => !rangeOverlapsSlots(minutesFromTime(slot.startTime), minutesFromTime(slot.endTime), fixed)
+    );
+    const base = saved.length > 0 ? withCommitments(saved, commitments) : [...classSlots, ...commitments, ...routineSlots];
     const anchor = weeklyPlanningSlotForDate(settings.weeklyPlanning, dateKey);
     return anchor && !base.some((slot) => slot.id === anchor.id) ? [...base, anchor] : base;
   }
@@ -442,7 +467,10 @@ function PlanWeekContent() {
       plannedMinutes: minutes,
       key: `${family}:${index}`,
       family,
-      ...(sittings.length > 1 ? { chunk: { groupId, index: index + 1, total: sittings.length } } : {})
+      // Always carried, even for a lone sitting: it's what joins this sitting to siblings already on
+      // a day, and `renumberSittings` drops it again if the split turns out to be one block.
+      chunk: { groupId, index: index + 1, total: sittings.length },
+      sittingBase: task.title
     });
     sittings.forEach((minutes, index) => {
       if (task.weeklyTargetDay != null) {
@@ -527,7 +555,7 @@ function PlanWeekContent() {
         capGroup: family,
         key: `${family}:${index}`,
         family,
-        ...(sittings.length > 1 ? { chunk: { groupId, index: index + 1, total: sittings.length } } : {})
+        chunk: { groupId, index: index + 1, total: sittings.length }
       }))
     );
     row.sittings = offeredSince(start);
@@ -643,8 +671,12 @@ function PlanWeekContent() {
 
   // plan/16 — a dropped course's tasks are not work this week is going to contain, so they never
   // become candidates. They stay visible and labelled on /tasks; they just stop being proposed.
+  // An occurrence of a fixed commitment (a past TA meeting nobody ticked done) is not backlog: its
+  // time was on the calendar, and proposing it would pin a duplicate onto the meeting's own slot.
   const backlogTasks = plannableTasks(
-    tasks.filter((task) => task.status !== "done" && (!task.dueDate || task.dueDate < weekStart)),
+    tasks.filter(
+      (task) => task.status !== "done" && (!task.dueDate || task.dueDate < weekStart) && !isFixedCommitmentOccurrence(task, recurringTemplates)
+    ),
     courses
   );
   const taskRow: LedgerRow = { id: "tasks", label: "Backlog tasks", ask: 0, placed: 0, dismissed: 0, sittings: [], families: [] };
@@ -752,6 +784,18 @@ function PlanWeekContent() {
   const upcomingFrom = todayK > weekStart ? todayK : weekStart;
   for (const task of plannableTasks(tasks, courses)) {
     if (task.status === "done" || !task.dueDate || task.dueDate < upcomingFrom || task.dueDate > horizonEnd) continue;
+    // A fixed commitment's occurrence is already on its day at its time (step 2, and locked on the
+    // grid) — offering it here would add a second, generic-length copy at whatever time is picked.
+    if (isFixedCommitmentOccurrence(task, recurringTemplates)) {
+      upcomingNotes.push({
+        id: `task:${task.id}`,
+        title: task.title,
+        detail: `Commitment · ${task.dueDate}${task.fixedTime ? ` ${task.fixedTime.startTime}–${task.fixedTime.endTime}` : ""}`,
+        status: "On your calendar at its own time",
+        href: "/tasks"
+      });
+      continue;
+    }
     // Due this week in an active course's bucket: that bucket proposes it in step 4 (see
     // `bucketCandidates`), so offering it here too would be a second copy of the same minutes.
     const owningCourse = activeCourses.find((course) => course.id === task.courseId);
@@ -857,7 +901,7 @@ function PlanWeekContent() {
         ...(row.bucket ? { bucket: row.bucket } : {}),
         ...(row.taskId ? { taskId: row.taskId } : {}),
         ...(row.objectiveRef ? { objectiveRef: row.objectiveRef } : {}),
-        ...(sittings.length > 1 ? { chunk: { groupId, index: index + 1, total: sittings.length } } : {}),
+        chunk: { groupId, index: index + 1, total: sittings.length },
         ...(index === 0 && placedSince === 0 ? { dateKey: add.dateKey, fixedStartTime: add.startTime } : { preferredDateKeys: laterDays })
       }))
     );
@@ -941,7 +985,7 @@ function PlanWeekContent() {
    * given a position by hand — which is the point of the inspector, and the only route that existed
    * for such a proposal before this was Dismiss.
    */
-  const effectiveProposals: WeekProposal[] = proposals.map((p) => {
+  const movedProposals: WeekProposal[] = proposals.map((p) => {
     const placement = placements[p.key];
     if (!placement) return p;
     return {
@@ -954,6 +998,47 @@ function PlanWeekContent() {
       fits: true
     };
   });
+
+  /**
+   * Sittings numbered by where they now sit — drag "1 of 3" after "3 of 3" and the three close up
+   * around it. Saved sittings this week join the numbering alongside the proposals, since a split
+   * is usually half on the calendar and half still proposed; only the proposals' numbers change
+   * here, and Accept writes the saved siblings' new numbers back (`acceptProposals`).
+   */
+  // Only splits that still have a proposal: a split that is wholly on the calendar has nothing here
+  // that could move, and renumbering it on the grid alone would disagree with what the day view
+  // shows — a tray-dropped "1 of 7" with six sittings still unplanned would lose its number.
+  const proposedGroups = new Set(movedProposals.flatMap((p) => (p.chunk ? [p.chunk.groupId] : [])));
+  const savedSittings = weekDateKeys.flatMap((dateKey) =>
+    (claimedSlotsByDate[dateKey] ?? []).filter((slot) => slot.chunk && proposedGroups.has(slot.chunk.groupId)).map((slot) => ({ ...slot, dateKey }))
+  );
+  const numberedSittings = renumberSittings<SittingEntry & { slot?: ScheduleSlot & { dateKey: string }; proposal?: WeekProposal }>([
+    ...savedSittings.map((slot) => ({ dateKey: slot.dateKey, startTime: slot.startTime, title: slot.title, chunk: slot.chunk, slot })),
+    ...movedProposals.map((p) => ({ dateKey: p.dateKey, startTime: p.startTime, title: p.title, chunk: p.chunk, placed: p.fits, sittingBase: p.sittingBase, proposal: p }))
+  ]);
+  const proposalNumbering = new Map(numberedSittings.filter((e) => e.proposal).map((e) => [e.proposal!.key, e]));
+  /** Saved sittings whose number no longer matches where they sit, by slot id. */
+  const renumberedSaved = new Map(
+    numberedSittings
+      .filter((e) => e.slot && (e.title !== e.slot.title || e.chunk?.index !== e.slot.chunk?.index || e.chunk?.total !== e.slot.chunk?.total))
+      .map((e) => [e.slot!.id, e])
+  );
+  const effectiveProposals: WeekProposal[] = movedProposals.map((p) => {
+    const numbered = proposalNumbering.get(p.key);
+    if (!numbered || (numbered.title === p.title && numbered.chunk === p.chunk)) return p;
+    const { chunk: _chunk, ...rest } = p;
+    return { ...rest, title: numbered.title, ...(numbered.chunk ? { chunk: numbered.chunk } : {}) };
+  });
+  /** The grid's locked layer, with saved sittings shown under their current number. */
+  const gridFixedSlotsByDate: Record<string, ScheduleSlot[]> = Object.fromEntries(
+    weekDateKeys.map((dateKey) => [
+      dateKey,
+      (claimedSlotsByDate[dateKey] ?? []).map((slot) => {
+        const numbered = renumberedSaved.get(slot.id);
+        return numbered ? withSittingNumber(slot, numbered) : slot;
+      })
+    ])
+  );
   /**
    * Every proposal the accounting produced. There is deliberately no "minus the ones flagged
    * accepted or dismissed" step: an accepted proposal is already absent because the slot it became is
@@ -1150,9 +1235,23 @@ function PlanWeekContent() {
         if (!byDate.has(p.dateKey)) byDate.set(p.dateKey, []);
         byDate.get(p.dateKey)!.push(p);
       }
+      // Accepting a sitting fixes its number onto a day, so its saved siblings take their current
+      // numbers too — otherwise the day view would show the old "1 of 3" beside the new one. Only
+      // the splits being accepted into; nothing else on the calendar is rewritten.
+      const acceptedGroups = new Set(fitting.flatMap((p) => (p.chunk ? [p.chunk.groupId] : [])));
+      const siblingUpdates = [...renumberedSaved.values()].filter((e) => e.slot!.chunk && acceptedGroups.has(e.slot!.chunk.groupId));
+      for (const e of siblingUpdates) if (!byDate.has(e.dateKey)) byDate.set(e.dateKey, []);
       const writes: { dateKey: string; templateId?: string; slots: ScheduleSlot[] }[] = [];
       for (const [dateKey, props] of byDate) {
-        const existingSlots = schedules.find((s) => s.dateKey === dateKey)?.slots ?? claimedSlotsForDate(dateKey);
+        const savedSlots = schedules.find((s) => s.dateKey === dateKey)?.slots;
+        if (!savedSlots && props.length === 0) continue;
+        // A saved day gets its fixed commitments here too, so what is written matches the grid the
+        // proposals were placed against (and an overlapping routine block steps aside, as it does there).
+        const baseSlots = savedSlots ? withCommitments(savedSlots, commitmentSlotsForDate(recurringTemplates, dateKey, savedSlots)) : claimedSlotsForDate(dateKey);
+        const existingSlots = baseSlots.map((slot) => {
+          const numbered = siblingUpdates.find((e) => e.slot!.id === slot.id && e.dateKey === dateKey);
+          return numbered ? withSittingNumber(slot, numbered) : slot;
+        });
         // plan/16 §5.2 — `objectiveRef`, `chunk`, and `plannedMinutes` are copied here. Before this
         // they were silently dropped (along with `refType`/`refId`, which `ScheduleSlot` had no field
         // for at all), so an accepted "Prep: Midterm" block was a bare string with no way back to its
@@ -1181,6 +1280,11 @@ function PlanWeekContent() {
         writes.push({ dateKey, templateId: schedules.find((s) => s.dateKey === dateKey)?.templateId, slots: merged });
       }
       for (const w of writes) await saveDailySchedule(user.uid, w);
+      // The accepted sittings leave the regenerated list and the rest close up, so positions keyed
+      // by the old indices are moved with them rather than left on whatever inherits each key.
+      const acceptedKeys = fitting.map((p) => p.key);
+      setPlacements((current) => keyedAfterRemoval(current, acceptedKeys));
+      setPlacementNotes((current) => keyedAfterRemoval(current, acceptedKeys));
 
       // No accept flag is written. The `ScheduleSlot` just saved onto the day *is* the record that
       // this work is planned, and every generator now subtracts what is on the calendar — so a second
@@ -1201,6 +1305,9 @@ function PlanWeekContent() {
   async function dismissProposal(p: WeekProposal) {
     const minutes = Math.max(0, minutesFromTime(p.endTime) - minutesFromTime(p.startTime)) || p.durationMinutes;
     await dismissFamily(p.family ?? p.key, minutes);
+    // The family regenerates one sitting shorter, the same as after an Accept.
+    setPlacements((current) => keyedAfterRemoval(current, [p.key]));
+    setPlacementNotes((current) => keyedAfterRemoval(current, [p.key]));
   }
 
   // ---- Step 5: commit ----
@@ -1434,7 +1541,9 @@ function PlanWeekContent() {
                       <p key={slot.id} className="truncate rounded bg-ink-100 px-1 py-0.5 text-ink-600 dark:bg-ink-800 dark:text-ink-300">{slot.title}</p>
                     ))}
                     {commitments.map((t) => (
-                      <p key={t.id} className="truncate rounded bg-sky-500/10 px-1 py-0.5 text-sky-700 dark:text-sky-300">{t.title}</p>
+                      <p key={t.id} className="truncate rounded bg-sky-500/10 px-1 py-0.5 text-sky-700 dark:text-sky-300">
+                        {isFixedCommitment(t) ? `${t.time!.startTime} ${t.title}` : t.title}
+                      </p>
                     ))}
                     {checkpointsDue.map((cp) => (
                       <p key={cp.id} className="truncate rounded bg-amberline/10 px-1 py-0.5 text-amber-700 dark:text-amber-300">Due: {cp.title}</p>
@@ -1798,7 +1907,7 @@ function PlanWeekContent() {
             dayLabels={DAY_LABELS}
             workingWindow={workingWindow}
             offDateKeys={offDateKeys}
-            fixedSlotsByDate={claimedSlotsByDate}
+            fixedSlotsByDate={gridFixedSlotsByDate}
             proposals={undecidedProposals.filter((p) => p.fits)}
             onPlace={applyPlacement}
             disabled={accepting || committed}
