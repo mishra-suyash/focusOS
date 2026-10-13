@@ -1,6 +1,6 @@
 import { getDay, parseISO } from "date-fns";
 import { minutesFromTime, minutesToTime } from "@/lib/schedule";
-import type { ScheduleSlot, ScheduleSlotType, SlotObjectiveRef, TaskBucket, UserSettings } from "@/types";
+import type { ReadingHabit, ScheduleSlot, ScheduleSlotType, SlotObjectiveRef, TaskBucket, UserSettings } from "@/types";
 
 export type WorkingWindow = NonNullable<UserSettings["workingWindow"]>;
 
@@ -230,6 +230,15 @@ export interface WeekProposalCandidate {
    *  inflate one global cap number so far that a single preferred day legally absorbed an entire
    *  bucket's worth of work before tripping it — see plan/15 §2.2's bug, recurring in live use. */
   capGroup?: string;
+  /** plan/17 §6.3 — the spread rule: candidates sharing a `spreadGroup` go to the day holding the
+   *  fewest of the group (counting what's already on the calendar with the same slot `type`) before
+   *  any day gets a second — "at most one reading sitting per day until every working day has one".
+   *  A habit is built by frequency, not by one big block. Soft: when the emptiest days have no room,
+   *  the next level is used. */
+  spreadGroup?: ScheduleSlotType;
+  /** plan/17 §6.1 — a preferred part of the day, minutes from midnight. Tried first on each day,
+   *  then the whole usable window. */
+  preferredWindow?: { start: number; end: number };
 }
 
 export interface WeekProposal extends WeekProposalCandidate {
@@ -312,7 +321,7 @@ export function keyedAfterRemoval<T>(byKey: Record<string, T>, removedKeys: stri
 export function placeProposals(
   candidates: WeekProposalCandidate[],
   weekDateKeys: string[],
-  claimedSlotsByDate: Record<string, Pick<ScheduleSlot, "startTime" | "endTime">[]>,
+  claimedSlotsByDate: Record<string, (Pick<ScheduleSlot, "startTime" | "endTime"> & { type?: ScheduleSlotType })[]>,
   workingWindow: WorkingWindow,
   offDateKeys: ReadonlySet<string> = new Set(),
   now?: NowFloor
@@ -336,10 +345,27 @@ export function placeProposals(
   }
   const newlyProposedMinutes: Record<string, number> = {}; // keyed by `${capGroup}|${dateKey}`
   const cappedGroupDays = new Set<string>();
+  // plan/17 §6.3 — per spread group, how many of its blocks each day holds: seeded from the calendar
+  // (a reading sitting already accepted on Tuesday counts), then bumped as candidates land.
+  const spreadCount: Record<string, number> = {}; // keyed by `${spreadGroup}|${dateKey}`
+  for (const group of new Set(candidates.flatMap((c) => (c.spreadGroup ? [c.spreadGroup] : [])))) {
+    for (const d of weekDateKeys) {
+      spreadCount[`${group}|${d}`] = (claimedSlotsByDate[d] ?? []).filter((slot) => slot.type === group).length;
+    }
+  }
 
-  function tryPlace(dateKey: string, durationMinutes: number): number | null {
+  function tryPlace(dateKey: string, durationMinutes: number, preferredWindow?: { start: number; end: number }): number | null {
     const window = usableWindow(workingWindow, dateKey, now);
-    return window ? placeInWindow(simulated[dateKey] ?? [], window.start, window.end, durationMinutes) : null;
+    if (!window) return null;
+    if (preferredWindow) {
+      const start = Math.max(window.start, preferredWindow.start);
+      const end = Math.min(window.end, preferredWindow.end);
+      if (end > start) {
+        const inPreferred = placeInWindow(simulated[dateKey] ?? [], start, end, durationMinutes);
+        if (inPreferred !== null) return inPreferred;
+      }
+    }
+    return placeInWindow(simulated[dateKey] ?? [], window.start, window.end, durationMinutes);
   }
 
   function commit(dateKey: string, start: number, durationMinutes: number, capGroup: string | null) {
@@ -390,11 +416,18 @@ export function placeProposals(
     const fallback = [...workingDates]
       .filter((d) => !isCapped(d) && !preferred.includes(d))
       .sort((a, b) => totalClaimedMinutes(simulated[a]) - totalClaimedMinutes(simulated[b]));
+    let order = [...preferred, ...fallback];
+    const spread = candidate.spreadGroup;
+    if (spread) {
+      // Stable sort: fewest of the group first; preference and load still order days within a level.
+      order = order.map((d, i) => ({ d, i, n: spreadCount[`${spread}|${d}`] ?? 0 })).sort((a, b) => a.n - b.n || a.i - b.i).map((x) => x.d);
+    }
 
-    for (const dateKey of [...preferred, ...fallback]) {
-      const start = tryPlace(dateKey, candidate.durationMinutes);
+    for (const dateKey of order) {
+      const start = tryPlace(dateKey, candidate.durationMinutes, candidate.preferredWindow);
       if (start !== null) {
         const slot = commit(dateKey, start, candidate.durationMinutes, capGroup);
+        if (spread) spreadCount[`${spread}|${dateKey}`] = (spreadCount[`${spread}|${dateKey}`] ?? 0) + 1;
         return { ...candidate, key, dateKey, ...slot, fits: true };
       }
     }
@@ -474,4 +507,226 @@ export function resolvePlacement(
   }
 
   return { placement: { dateKey: requested.dateKey, startMinutes, durationMinutes }, notes };
+}
+
+/** plan/17 §6.1 — the part of the day each time-of-day preference means, minutes from midnight. */
+export const TIME_OF_DAY_WINDOWS: Record<NonNullable<ReadingHabit["timeOfDay"]>, { start: number; end: number }> = {
+  morning: { start: 0, end: 12 * 60 },
+  afternoon: { start: 12 * 60, end: 17 * 60 },
+  evening: { start: 17 * 60, end: 24 * 60 }
+};
+
+export interface OwedPass {
+  paperId: string;
+  title: string;
+  passNo: 1 | 2 | 3;
+  /** What's left of the pass's estimate — its calibrated length less what's already logged. */
+  minutes: number;
+}
+
+export interface ReadingHabitPlan {
+  /** Sittings × minutes — what the week asks. */
+  ask: number;
+  /** Reading sittings on the calendar this week, open or pinned to any paper (cut-off applied). */
+  placed: number;
+  dismissed: number;
+  /** Sittings still to place that are pinned to a paper owed a pass, in the order they're owed. */
+  pinned: { paper: OwedPass; minutes: number[] }[];
+  /** Sittings still to place with no paper — picked when they start. */
+  open: number[];
+  /** Owed passes the target has no sittings left for — listed, never proposed. */
+  alsoOwed: OwedPass[];
+  /** The sitting length actually used: the habit's, held under the sitting cap. */
+  sittingMinutes: number;
+  /** Minutes still owed but too few for a sitting of their own — not proposed. */
+  shortfall: number;
+}
+
+/**
+ * plan/17 §6.2 — the reading row of the week. Reading is a habit with a target, so the row exists
+ * whenever the target does, whether or not any paper is ready (the root cause of F1 was the opposite:
+ * no eligible paper, no row, no reading planned at all).
+ *
+ * Pass demand doesn't *create* the row, it shapes it: each owed pass, in order, pins as many of the
+ * still-to-place sittings as it needs (`ceil(minutes left / sitting length)`); the rest stay open.
+ * Owed passes beyond the target don't inflate the ask — they come back as `alsoOwed`.
+ *
+ * Everything is minutes against the calendar, the same rule as every other family: what's placed (an
+ * open sitting, or a sitting pinned to any paper) and what's dismissed (`readingHabit` or any
+ * `paper:<id>` family) come off the ask; a paper's own placed and dismissed minutes come off what it
+ * still needs pinned.
+ */
+export function readingHabitPlan(params: {
+  target: Pick<ReadingHabit, "sittings" | "minutes">;
+  owed: OwedPass[];
+  placedOpen: number;
+  placedByPaper: Record<string, number>;
+  dismissedMinutes: Record<string, number>;
+  maxChunkMinutes: number;
+  minChunkMinutes: number;
+}): ReadingHabitPlan {
+  const { target, owed, placedOpen, placedByPaper, dismissedMinutes, maxChunkMinutes, minChunkMinutes } = params;
+  const sittingMinutes = Math.max(minChunkMinutes, Math.min(Math.round(target.minutes), maxChunkMinutes));
+  const ask = Math.max(0, Math.round(target.sittings)) * sittingMinutes;
+  const placed = placedOpen + Object.values(placedByPaper).reduce((sum, minutes) => sum + minutes, 0);
+  const dismissed = Object.entries(dismissedMinutes)
+    .filter(([family]) => family === "readingHabit" || family.startsWith("paper:"))
+    .reduce((sum, [, minutes]) => sum + minutes, 0);
+  const remaining = Math.max(0, ask - placed - dismissed);
+
+  // Whole sittings at the habit's length. A remainder too short to sit with on its own (a past sitting
+  // that got 20 of its 30 minutes leaves 10) isn't proposed — it's reported as `shortfall` so the row's
+  // arithmetic still adds up.
+  const pool: number[] = [];
+  let left = remaining;
+  while (left >= sittingMinutes) {
+    pool.push(sittingMinutes);
+    left -= sittingMinutes;
+  }
+  if (left >= minChunkMinutes) {
+    pool.push(left);
+    left = 0;
+  }
+  const shortfall = left;
+
+  const pinned: ReadingHabitPlan["pinned"] = [];
+  const alsoOwed: OwedPass[] = [];
+  for (const paper of owed) {
+    const family = `paper:${paper.paperId}`;
+    const need = Math.max(0, paper.minutes - (placedByPaper[paper.paperId] ?? 0) - (dismissedMinutes[family] ?? 0));
+    if (need <= 0) continue;
+    const wanted = Math.ceil(need / sittingMinutes);
+    const take = Math.min(wanted, pool.length);
+    if (take === 0) {
+      alsoOwed.push({ ...paper, minutes: need });
+      continue;
+    }
+    pinned.push({ paper, minutes: pool.splice(0, take) });
+  }
+  return { ask, placed, dismissed, pinned, open: pool, alsoOwed, sittingMinutes, shortfall };
+}
+
+// ---- plan/17 §7 — replanning a week ----
+
+/**
+ * plan/17 §7.3 — whether weekly planning put this slot on its day. Read off the markers an accepted
+ * proposal carries: an `objectiveRef`; a sitting `chunk` whose group is the planner's own
+ * deterministic `…:<weekStart>` id (a split made by hand on /plan/day gets a random uuid instead); or a
+ * course bucket with no task (a task dropped on a day by hand always carries its task). A single
+ * task sitting with no chunk is ambiguous between the planner and "Schedule it", so it counts as yours.
+ */
+export function isPlannerMade(slot: Pick<ScheduleSlot, "objectiveRef" | "chunk" | "courseId" | "bucket" | "assignedTaskIds">, weekStart: string): boolean {
+  if (slot.objectiveRef) return true;
+  if (slot.chunk?.groupId.endsWith(`:${weekStart}`)) return true;
+  return Boolean(slot.courseId && slot.bucket && !slot.assignedTaskIds?.length);
+}
+
+/** The accounting family a slot's minutes belong to — the same keys the planner's candidates use. */
+export function slotFamily(slot: Pick<ScheduleSlot, "objectiveRef" | "courseId" | "bucket" | "assignedTaskIds">, dateKey: string): string | null {
+  const ref = slot.objectiveRef;
+  if (ref?.kind === "paper") return `paper:${ref.id}`;
+  if (ref?.kind === "readingHabit") return "readingHabit";
+  if (ref?.kind === "checkpoint") return `checkpoint:${ref.id}`;
+  if (ref?.kind === "revisionQueue") return `revisionQueue:${dateKey}`;
+  if (ref?.kind === "goal") return `milestone:${ref.id}:${ref.milestoneId ?? ""}`;
+  if (slot.assignedTaskIds?.length) return `task:${slot.assignedTaskIds[0]}`;
+  if (slot.courseId && slot.bucket) return `${slot.bucket}:${slot.courseId}`;
+  return null;
+}
+
+export interface ReleasedSlot {
+  dateKey: string;
+  slot: ScheduleSlot;
+  family: string | null;
+}
+
+/**
+ * plan/17 §7.3 — what a replan takes back off the calendar to lay out again: every sitting the planner
+ * placed from now on this week that nobody has started. All of these must hold:
+ *
+ * - on today with its start still ahead, or a later day of the week;
+ * - planner-made (`isPlannerMade`);
+ * - not locked, not a class, an external calendar event, a commitment or the weekly-planning anchor;
+ * - no logged minutes against it (sessions filtered to its own date — recurring ids repeat);
+ * - status `upcoming`.
+ *
+ * Never touched: blocks you added by hand, the locked layer, anything worked or running, anything on a
+ * day behind you.
+ */
+export function releasableSlots(params: {
+  schedules: { dateKey: string; slots: ScheduleSlot[] }[];
+  weekDateKeys: string[];
+  weekStart: string;
+  todayKey: string;
+  nowMinutes: number;
+  sessions: { slotId?: string; mode: string; minutes: number; completedAt: string }[];
+}): ReleasedSlot[] {
+  const { schedules, weekDateKeys, weekStart, todayKey, nowMinutes, sessions } = params;
+  const released: ReleasedSlot[] = [];
+  for (const schedule of schedules) {
+    const dateKey = schedule.dateKey;
+    if (!weekDateKeys.includes(dateKey) || dateKey < todayKey) continue;
+    for (const slot of schedule.slots) {
+      if (dateKey === todayKey && minutesFromTime(slot.startTime) < nowMinutes) continue;
+      if (slot.locked || slot.type === "class" || slot.type === "external" || slot.sourceGoogleEventId) continue;
+      if (slot.id.startsWith("commitment-") || slot.id === "weekly-planning") continue;
+      if (slot.status !== "upcoming") continue;
+      if (!isPlannerMade(slot, weekStart)) continue;
+      const worked = sessions.some((session) => session.mode === "work" && session.slotId === slot.id && session.completedAt.startsWith(dateKey) && session.minutes > 0);
+      if (worked) continue;
+      released.push({ dateKey, slot, family: slotFamily(slot, dateKey) });
+    }
+  }
+  return released;
+}
+
+export interface ReplanDiff {
+  /** A released sitting and where its family's work lands now. */
+  moved: { from: ReleasedSlot; to: WeekProposal }[];
+  /** Proposals that don't continue any released sitting — newly owed work. */
+  added: WeekProposal[];
+  /** Released sittings whose work isn't proposed again (it's no longer owed, or was dismissed). */
+  dropped: ReleasedSlot[];
+  /** Proposals with no room anywhere — listed under "Didn't fit". */
+  unplaced: WeekProposal[];
+}
+
+/**
+ * plan/17 §7.4 — the replan as a diff: each released sitting is matched to a proposal of the same
+ * family (in time order on both sides), so the preview can say "moved Tue 10:00 → Wed 14:00" rather
+ * than "removed 4, added 4".
+ */
+export function replanDiff(released: ReleasedSlot[], proposals: WeekProposal[]): ReplanDiff {
+  const byTime = <T,>(at: (item: T) => string) => (a: T, b: T) => (at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : 0);
+  const placed = proposals.filter((p) => p.fits).sort(byTime((p) => `${p.dateKey} ${p.startTime}`));
+  const unplaced = proposals.filter((p) => !p.fits);
+  const used = new Set<string>();
+  const moved: ReplanDiff["moved"] = [];
+  const dropped: ReleasedSlot[] = [];
+  const sameFamily = (from: ReleasedSlot, p: WeekProposal) => !used.has(p.key) && (p.family ?? p.key) === from.family;
+  // A sitting offered back at its own time is "kept", whatever the order — pair those first, so the
+  // rest pair up in time order without claiming a kept sitting's proposal.
+  const exact = new Map<ReleasedSlot, WeekProposal>();
+  for (const from of released) {
+    const to = from.family ? placed.find((p) => sameFamily(from, p) && p.dateKey === from.dateKey && p.startTime === from.slot.startTime) : undefined;
+    if (to) {
+      used.add(to.key);
+      exact.set(from, to);
+    }
+  }
+  for (const from of [...released].sort(byTime((r) => `${r.dateKey} ${r.slot.startTime}`))) {
+    const kept = exact.get(from);
+    if (kept) {
+      moved.push({ from, to: kept });
+      continue;
+    }
+    const to = from.family ? placed.find((p) => sameFamily(from, p)) : undefined;
+    if (to) {
+      used.add(to.key);
+      moved.push({ from, to });
+    } else {
+      dropped.push(from);
+    }
+  }
+  return { moved, added: placed.filter((p) => !used.has(p.key)), dropped, unplaced };
 }

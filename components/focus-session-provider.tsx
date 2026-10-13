@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { PomodoroSurveyModal } from "@/components/pomodoro-survey-modal";
+import { ReadingCheckIn } from "@/components/reading-check-in";
 import { useFocusContext } from "@/hooks/use-focus-context";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { todayKey } from "@/lib/dates";
@@ -33,7 +34,13 @@ interface PendingSession {
    *  logged a session with no idea which paper it was reading. */
   paperId?: string;
   passNo?: 1 | 2 | 3;
+  /** plan/17 §5.3 — a "Find a paper" sitting. */
+  findPaper?: boolean;
 }
+
+/** plan/17 §5.4 — a reading sitting abandoned inside this many minutes logs nothing: opening a
+ *  paper by mistake isn't reading. (The 5-minute task-credit floor below is separate.) */
+const MIN_READING_SESSION_MINUTES = 2;
 
 /**
  * L3 (plan/14 §2.4) — a running session lived only in React state, so any full page reload (as
@@ -65,6 +72,7 @@ interface StoredSession {
   bucket?: TaskBucket;
   paperId?: string;
   passNo?: 1 | 2 | 3;
+  findPaper?: boolean;
   /** plan/16 §5.5 — the sitting length this countdown was armed with, so a restore after a reload
    *  resumes the sitting rather than snapping back to the settings default. */
   armedMinutes?: number;
@@ -163,6 +171,7 @@ interface FocusSessionContextValue {
     bucket?: TaskBucket;
     paperId?: string;
     passNo?: 1 | 2 | 3;
+    findPaper?: boolean;
     /** plan/16 §5.5 — this sitting's length. Absent = `work`, the settings length, which is every
      *  pre-`16` caller's behavior unchanged. Clamped to [5, maxChunkMinutes] so a mis-sized or
      *  stale block can't arm a multi-hour "pomodoro". */
@@ -173,13 +182,15 @@ interface FocusSessionContextValue {
   armedMinutes?: number;
   paperId?: string;
   passNo?: 1 | 2 | 3;
+  findPaper?: boolean;
 }
 
 const FocusSessionContext = createContext<FocusSessionContextValue | null>(null);
 
 /**
- * Owns the Pomodoro timer's state at the app-shell level (mounted in `app/(app)/layout.tsx`,
- * alongside `WorkdaySessionProvider`) instead of inside `PomodoroTimer`, so a running session
+ * Owns the Pomodoro timer's state above every page (mounted in the root `app/layout.tsx` since
+ * plan/17, so the reader at `/read` — outside the app shell — shares the same running session)
+ * instead of inside `PomodoroTimer`, so a running session
  * survives navigating away from `/dashboard` — a prerequisite for the floating widget (it needs a
  * source of truth that outlives whichever page happens to be mounted) and a real fix in its own
  * right (previously, leaving `/dashboard` while a session was running silently killed it with no
@@ -238,6 +249,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   // never chose. Cleared whenever the session ends or is reset, so the manual timer is untouched.
   const [paperId, setPaperIdRaw] = useState<string | undefined>(undefined);
   const [passNo, setPassNoRaw] = useState<1 | 2 | 3 | undefined>(undefined);
+  const [findPaper, setFindPaper] = useState<boolean | undefined>(undefined);
   const [armedMinutes, setArmedMinutes] = useState<number | undefined>(undefined);
 
   function setTaskId(next: string) {
@@ -300,6 +312,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       setBucketRaw(stored.bucket);
       setPaperIdRaw(stored.paperId);
       setPassNoRaw(stored.passNo);
+      setFindPaper(stored.findPaper);
       setArmedMinutes(stored.armedMinutes);
       setRunning(stored.running);
       setTargetEndTime(stored.targetEndTime);
@@ -337,6 +350,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     // whatever paper happened to be open an hour ago.
     setPaperIdRaw(undefined);
     setPassNoRaw(undefined);
+    setFindPaper(undefined);
     setArmedMinutes(undefined);
   }, [focusContext, running, contextTouched]);
 
@@ -346,8 +360,8 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   // still gets captured correctly here whenever `running` itself changes (e.g. on pause).
   useEffect(() => {
     if (!hydrated) return;
-    writeStoredSession({ mode, running, targetEndTime, secondsLeft, totalSeconds, cycle, category, label, contextTouched, taskId, slotId, courseId, bucket, paperId, passNo, armedMinutes });
-  }, [hydrated, mode, running, targetEndTime, totalSeconds, cycle, category, label, contextTouched, taskId, slotId, courseId, bucket, paperId, passNo, armedMinutes]);
+    writeStoredSession({ mode, running, targetEndTime, secondsLeft, totalSeconds, cycle, category, label, contextTouched, taskId, slotId, courseId, bucket, paperId, passNo, findPaper, armedMinutes });
+  }, [hydrated, mode, running, targetEndTime, totalSeconds, cycle, category, label, contextTouched, taskId, slotId, courseId, bucket, paperId, passNo, findPaper, armedMinutes]);
 
   // Pulls saved lengths (and built-in preset choices) in once settings load, so a preset applied
   // in Settings takes effect here without a refresh.
@@ -450,13 +464,21 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       courseId,
       bucket,
       paperId,
-      passNo
+      passNo,
+      ...(findPaper ? { findPaper } : {})
     };
     // plan/16 §5.5 — one sitting, one armed length: the next session falls back to the settings
     // length unless a caller arms it again. Without this, finishing a 50-minute sitting would leave
     // every later manual session silently armed at 50.
     setArmedMinutes(undefined);
-    if (mode === "work") {
+    // plan/17 §5.5 — the paper context belongs to this one sitting too. Left in place, the next
+    // session started from the bare timer (with no block active, so the auto-follow never resets it)
+    // would be logged against this paper's pass — the double count the one-clock rule removed.
+    setPaperIdRaw(undefined);
+    setPassNoRaw(undefined);
+    setFindPaper(undefined);
+    const abandonedReading = mode === "work" && Boolean(paperId || findPaper) && data.minutes < MIN_READING_SESSION_MINUTES;
+    if (mode === "work" && !abandonedReading) {
       setPendingSession(data);
     } else {
       finalizeSession(data);
@@ -464,6 +486,11 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   }
 
   async function finalizeSession(data: PendingSession, survey?: { productivityRating: number; comment: string }) {
+    const isReading = Boolean(data.paperId || data.findPaper);
+    if (data.mode === "work" && isReading && data.minutes < MIN_READING_SESSION_MINUTES) {
+      advanceAfter(data);
+      return;
+    }
     await savePomodoro(user!.uid, {
       ...data,
       productivityRating: survey?.productivityRating,
@@ -483,6 +510,11 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     if (data.mode === "work" && data.slotId) {
       await syncSlotAutoStatus(user!.uid, data.slotId);
     }
+    advanceAfter(data);
+  }
+
+  /** Moves the timer on to the next mode once a session is finished with, logged or not. */
+  function advanceAfter(data: PendingSession) {
     const nextMode: TimerMode = data.mode === "work" ? (data.cycle % 4 === 0 ? "long_break" : "short_break") : "work";
     if (data.mode === "work") setCycle((current) => current + 1);
     setMode(nextMode);
@@ -504,6 +536,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     bucket?: TaskBucket;
     paperId?: string;
     passNo?: 1 | 2 | 3;
+    findPaper?: boolean;
     minutes?: number;
   }) {
     setLabel(opts.label);
@@ -515,6 +548,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     setContextTouched(true);
     setPaperIdRaw(opts.paperId);
     setPassNoRaw(opts.passNo);
+    setFindPaper(opts.findPaper);
     setMode("work");
     // plan/16 §5.5 — arm the sitting's own length when the caller knows it. Clamped: below 5 minutes
     // a sitting is not worth arming a timer for (and `finalizeSession`'s task credit needs 5 anyway),
@@ -546,6 +580,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     bucket,
     paperId,
     passNo,
+    findPaper,
     armedMinutes,
     work,
     shortBreak,
@@ -572,7 +607,22 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   return (
     <FocusSessionContext.Provider value={value}>
       {children}
-      {pendingSession ? (
+      {pendingSession?.paperId ? (
+        // plan/17 §5.4 step 3 — a reading sitting ends with the check-in, not the generic rating.
+        <ReadingCheckIn
+          label={pendingSession.label}
+          paperId={pendingSession.paperId}
+          passNo={pendingSession.passNo}
+          onSave={async (productivityRating, comment) => {
+            setPendingSession(null);
+            await finalizeSession(pendingSession, { productivityRating, comment });
+          }}
+          onSkip={async () => {
+            setPendingSession(null);
+            await finalizeSession(pendingSession);
+          }}
+        />
+      ) : pendingSession ? (
         <PomodoroSurveyModal
           label={pendingSession.label}
           onSave={(productivityRating, comment) => {

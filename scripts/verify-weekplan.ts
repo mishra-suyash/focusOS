@@ -3,7 +3,7 @@
  * Unit-test stand-in for lib/weekplan.ts (plan/14 §5.3/§5.4/§5.6, §12) — same pattern as
  * scripts/verify-tracking.ts, since this repo has no test runner.
  */
-import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, keyedAfterRemoval, placeInWindow, placeProposals, resolvePlacement, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposalCandidate } from "../lib/weekplan";
+import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, isPlannerMade, keyedAfterRemoval, placeInWindow, placeProposals, releasableSlots, replanDiff, resolvePlacement, slotFamily, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposal, type WeekProposalCandidate } from "../lib/weekplan";
 import { minutesFromTime } from "../lib/schedule";
 import type { ScheduleSlot } from "../types";
 
@@ -270,6 +270,63 @@ const SAT = WEEK[5];
   check("several accepted at once close up together", two["revision:c1:0"] === "Tue" && Object.keys(two).filter((k) => k.startsWith("revision")).length === 1, JSON.stringify(two));
   const dated = keyedAfterRemoval(placed, ["task:t3:1:2026-10-14"]);
   check("a dated lead-time key is only dropped, never parsed as an index", !("task:t3:1:2026-10-14" in dated) && dated["revision:c1:0"] === "Mon" && Object.keys(dated).length === 5);
+}
+
+
+// --- plan/17 §7.3: what a replan releases, and what it never touches ---
+{
+  const W = ["2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18"];
+  const weekStart = W[0];
+  const slot = (id: string, startTime: string, endTime: string, extra: Partial<ScheduleSlot> = {}): ScheduleSlot => ({ id, title: id, type: "deep_work", startTime, endTime, status: "upcoming", ...extra });
+  const bucket = { courseId: "c", bucket: "revision" as const, chunk: { groupId: `c:revision:${weekStart}`, index: 1, total: 4 } };
+  const schedules = [
+    { dateKey: W[0], slots: [slot("past-day", "10:00", "10:45", bucket)] },
+    {
+      dateKey: W[1], // today, now = 12:00
+      slots: [
+        slot("earlier-today", "09:00", "09:45", bucket),
+        slot("running", "11:30", "12:15", bucket),
+        slot("later-today", "15:00", "15:45", bucket),
+        slot("worked", "16:00", "16:45", bucket)
+      ]
+    },
+    {
+      dateKey: W[2],
+      slots: [
+        slot("open-reading", "17:00", "17:30", { type: "reading", objectiveRef: { kind: "readingHabit" }, chunk: { groupId: `readingHabit:${weekStart}`, index: 1, total: 3 } }),
+        slot("by-hand", "09:00", "10:00"),
+        slot("by-hand-task", "10:00", "10:50", { assignedTaskIds: ["t1"], courseId: "c", bucket: "assignment", plannedMinutes: 50 }),
+        slot("by-hand-split", "11:00", "11:50", { assignedTaskIds: ["t2"], chunk: { groupId: "3f2a-uuid", index: 1, total: 2 } }),
+        slot("class", "12:00", "13:00", { type: "class", courseId: "c" }),
+        slot("routine", "13:00", "13:45", { type: "meal", locked: true }),
+        slot("commitment-ta", "14:00", "15:00", { locked: true, assignedTaskIds: ["ta"] }),
+        slot("gcal", "15:00", "16:00", { type: "external", locked: true, sourceGoogleEventId: "g" }),
+        slot("done", "16:00", "16:45", { ...bucket, status: "completed" }),
+        slot("planned-task", "17:30", "18:00", { assignedTaskIds: ["t3"], chunk: { groupId: `task:t3:${weekStart}`, index: 1, total: 1 } })
+      ]
+    }
+  ];
+  const sessions = [{ slotId: "worked", mode: "work", minutes: 10, completedAt: `${W[1]}T10:00:00.000Z` }, { slotId: "later-today", mode: "work", minutes: 25, completedAt: `${W[0]}T15:00:00.000Z` }];
+  const released = releasableSlots({ schedules, weekDateKeys: W, weekStart, todayKey: W[1], nowMinutes: 12 * 60, sessions });
+  const ids = released.map((r) => r.slot.id).sort().join(",");
+  check("replan releases only unstarted planner sittings from now on", ids === "later-today,open-reading,planned-task", ids);
+  check("a session on another date with the same slot id doesn't count as worked", ids.includes("later-today"));
+  check("families are the planner's own", released.find((r) => r.slot.id === "open-reading")?.family === "readingHabit" && released.find((r) => r.slot.id === "planned-task")?.family === "task:t3");
+  check("a hand-split task (random group) is yours, the planner's split is not", !isPlannerMade({ assignedTaskIds: ["t2"], chunk: { groupId: "3f2a", index: 1, total: 2 } }, weekStart) && isPlannerMade({ assignedTaskIds: ["t3"], chunk: { groupId: `task:t3:${weekStart}`, index: 1, total: 1 } }, weekStart));
+  check("slotFamily for a bucket and a paper", slotFamily({ courseId: "c", bucket: "revision" }, W[2]) === "revision:c" && slotFamily({ objectiveRef: { kind: "paper", id: "p" } }, W[2]) === "paper:p");
+
+  // §7.4 — the diff
+  const proposal = (key: string, family: string, dateKey: string, startTime: string, fits = true): WeekProposal => ({ key, family, dateKey, startTime, endTime: startTime, title: key, type: "deep_work", durationMinutes: 30, fits });
+  const diff = replanDiff(released, [
+    proposal("readingHabit:0", "readingHabit", W[3], "17:00"),
+    proposal("revision:c:0", "revision:c", W[1], "15:00"),
+    proposal("paper:x:0", "paper:x", W[4], "17:00"),
+    proposal("revision:c:1", "revision:c", W[4], "09:00", false)
+  ]);
+  check("a released sitting is matched to its family's new place", diff.moved.map((m) => `${m.from.slot.id}->${m.to.key}`).sort().join() === "later-today->revision:c:0,open-reading->readingHabit:0", JSON.stringify(diff.moved.map((m) => [m.from.slot.id, m.to.key])));
+  check("work that's new this replan is 'new'", diff.added.map((p) => p.key).join() === "paper:x:0");
+  check("a released sitting no longer owed is 'removed'", diff.dropped.map((d) => d.slot.id).join() === "planned-task");
+  check("no room → 'didn't fit'", diff.unplaced.map((p) => p.key).join() === "revision:c:1");
 }
 
 if (failures.length > 0) {

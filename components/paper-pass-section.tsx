@@ -1,17 +1,32 @@
 "use client";
 
+import { clsx } from "clsx";
 import { Plus, Sparkles, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { useFocusSession } from "@/components/focus-session-provider";
+import { AddToInboxButton } from "@/components/add-to-inbox-button";
 import { InfoHint } from "@/components/info-hint";
-import { PassTimer, elapsedMinutesSince } from "@/components/pass-timer";
 import { MoreOptions } from "@/components/more-options";
+import { ReadingGoalChips } from "@/components/reading-goal-chips";
+import { useReadingSitting } from "@/components/reading-sitting";
 import { callAiTask } from "@/lib/ai/client";
 import type { PassAssistOutput } from "@/lib/ai/schemas";
 import { extractPdfOutline } from "@/lib/pdf-outline";
-import { createTask, savePomodoro, updatePaper } from "@/lib/firestore";
-import { createParkedPaperRevisionItem, createPass3RecallRevisionItem } from "@/lib/paperrevision";
-import { canStartReading, derivePaperFields, PASS_SEED_MINUTES } from "@/lib/papers";
+import { createPaper, updatePaper } from "@/lib/firestore";
+import { createPass3RecallRevisionItem } from "@/lib/paperrevision";
+import { inboxPaper } from "@/lib/paper-capture";
+import {
+  canStartReading,
+  cancelPassPatch,
+  DEFAULT_SHELF_DAYS,
+  derivePaperFields,
+  nextPassEstimateMinutes,
+  PASS_LABELS,
+  passSessionMinutes,
+  passSittingCount
+} from "@/lib/papers";
+import { addDaysToKey, todayKey } from "@/lib/dates";
 import type {
   FileRef,
   Pass1Output,
@@ -22,7 +37,8 @@ import type {
   Pass2Output,
   Pass3Output,
   Paper,
-  PassState
+  PassState,
+  PomodoroSession
 } from "@/types";
 
 function lines(text: string): string[] {
@@ -41,48 +57,88 @@ function getPass(paper: Paper, passNo: 1 | 2 | 3): PassState | undefined {
   return passNo === 1 ? paper.pass1 : passNo === 2 ? paper.pass2 : paper.pass3;
 }
 
-/** Plan §5 vocabulary — Pass 1 / Pass 2 / Pass 3 renamed to Skim / Read / Deep dive. */
-const PASS_LABELS: Record<1 | 2 | 3, string> = { 1: "Skim", 2: "Read", 3: "Deep dive" };
+/** The default date a "Shelve" exit offers — editable in the exit itself (plan/17 §13 Q5). */
+function defaultShelfDate(): string {
+  return addDaysToKey(todayKey(), DEFAULT_SHELF_DAYS);
+}
 
-export function PaperPassSection({ paper, passNo, file }: { paper: Paper; passNo: 1 | 2 | 3; file: FileRef | null }) {
+/**
+ * One pass of the three, in whatever state it's in.
+ *
+ * plan/17 §5.4/§5.5 — a pass is a series of focus sittings, and the focus timer is its only clock.
+ * Starting a pass starts a sitting (the timer, the pass, and the reader together); the minutes shown
+ * here are the sum of that pass's focus sessions, never wall-clock time since it started; and
+ * finishing a pass writes the pass, not a second session for time the focus timer already logged
+ * (the double count F6 found in Today's history).
+ */
+export function PaperPassSection({
+  paper,
+  passNo,
+  file,
+  sessions = [],
+  library = [],
+  compact = false
+}: {
+  paper: Paper;
+  passNo: 1 | 2 | 3;
+  file: FileRef | null;
+  sessions?: PomodoroSession[];
+  library?: Paper[];
+  /** The reader's side panel: no AI assist box, tighter spacing. */
+  compact?: boolean;
+}) {
   const { user } = useAuth();
+  const focus = useFocusSession();
+  const { startSitting } = useReadingSitting();
   const pass = getPass(paper, passNo);
-  const seedMinutes = PASS_SEED_MINUTES[passNo];
+  const [message, setMessage] = useState("");
+  const [confirmCancel, setConfirmCancel] = useState(false);
 
-  async function startPass() {
-    if (!user) return;
-    if (passNo === 1 && !canStartReading(paper)) return;
-    const nextPass: PassState = { status: "in_progress", startedAt: new Date().toISOString() };
-    const merged: Paper = { ...paper, [passKey(passNo)]: nextPass };
-    const patch: Record<string, unknown> = { [passKey(passNo)]: nextPass, ...derivePaperFields(merged) };
-    await updatePaper(user.uid, paper.id, patch);
+  const sittingHere = focus.running && focus.mode === "work" && focus.paperId === paper.id;
+  const loggedMinutes = pass?.startedAt ? passSessionMinutes(sessions, paper.id, passNo, pass.startedAt) : 0;
+  const sittings = pass?.startedAt ? passSittingCount(sessions, paper.id, passNo, pass.startedAt) : 0;
+  const estimate = nextPassEstimateMinutes(paper, library.length > 0 ? library : [paper]);
+
+  async function begin() {
+    setMessage("");
+    const result = await startSitting({ paper, library, sessions, navigate: !compact });
+    if (result === "busy") setMessage("Another focus session is running — finish it first.");
+    if (result === "needsGoal") setMessage("Pick why you're reading this first.");
   }
 
-  async function finishPass(output: Pass1Output | Pass2Output | Pass3Output, extra?: { backgroundTasks?: string[] }) {
+  async function finishPass(output: Pass1Output | Pass2Output | Pass3Output, extra: { shelvedUntil?: string; backgroundToRead?: string[] } = {}) {
     if (!user || !pass?.startedAt) return;
-    const minutes = elapsedMinutesSince(pass.startedAt);
-    const nextPass: PassState = { status: "done", startedAt: pass.startedAt, completedAt: new Date().toISOString(), minutes, output };
-    const merged: Paper = { ...paper, [passKey(passNo)]: nextPass };
-    const patch: Record<string, unknown> = { [passKey(passNo)]: nextPass, ...derivePaperFields(merged) };
-    await updatePaper(user.uid, paper.id, patch);
-    await savePomodoro(user.uid, {
-      label: `Pass ${passNo}: ${paper.title}`,
-      category: "reading",
-      mode: "work",
-      minutes,
+    // A sitting still running on this pass belongs to it: end it now so its minutes are logged, and
+    // count them in the cached total rather than leaving the pass short by exactly that sitting.
+    let runningMinutes = 0;
+    if (sittingHere && focus.passNo === passNo) {
+      runningMinutes = Math.max(0, Math.round((focus.duration * 60 - focus.secondsLeft) / 60));
+      focus.finishNow();
+    }
+    const nextPass: PassState = {
+      status: "done",
+      startedAt: pass.startedAt,
       completedAt: new Date().toISOString(),
-      cycle: passNo,
-      paperId: paper.id,
-      passNo
-    });
-    if (passNo === 1 && (output as Pass1Output).verdict === "park") {
-      await createParkedPaperRevisionItem(user.uid, paper);
+      minutes: loggedMinutes + runningMinutes,
+      output,
+      ...(pass.lastPage ? { lastPage: pass.lastPage } : {})
+    };
+    const shelf = extra.shelvedUntil ? { shelvedUntil: extra.shelvedUntil, queuedAt: undefined } : {};
+    const merged: Paper = { ...paper, [passKey(passNo)]: nextPass, ...shelf };
+    await updatePaper(user.uid, paper.id, { [passKey(passNo)]: nextPass, ...shelf, ...derivePaperFields(merged) });
+    // plan/17 §5.2 — "Return later, after background reading": the background goes to the inbox as
+    // papers to triage, where the picker can offer them, not into Tasks as generic to-dos.
+    for (const title of extra.backgroundToRead ?? []) {
+      await createPaper(user.uid, inboxPaper({ title, source: { kind: "background", fromPaperId: paper.id } }));
     }
-    if (extra?.backgroundTasks) {
-      for (const title of extra.backgroundTasks) {
-        await createTask(user.uid, { title: `Background reading: ${title}`, status: "todo", priority: "medium", category: "reading" });
-      }
-    }
+  }
+
+  async function cancelPass() {
+    if (!user) return;
+    if (sittingHere) focus.finishNow();
+    const patch = cancelPassPatch(paper, passNo);
+    if (patch) await updatePaper(user.uid, paper.id, patch);
+    setConfirmCancel(false);
   }
 
   if (!pass || pass.status === "not_started") {
@@ -90,39 +146,90 @@ export function PaperPassSection({ paper, passNo, file }: { paper: Paper; passNo
     return (
       <div className="rounded-md border border-dashed border-ink-300 p-4 text-center dark:border-ink-700">
         {blocked ? (
-          <p className="text-sm text-ink-500">Answer &ldquo;Why am I reading this?&rdquo; above before starting Skim.</p>
+          <div className="space-y-2">
+            <p className="text-sm text-ink-500">Why are you reading this? Pick one to start Skim — you can edit the wording later.</p>
+            <div className="flex justify-center">
+              <ReadingGoalChips
+                paper={paper}
+                onPicked={(goalKind, goal) => {
+                  void startSitting({ paper: { ...paper, goal, goalKind }, library, sessions, navigate: !compact });
+                }}
+              />
+            </div>
+          </div>
         ) : (
-          <button className="btn-primary" onClick={startPass}>
+          <button className="btn-primary" onClick={begin}>
             Start {PASS_LABELS[passNo]}
           </button>
         )}
+        {!blocked ? <p className="mt-2 text-xs text-ink-500">Starts a focus sitting and opens the paper.</p> : null}
+        {message ? <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">{message}</p> : null}
       </div>
     );
   }
 
   if (pass.status === "in_progress") {
+    const forms = (
+      <>
+        {passNo === 1 ? <Pass1Form paper={paper} compact={compact} onFinish={(output, shelvedUntil) => finishPass(output, { shelvedUntil })} /> : null}
+        {passNo === 2 ? (
+          <Pass2Form paper={paper} compact={compact} onFinish={(output, shelvedUntil, backgroundToRead) => finishPass(output, { shelvedUntil, backgroundToRead })} />
+        ) : null}
+        {passNo === 3 ? <Pass3Form paper={paper} file={file} onFinish={(output) => finishPass(output)} /> : null}
+      </>
+    );
     return (
       <div className="space-y-3">
-        <PassTimer startedAt={pass.startedAt!} seedMinutes={seedMinutes} />
-        {passNo === 1 ? <Pass1Form paper={paper} onFinish={(output) => finishPass(output)} /> : null}
-        {passNo === 2 ? <Pass2Form paper={paper} onFinish={(output, backgroundTasks) => finishPass(output, { backgroundTasks })} /> : null}
-        {passNo === 3 ? <Pass3Form paper={paper} file={file} onFinish={(output) => finishPass(output)} /> : null}
+        <div className="flex flex-wrap items-center gap-2 rounded-md bg-ink-50 px-3 py-2 text-xs dark:bg-ink-800">
+          <span className="font-medium tabular-nums">
+            {loggedMinutes}m logged{sittings > 0 ? ` over ${sittings} sitting${sittings === 1 ? "" : "s"}` : ""}
+          </span>
+          <span className="text-ink-500">· about {estimate}m usual</span>
+          {pass.lastPage ? <span className="text-ink-500">· got to p. {pass.lastPage}</span> : null}
+          <span className="ml-auto flex items-center gap-2">
+            {sittingHere ? (
+              <span className="tabular-nums text-moss-700 dark:text-moss-400">
+                Sitting running · {Math.floor(focus.secondsLeft / 60)}:{String(focus.secondsLeft % 60).padStart(2, "0")} left
+              </span>
+            ) : (
+              <button className="btn-secondary px-2 py-1 text-xs" onClick={begin}>
+                Start a sitting
+              </button>
+            )}
+            {confirmCancel ? (
+              <>
+                <button className="btn-secondary px-2 py-1 text-xs text-red-600" onClick={cancelPass}>
+                  Yes, cancel {PASS_LABELS[passNo]}
+                </button>
+                <button className="px-1 text-xs text-ink-500 underline" onClick={() => setConfirmCancel(false)}>
+                  Keep it
+                </button>
+              </>
+            ) : (
+              <button className="px-1 text-xs text-ink-500 underline decoration-dotted" onClick={() => setConfirmCancel(true)} title="Started by mistake? Its sittings stay logged as reading time on this paper.">
+                Cancel pass
+              </button>
+            )}
+          </span>
+        </div>
+        {message ? <p className="text-xs text-amber-700 dark:text-amber-400">{message}</p> : null}
+        {forms}
       </div>
     );
   }
 
   // done
-  return <PassSummary passNo={passNo} pass={pass} />;
+  return <PassSummary passNo={passNo} pass={pass} paperId={paper.id} />;
 }
 
-function PassSummary({ passNo, pass }: { passNo: 1 | 2 | 3; pass: PassState }) {
+function PassSummary({ passNo, pass, paperId }: { passNo: 1 | 2 | 3; pass: PassState; paperId: string }) {
   return (
     <div className="rounded-md bg-moss-600/5 p-4 text-sm">
       <p className="mb-2 font-medium">
-        {PASS_LABELS[passNo]} done · {pass.minutes}m
+        {PASS_LABELS[passNo]} done{typeof pass.minutes === "number" ? ` · ${pass.minutes}m` : ""}
       </p>
       {passNo === 1 ? <Pass1Summary output={pass.output as Pass1Output} /> : null}
-      {passNo === 2 ? <Pass2Summary output={pass.output as Pass2Output} /> : null}
+      {passNo === 2 ? <Pass2Summary output={pass.output as Pass2Output} paperId={paperId} /> : null}
       {passNo === 3 ? <Pass3Summary output={pass.output as Pass3Output} /> : null}
     </div>
   );
@@ -132,7 +239,8 @@ function Pass1Summary({ output }: { output: Pass1Output }) {
   return (
     <div className="space-y-1 text-ink-600 dark:text-ink-300">
       <p>
-        Verdict: <span className="font-medium">{VERDICT_LABELS[output.verdict]}</span> ({output.verdictReason.replace(/-/g, " ")})
+        Verdict: <span className="font-medium">{VERDICT_LABELS[output.verdict]}</span>
+        {output.verdict === "park" || output.verdict === "drop" ? ` (${output.verdictReason.replace(/-/g, " ")})` : ""}
       </p>
       {output.contributions.length > 0 ? <p>Contributions: {output.contributions.join("; ")}</p> : null}
       {output.clarityRating ? <p>Clarity: {output.clarityRating}/5</p> : null}
@@ -140,11 +248,24 @@ function Pass1Summary({ output }: { output: Pass1Output }) {
   );
 }
 
-function Pass2Summary({ output }: { output: Pass2Output }) {
+function Pass2Summary({ output, paperId }: { output: Pass2Output; paperId: string }) {
   return (
     <div className="space-y-1 text-ink-600 dark:text-ink-300">
-      <p className="italic">&ldquo;{output.summary}&rdquo;</p>
-      <p>Outcome: {output.outcome}</p>
+      {output.summary ? <p className="italic">&ldquo;{output.summary}&rdquo;</p> : null}
+      {output.unreadReferencesMarked.length > 0 ? (
+        <div>
+          <p className="text-xs">References to read:</p>
+          <ul className="list-disc pl-4 text-xs">
+            {output.unreadReferencesMarked.map((ref) => (
+              <li key={ref}>
+                {ref}
+                <AddToInboxButton title={ref} fromPaperId={paperId} />
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <p>Outcome: {PASS2_OUTCOMES.find((item) => item.value === output.outcome)?.label ?? output.outcome}</p>
     </div>
   );
 }
@@ -160,15 +281,25 @@ function Pass3Summary({ output }: { output: Pass3Output }) {
 
 const VERDICT_REASONS: Record<Pass1Verdict, Pass1VerdictReason[]> = {
   continue: ["proceeding"],
+  done: ["proceeding"],
   park: ["insufficient-background", "outside-area-but-relevant-later"],
   drop: ["not-interested", "invalid-assumptions"]
 };
 
-/** Plan §5 vocabulary — verdict continue / park / drop renamed to Keep reading / Save for later / Not relevant. */
+/** Plan §5 vocabulary — verdicts as the reader says them. "Save for later" is now "Shelve", because
+ *  it does exactly what Shelve does everywhere else (plan/17 §5.2). */
 const VERDICT_LABELS: Record<Pass1Verdict, string> = {
   continue: "Keep reading",
-  park: "Save for later",
+  done: "Skim was enough",
+  park: "Shelve",
   drop: "Not relevant"
+};
+
+const VERDICT_HINTS: Record<Pass1Verdict, string> = {
+  continue: "Read is next",
+  done: "Finished — got what I needed",
+  park: "Come back on a date",
+  drop: "Stop here"
 };
 
 /**
@@ -207,10 +338,12 @@ function AiAssistBox({ onAssist }: { onAssist: (rawNotes: string) => Promise<voi
   );
 }
 
-const VERDICT_BUTTON_LABELS: Record<Pass1Verdict, string> = VERDICT_LABELS;
-
-/** Plan §9.5 — verdict buttons and a one-line takeaway always visible; the rest of Pass 1 behind "More options". */
-function Pass1Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass1Output) => void }) {
+/**
+ * Plan §9.5, revised by plan/17 §5.2 — the four ways a Skim can end, all visible as buttons and none
+ * pre-selected, so the most consequential choice on the form is a choice. "Shelve" asks for its date
+ * right there. Clarity is recorded only if you actually set it (it used to save a default 3/5 as data).
+ */
+function Pass1Form({ paper, compact, onFinish }: { paper: Paper; compact?: boolean; onFinish: (output: Pass1Output, shelvedUntil?: string) => void }) {
   const { user } = useAuth();
   const [steps, setSteps] = useState({ titleAbstractIntro: false, headings: false, conclusions: false, references: false });
   const [category, setCategory] = useState("");
@@ -218,11 +351,12 @@ function Pass1Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass1
   const [correctness, setCorrectness] = useState("");
   const [takeaway, setTakeaway] = useState("");
   const [contributions, setContributions] = useState("");
-  const [clarityRating, setClarityRating] = useState(3);
+  const [clarityRating, setClarityRating] = useState<number | undefined>(undefined);
   const [clarityNote, setClarityNote] = useState("");
   const [referencesAlreadyRead, setReferencesAlreadyRead] = useState("");
-  const [verdict, setVerdict] = useState<Pass1Verdict>("continue");
+  const [verdict, setVerdict] = useState<Pass1Verdict | null>(null);
   const [verdictReason, setVerdictReason] = useState<Pass1VerdictReason>("proceeding");
+  const [shelvedUntil, setShelvedUntil] = useState(defaultShelfDate());
 
   async function assist(rawNotes: string) {
     if (!user) return;
@@ -238,45 +372,61 @@ function Pass1Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass1
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    onFinish({
-      steps,
-      category: category || undefined,
-      context: context || undefined,
-      correctness: correctness || undefined,
-      contributions: [takeaway.trim(), ...lines(contributions)].filter(Boolean),
-      clarityRating,
-      clarityNote: clarityNote || undefined,
-      referencesAlreadyRead: lines(referencesAlreadyRead),
-      verdict,
-      verdictReason
-    });
+    if (!verdict) return;
+    onFinish(
+      {
+        steps,
+        category: category || undefined,
+        context: context || undefined,
+        correctness: correctness || undefined,
+        contributions: [takeaway.trim(), ...lines(contributions)].filter(Boolean),
+        ...(clarityRating !== undefined ? { clarityRating } : {}),
+        clarityNote: clarityNote || undefined,
+        referencesAlreadyRead: lines(referencesAlreadyRead),
+        verdict,
+        verdictReason
+      },
+      verdict === "park" ? shelvedUntil : undefined
+    );
   }
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        {(["continue", "park", "drop"] as const).map((option) => (
-          <div key={option} className="relative">
-            <button
-              type="button"
-              className={`btn-secondary w-full py-1.5 text-xs ${verdict === option ? "ring-2 ring-moss-500" : ""}`}
-              onClick={() => {
-                setVerdict(option);
-                setVerdictReason(VERDICT_REASONS[option][0]);
-              }}
-            >
-              {VERDICT_BUTTON_LABELS[option]}
-            </button>
-            {option === "park" ? (
-              <span className="absolute -right-1.5 -top-1.5 rounded-full bg-white dark:bg-ink-900">
-                <InfoHint term="saveForLater" />
-              </span>
-            ) : null}
-          </div>
-        ))}
+      <input className="input" value={takeaway} onChange={(e) => setTakeaway(e.target.value)} placeholder="One-line takeaway" />
+      <div>
+        <p className="label mb-1">How does this Skim end?</p>
+        <div className={clsx("grid gap-2", compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4")}>
+          {(["continue", "done", "park", "drop"] as const).map((option) => (
+            <div key={option} className="relative">
+              <button
+                type="button"
+                aria-pressed={verdict === option}
+                className={clsx("btn-secondary w-full flex-col py-1.5 text-xs", verdict === option && "ring-2 ring-moss-500")}
+                onClick={() => {
+                  setVerdict(option);
+                  setVerdictReason(VERDICT_REASONS[option][0]);
+                }}
+              >
+                <span className="font-medium">{VERDICT_LABELS[option]}</span>
+                <span className="text-[10px] font-normal text-ink-500">{VERDICT_HINTS[option]}</span>
+              </button>
+              {option === "park" ? (
+                <span className="absolute -right-1.5 -top-1.5 rounded-full bg-white dark:bg-ink-900">
+                  <InfoHint term="saveForLater" />
+                </span>
+              ) : null}
+            </div>
+          ))}
+        </div>
       </div>
-      {verdict !== "continue" ? (
-        <select className="input" value={verdictReason} onChange={(e) => setVerdictReason(e.target.value as Pass1VerdictReason)}>
+      {verdict === "park" ? (
+        <label className="flex flex-wrap items-center gap-2 text-xs text-ink-500">
+          Back on
+          <input className="input w-40 py-1 text-xs" type="date" value={shelvedUntil} min={todayKey()} onChange={(e) => setShelvedUntil(e.target.value)} required />
+        </label>
+      ) : null}
+      {verdict === "park" || verdict === "drop" ? (
+        <select className="input" value={verdictReason} onChange={(e) => setVerdictReason(e.target.value as Pass1VerdictReason)} aria-label="Reason">
           {VERDICT_REASONS[verdict].map((reason) => (
             <option key={reason} value={reason}>
               {reason.replace(/-/g, " ")}
@@ -284,9 +434,8 @@ function Pass1Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass1
           ))}
         </select>
       ) : null}
-      <input className="input" value={takeaway} onChange={(e) => setTakeaway(e.target.value)} placeholder="One-line takeaway" />
       <MoreOptions>
-        <AiAssistBox onAssist={assist} />
+        {!compact ? <AiAssistBox onAssist={assist} /> : null}
         <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
           {(
             [
@@ -315,27 +464,46 @@ function Pass1Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass1
           placeholder="References you've already read, one per line (feeds Literature survey)"
         />
         <label className="block text-xs text-ink-500">
-          Clarity: {clarityRating}/5
-          <input className="mt-1 w-full accent-moss-600" type="range" min={1} max={5} value={clarityRating} onChange={(e) => setClarityRating(Number(e.target.value))} />
+          Clarity: {clarityRating !== undefined ? `${clarityRating}/5` : "not rated"}
+          <input className="mt-1 w-full accent-moss-600" type="range" min={1} max={5} value={clarityRating ?? 3} onChange={(e) => setClarityRating(Number(e.target.value))} />
         </label>
         <input className="input" value={clarityNote} onChange={(e) => setClarityNote(e.target.value)} placeholder="Clarity note (optional)" />
         {!allStepsChecked ? <p className="text-xs text-amber-700 dark:text-amber-400">Tip: an unticked step is the honest signal the pass wasn&apos;t actually done.</p> : null}
       </MoreOptions>
-      <button className="btn-primary">Save &amp; finish Skim</button>
+      <button className="btn-primary" disabled={!verdict}>
+        {verdict ? `Finish Skim · ${VERDICT_LABELS[verdict]}` : "Choose how this Skim ends"}
+      </button>
     </form>
   );
 }
 
-function Pass2Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass2Output, backgroundTasks?: string[]) => void }) {
+/** plan/17 §5.2/F4 — Read's four endings, as buttons. The outcome used to be a select hidden under
+ *  "More options" that defaulted to "Grasped it", so typing a summary and saving finished the paper. */
+const PASS2_OUTCOMES: { value: Pass2Outcome; label: string; hint: string }[] = [
+  { value: "grasped", label: "Grasped it", hint: "Finished · Deep dive optional" },
+  { value: "persevere", label: "Persevere", hint: "Deep dive is next" },
+  { value: "set-aside", label: "Set aside", hint: "Shelve until a date" },
+  { value: "return-later", label: "Return later", hint: "After background reading" }
+];
+
+function Pass2Form({
+  paper,
+  compact,
+  onFinish
+}: {
+  paper: Paper;
+  compact?: boolean;
+  onFinish: (output: Pass2Output, shelvedUntil?: string, backgroundToRead?: string[]) => void;
+}) {
   const { user } = useAuth();
   const [keyPoints, setKeyPoints] = useState("");
   const [figures, setFigures] = useState<Pass2Figure[]>([]);
   const [unreadReferencesMarked, setUnreadReferencesMarked] = useState("");
   const [summary, setSummary] = useState("");
   const [unclear, setUnclear] = useState("");
-  const [outcome, setOutcome] = useState<Pass2Outcome>("grasped");
+  const [outcome, setOutcome] = useState<Pass2Outcome | null>(null);
   const [backgroundToRead, setBackgroundToRead] = useState("");
-  const [revisitOn, setRevisitOn] = useState("");
+  const [revisitOn, setRevisitOn] = useState(defaultShelfDate());
 
   async function assist(rawNotes: string) {
     if (!user) return;
@@ -346,10 +514,14 @@ function Pass2Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass2
   }
 
   const summaryWords = summary.trim().split(/\s+/).filter(Boolean).length;
+  const stops = outcome === "set-aside" || outcome === "return-later";
+  // The summary is the exit test for having grasped the paper. Stopping because you *haven't* is a
+  // legitimate ending that shouldn't demand one.
+  const summaryRequired = outcome === "grasped" || outcome === "persevere";
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!summary.trim()) return;
+    if (!outcome || (summaryRequired && !summary.trim())) return;
     const output: Pass2Output = {
       keyPoints: lines(keyPoints),
       figures: figures.filter((figure) => figure.ref.trim()),
@@ -359,22 +531,54 @@ function Pass2Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass2
       outcome,
       returnAfter: outcome === "return-later" ? { backgroundToRead: lines(backgroundToRead), revisitOn } : undefined
     };
-    onFinish(output, outcome === "return-later" ? lines(backgroundToRead) : undefined);
+    onFinish(output, stops ? revisitOn : undefined, outcome === "return-later" ? lines(backgroundToRead) : undefined);
   }
 
   return (
     <form onSubmit={submit} className="space-y-3">
-      <AiAssistBox onAssist={assist} />
+      {!compact ? <AiAssistBox onAssist={assist} /> : null}
       <div>
         <textarea
           className="input min-h-20"
           value={summary}
           onChange={(e) => setSummary(e.target.value)}
           placeholder="Summary you could give to someone who never opened the PDF (~60 words)"
-          required
         />
         <p className={`mt-1 text-xs ${summaryWords > 70 ? "text-amber-700 dark:text-amber-400" : "text-ink-400"}`}>{summaryWords} words</p>
       </div>
+      <div>
+        <p className="label mb-1">How does this Read end?</p>
+        <div className={clsx("grid gap-2", compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4")}>
+          {PASS2_OUTCOMES.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={outcome === option.value}
+              className={clsx("btn-secondary w-full flex-col py-1.5 text-xs", outcome === option.value && "ring-2 ring-moss-500")}
+              onClick={() => setOutcome(option.value)}
+            >
+              <span className="font-medium">{option.label}</span>
+              <span className="text-[10px] font-normal text-ink-500">{option.hint}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {stops ? (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="flex flex-wrap items-center gap-2 text-xs text-ink-500">
+            Back on
+            <input className="input w-40 py-1 text-xs" type="date" value={revisitOn} min={todayKey()} onChange={(e) => setRevisitOn(e.target.value)} required />
+          </label>
+          {outcome === "return-later" ? (
+            <textarea
+              className="input min-h-14"
+              value={backgroundToRead}
+              onChange={(e) => setBackgroundToRead(e.target.value)}
+              placeholder="Background to read first, one per line — each goes to your inbox"
+            />
+          ) : null}
+        </div>
+      ) : null}
       <MoreOptions>
         <textarea className="input min-h-16" value={keyPoints} onChange={(e) => setKeyPoints(e.target.value)} placeholder="Key points, one per line" />
         <div className="space-y-2">
@@ -411,23 +615,17 @@ function Pass2Form({ paper, onFinish }: { paper: Paper; onFinish: (output: Pass2
           className="input min-h-14"
           value={unreadReferencesMarked}
           onChange={(e) => setUnreadReferencesMarked(e.target.value)}
-          placeholder="Relevant unread references, one per line (feeds Literature survey)"
+          placeholder="Relevant unread references, one per line (feeds Literature survey and reading suggestions)"
         />
         <textarea className="input min-h-14" value={unclear} onChange={(e) => setUnclear(e.target.value)} placeholder="What's unclear, one per line" />
-        <select className="input" value={outcome} onChange={(e) => setOutcome(e.target.value as Pass2Outcome)}>
-          <option value="grasped">Grasped it</option>
-          <option value="set-aside">Set aside</option>
-          <option value="return-later">Return later, after background reading</option>
-          <option value="persevere">Persevere to Deep dive</option>
-        </select>
-        {outcome === "return-later" ? (
-          <div className="grid gap-2 sm:grid-cols-2">
-            <textarea className="input min-h-14" value={backgroundToRead} onChange={(e) => setBackgroundToRead(e.target.value)} placeholder="Background to read first, one per line" />
-            <input className="input" type="date" value={revisitOn} onChange={(e) => setRevisitOn(e.target.value)} />
-          </div>
-        ) : null}
       </MoreOptions>
-      <button className="btn-primary">Save &amp; finish Read</button>
+      <button className="btn-primary" disabled={!outcome || (summaryRequired && !summary.trim())}>
+        {!outcome
+          ? "Choose how this Read ends"
+          : summaryRequired && !summary.trim()
+            ? "Write the summary to finish"
+            : `Finish Read · ${PASS2_OUTCOMES.find((item) => item.value === outcome)!.label}`}
+      </button>
     </form>
   );
 }

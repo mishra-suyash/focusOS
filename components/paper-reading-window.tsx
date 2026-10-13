@@ -1,11 +1,14 @@
 "use client";
 
 import {
+  BookOpenCheck,
   ChevronLeft,
   ChevronRight,
   Download,
   Hand,
   HelpCircle,
+  Pause,
+  Play,
   List,
   MousePointer2,
   PanelRight,
@@ -18,10 +21,13 @@ import {
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { PassTimer, elapsedMinutesSince } from "@/components/pass-timer";
+import { useFocusSession } from "@/components/focus-session-provider";
 import { PaperNotesPanel } from "@/components/paper-notes-panel";
+import { PaperPassSection } from "@/components/paper-pass-section";
+import { OPEN_PASS_PANEL_EVENT } from "@/components/reading-check-in";
+import { useReadingSitting } from "@/components/reading-sitting";
 import { generateHighlightCandidates } from "@/lib/ai/client";
-import { createAnnotation, createAnnotationsBatch, deleteAnnotation, savePomodoro, subscribeAnnotations, updatePaper } from "@/lib/firestore";
+import { createAnnotation, createAnnotationsBatch, deleteAnnotation, subscribeAnnotations } from "@/lib/firestore";
 import {
   buildDocumentTextIndex,
   getPageTextIndex,
@@ -35,8 +41,9 @@ import {
 } from "@/lib/pdf-annotate";
 import { buildAnnotatedPdfBytes, downloadPdfBytes } from "@/lib/pdf-export";
 import { extractPdfOutlineTree, hasTextLayer, type OutlineNode } from "@/lib/pdf-outline";
-import { PASS_SEED_MINUTES } from "@/lib/papers";
-import type { Annotation, HighlightCategory, HighlightQuad, NewAnnotation, Paper } from "@/types";
+import { nextReadingPass, PASS_LABELS, READER_PAGE_STORAGE_PREFIX, runningPass as runningPassOf } from "@/lib/papers";
+import type { Annotation, FileRef, HighlightCategory, HighlightQuad, NewAnnotation, Paper, PomodoroSession } from "@/types";
+
 
 const CATEGORY_COLORS: Record<HighlightCategory, string> = {
   claim: "rgba(250, 204, 21, 0.4)",
@@ -54,7 +61,7 @@ const VIEW_MODE_STORAGE_KEY = "focusos-reading-view-mode";
 const EMPTY_ANNOTATIONS: Annotation[] = [];
 
 type ZoomMode = "fit-width" | "fit-page" | number;
-type SidebarTab = "outline" | "thumbnails" | "annotations" | "notes";
+type SidebarTab = "pass" | "outline" | "thumbnails" | "annotations" | "notes";
 type ViewMode = "single" | "continuous";
 
 interface PendingSelection {
@@ -94,9 +101,24 @@ function computeSelectionFromOverlay(overlay: HTMLDivElement, pageIndex: PageTex
   return { quote: text, quads: mergeQuadsByLine(touchedRanges, pageIndex.items) };
 }
 
-export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: string }) {
+export function PaperReadingWindow({
+  paper,
+  pdfUrl,
+  file,
+  sessions = [],
+  library = []
+}: {
+  paper: Paper;
+  pdfUrl: string;
+  file?: FileRef | null;
+  sessions?: PomodoroSession[];
+  library?: Paper[];
+}) {
   const router = useRouter();
   const { user } = useAuth();
+  const focus = useFocusSession();
+  const { startSitting } = useReadingSitting();
+  const [sittingMessage, setSittingMessage] = useState("");
 
   const [textLayerOk, setTextLayerOk] = useState<boolean | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -119,7 +141,8 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
   const [activeCategory, setActiveCategory] = useState<HighlightCategory>("claim");
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("annotations");
+  // plan/17 F10 — a pass can be finished here; open on it when one is under way.
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>(() => (runningPassOf(paper) ? "pass" : "annotations"));
 
   const [outline, setOutline] = useState<OutlineNode[] | null>(null);
   const [outlineLoading, setOutlineLoading] = useState(false);
@@ -583,63 +606,31 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
     panRef.current = null;
   }
 
-  const runningPass = ([1, 2, 3] as const)
-    .map((n) => ({ n, state: n === 1 ? paper.pass1 : n === 2 ? paper.pass2 : paper.pass3 }))
-    .find((p) => p.state?.status === "in_progress");
+  const passHere = runningPassOf(paper) ?? nextReadingPass(paper);
 
-  /**
-   * "When reading, add the time to the specific paper" — this window otherwise logs zero time
-   * unless a formal Pass 1/2/3 happens to be running (`PassTimer` above, whose own `finishPass` in
-   * paper-pass-section.tsx already logs a session). Refs, not state, since only the *flush* needs
-   * the latest paper/user — the start/stop effect below only cares whether a pass is running.
-   */
-  const freeReadingStartRef = useRef<number | null>(null);
-  const paperRef = useRef(paper);
-  const userRef = useRef(user);
+  // plan/17 §5.5 — the reader no longer runs a clock of its own. It used to log a "free reading"
+  // session for however long the window was open (idle tab included) whenever no pass was running,
+  // a third clock beside the pass timer and the focus timer. Reading here is now a focus sitting,
+  // started from the toolbar or from wherever the sitting began; this window just shows it.
+
+  // plan/17 §5.4 — "Yes, this pass is done" in the end-of-sitting check-in opens the pass's endings here.
   useEffect(() => {
-    paperRef.current = paper;
-    userRef.current = user;
-  }, [paper, user]);
-
-  const flushFreeReading = useCallback(async () => {
-    const start = freeReadingStartRef.current;
-    freeReadingStartRef.current = null;
-    const uid = userRef.current?.uid;
-    if (!start || !uid) return;
-    const minutes = elapsedMinutesSince(new Date(start).toISOString());
-    if (minutes < 1) return;
-    await savePomodoro(uid, {
-      label: `Reading: ${paperRef.current.title}`,
-      category: "reading",
-      mode: "work",
-      minutes,
-      completedAt: new Date().toISOString(),
-      cycle: 0,
-      paperId: paperRef.current.id
-    });
-    // plan/13 B1 — progress/status are otherwise derived only from pass1/2/3 (see
-    // derivePaperStatus), so time spent in this free-reading window never moved a paper off
-    // "To read" even after hours of real reading. This is a one-way nudge, not a full derivation:
-    // once any pass is actually touched, `derivePaperFields` takes back over and computes the real
-    // status from that, same as before.
-    if (paperRef.current.status === "to_read") {
-      await updatePaper(uid, paperRef.current.id, { status: "reading" });
+    function openPass() {
+      setSidebarOpen(true);
+      setSidebarTab("pass");
     }
+    window.addEventListener(OPEN_PASS_PANEL_EVENT, openPass);
+    return () => window.removeEventListener(OPEN_PASS_PANEL_EVENT, openPass);
   }, []);
 
-  const isPassRunning = Boolean(runningPass);
+  // The end-of-sitting check-in prefills "where did you get to?" from the page you're on.
   useEffect(() => {
-    // A formal pass running has its own timer/logging — stop the free-reading clock (and flush
-    // whatever it already accumulated) so the two never double-count the same minutes.
-    if (isPassRunning) {
-      void flushFreeReading();
-      return;
+    try {
+      window.localStorage.setItem(`${READER_PAGE_STORAGE_PREFIX}${paper.id}`, String(pageNum));
+    } catch {
+      // Storage blocked — the check-in just asks without a prefill.
     }
-    freeReadingStartRef.current = Date.now();
-    return () => {
-      void flushFreeReading();
-    };
-  }, [isPassRunning, flushFreeReading]);
+  }, [paper.id, pageNum]);
 
   const annotationsByPageMap = useMemo(() => {
     const map = new Map<number, Annotation[]>();
@@ -668,12 +659,20 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
           <span className="max-w-[16rem] truncate text-sm font-medium sm:max-w-[24rem]" title={paper.title}>
             {paper.title}
           </span>
-          {runningPass ? (
-            <div className="hidden items-center gap-2 md:flex">
-              <span className="label">{{ 1: "Skim", 2: "Read", 3: "Deep dive" }[runningPass.n]}</span>
-              <PassTimer startedAt={runningPass.state!.startedAt!} seedMinutes={PASS_SEED_MINUTES[runningPass.n]} />
-            </div>
-          ) : null}
+          <SittingReadout
+            paper={paper}
+            focus={focus}
+            onStart={async () => {
+              setSittingMessage("");
+              const result = await startSitting({ paper, library, sessions, navigate: false });
+              if (result === "busy") setSittingMessage("Another focus session is running");
+              if (result === "needsGoal") {
+                setSittingMessage("Pick a reading goal first");
+                openSidebarTab("pass");
+              }
+            }}
+            message={sittingMessage}
+          />
         </div>
 
         <div className="ml-auto flex items-center gap-2 text-sm">
@@ -861,6 +860,7 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
         {sidebarOpen ? (
           <aside className="flex w-full max-w-xs shrink-0 flex-col border-l border-ink-200 dark:border-ink-800">
             <div className="flex border-b border-ink-200 text-xs dark:border-ink-800">
+              <SidebarTabButton active={sidebarTab === "pass"} onClick={() => openSidebarTab("pass")} icon={<BookOpenCheck className="h-3.5 w-3.5" />} label="Pass" />
               <SidebarTabButton active={sidebarTab === "outline"} onClick={() => openSidebarTab("outline")} icon={<List className="h-3.5 w-3.5" />} label="Outline" />
               <SidebarTabButton
                 active={sidebarTab === "thumbnails"}
@@ -877,6 +877,16 @@ export function PaperReadingWindow({ paper, pdfUrl }: { paper: Paper; pdfUrl: st
               <SidebarTabButton active={sidebarTab === "notes"} onClick={() => openSidebarTab("notes")} icon={<StickyNote className="h-3.5 w-3.5" />} label="Notes" />
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-3">
+              {sidebarTab === "pass" ? (
+                passHere ? (
+                  <div className="space-y-2">
+                    <p className="label">{PASS_LABELS[passHere]}</p>
+                    <PaperPassSection paper={paper} passNo={passHere} file={file ?? null} sessions={sessions} library={library} compact />
+                  </div>
+                ) : (
+                  <p className="text-xs text-ink-500">No pass is owed on this paper right now — its page has the details.</p>
+                )
+              ) : null}
               {sidebarTab === "outline" ? (
                 outlineLoading ? (
                   <p className="text-xs text-ink-500">Loading outline...</p>
@@ -1057,10 +1067,27 @@ function PdfPage({
     setPageIndex(null);
   }, [active, scale]);
 
+  /**
+   * plan/17 F9 — the in-flight render on this page's canvas. The page first renders at the provisional
+   * scale (1) and is re-rendered a moment later at the fit-width scale; without cancelling the first
+   * render, the second resized the canvas underneath it and started another render on the same
+   * canvas — pdf.js's "Cannot use the same canvas during multiple render() operations", and a page
+   * drawn mirrored, upside down and at thumbnail size until the zoom was changed by hand.
+   */
+  const renderTaskRef = useRef<{ cancel: () => void; promise: Promise<unknown> } | null>(null);
+
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
     (async () => {
+      // Let the previous render finish cancelling (cleanup below already called cancel) before this
+      // one touches the canvas — resizing a canvas mid-render is what corrupted it.
+      const previous = renderTaskRef.current;
+      if (previous) {
+        previous.cancel();
+        await previous.promise.catch(() => undefined);
+      }
+      if (cancelled) return;
       const page = await doc.getPage(pageNum);
       const pageViewport = page.getViewport({ scale });
       const canvas = canvasRef.current;
@@ -1069,13 +1096,24 @@ function PdfPage({
       canvas.height = pageViewport.height;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-      await page.render({ canvasContext: ctx, viewport: pageViewport, canvas }).promise;
+      const task = page.render({ canvasContext: ctx, viewport: pageViewport, canvas });
+      renderTaskRef.current = task;
+      try {
+        await task.promise;
+      } catch (err) {
+        // A cancelled render is the expected end of a superseded one, not a failure.
+        if (err instanceof Error && err.name === "RenderingCancelledException") return;
+        throw err;
+      } finally {
+        if (renderTaskRef.current === task) renderTaskRef.current = null;
+      }
       if (cancelled) return;
       setViewport(pageViewport);
       setPageIndex(await getPageTextIndex(doc, pageNum));
     })();
     return () => {
       cancelled = true;
+      renderTaskRef.current?.cancel();
     };
   }, [active, doc, pageNum, scale]);
 
@@ -1228,5 +1266,51 @@ function OutlineTree({ nodes, onJump, depth = 0 }: { nodes: OutlineNode[]; onJum
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * plan/17 §5.4 step 2 — the one timer, in the reader's toolbar: the running focus sitting with pause
+ * and finish when it's on this paper, otherwise a button that starts one (and the pass it owes).
+ * Replaces the pass's wall-clock `PassTimer`, which counted from when the pass first started.
+ */
+function SittingReadout({
+  paper,
+  focus,
+  onStart,
+  message
+}: {
+  paper: Paper;
+  focus: ReturnType<typeof useFocusSession>;
+  onStart: () => void;
+  message: string;
+}) {
+  const here = focus.mode === "work" && focus.paperId === paper.id && (focus.running || focus.secondsLeft < focus.duration * 60);
+  if (here) {
+    const minutes = Math.floor(focus.secondsLeft / 60);
+    const seconds = focus.secondsLeft % 60;
+    return (
+      <div className="flex items-center gap-1.5 rounded-md bg-moss-600/10 px-2 py-1 text-xs">
+        <span className="font-medium text-moss-700 dark:text-moss-400">{focus.passNo ? PASS_LABELS[focus.passNo] : "Reading"}</span>
+        <span className="font-mono tabular-nums">
+          {minutes}:{String(seconds).padStart(2, "0")}
+        </span>
+        <button className="btn-secondary px-1.5 py-0.5" onClick={focus.toggleRunning} aria-label={focus.running ? "Pause sitting" : "Resume sitting"}>
+          {focus.running ? <Pause className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+        </button>
+        <button className="btn-secondary px-2 py-0.5 text-xs" onClick={focus.finishNow}>
+          Finish
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2">
+      <button className="btn-primary px-2 py-1 text-xs" onClick={onStart} disabled={focus.running} title={focus.running ? "Another focus session is running" : undefined}>
+        <Play className="h-3 w-3" />
+        Start a sitting
+      </button>
+      {message ? <span className="text-xs text-amber-700 dark:text-amber-400">{message}</span> : null}
+    </div>
   );
 }

@@ -4,6 +4,7 @@ import { resolveUserTier } from "@/lib/admin-tiers";
 import { evaluateTriage, type TriageAlertDraft } from "@/lib/ai/triage";
 import { todayKey } from "@/lib/dates";
 import { overdueMilestones } from "@/lib/goals";
+import { derivePaperStatus } from "@/lib/papers";
 import type { RevisionItem } from "@/types";
 
 async function fetchDueRevisionCount(uid: string, today: string): Promise<number> {
@@ -38,7 +39,9 @@ export async function evaluateAndSaveAlerts(uid: string): Promise<TriageAlertDra
     .sort((a, b) => (a.date < b.date ? -1 : 1));
 
   const stalePapers = papers
-    .filter((paper) => paper.status === "reading")
+    // plan/17 §5.2 — the derived status, not the stored cache: a set-aside paper used to read as
+    // "reading" here forever and raise a stale-paper alert for a paper you'd deliberately stopped.
+    .filter((paper) => derivePaperStatus(paper) === "reading")
     .map((paper) => ({ id: paper.id, title: paper.title, daysSinceUpdate: Math.round((Date.now() - new Date(paper.updatedAt).getTime()) / 86_400_000) }))
     .filter((paper) => paper.daysSinceUpdate > 14)
     .sort((a, b) => b.daysSinceUpdate - a.daysSinceUpdate);

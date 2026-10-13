@@ -8,6 +8,7 @@ import { useAuth } from "@/components/auth-provider";
 import { FloatingWidgetCustomizeDialog } from "@/components/floating-widget-customize-dialog";
 import { GoogleCalendarSettings } from "@/components/google-calendar-settings";
 import { InfoHint } from "@/components/info-hint";
+import { ReadingHabitSettings } from "@/components/reading-habit-settings";
 import { TermsPanel } from "@/components/terms-panel";
 import { useTheme } from "@/components/theme-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -168,6 +169,7 @@ export default function SettingsPage() {
             </p>
           </div>
         </section>
+        <ReadingHabitSettings />
         <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Floating widget</h2>
           <p className="mb-3 text-xs text-ink-500">

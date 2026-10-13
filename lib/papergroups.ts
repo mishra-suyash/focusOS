@@ -1,4 +1,4 @@
-import type { Pass1Output, Pass2Output, Paper } from "@/types";
+import type { Pass1Output, Pass2Output, Paper, PaperGroup } from "@/types";
 
 function citationsFor(paper: Paper): string[] {
   const pass1 = paper.pass1?.output as Pass1Output | undefined;
@@ -11,7 +11,7 @@ function normalize(text: string): string {
 }
 
 /** True if `ref` looks like a paper already tracked somewhere in the library (by loose title match). */
-function alreadyInLibrary(ref: string, allPapers: Paper[]): boolean {
+export function alreadyInLibrary(ref: string, allPapers: Paper[]): boolean {
   const normalizedRef = normalize(ref);
   return allPapers.some((paper) => {
     const title = normalize(paper.title);
@@ -76,4 +76,48 @@ export function findConvergedMissingCitations(groupPapers: Paper[], allPapers: P
   return computeSharedCitations(groupPapers, allPapers).filter(
     (citation) => !citation.inLibrary && citation.citedByPaperIds.length === groupPapers.length
   );
+}
+
+export interface HarvestedSuggestion {
+  /** The reference as written where it was found. */
+  ref: string;
+  /** Library papers whose reading turned it up, most relevant first. */
+  citedByPaperIds: string[];
+  /** Where it came from, for the row's subtitle. */
+  sources: ("unread-reference" | "citation-to-read" | "background" | "shared-citation")[];
+}
+
+/**
+ * plan/17 §5.3 / F2 — "read this next" data the app already holds and used to throw away: references
+ * marked unread in a Read, a layered summary's citations to read, background a Return-later named
+ * (before plan/17 sent those to the inbox itself), and a paper set's shared citations. De-duplicated
+ * against the library with the same loose title match the survey panel uses, so a reference you've
+ * already added never comes back as a suggestion. Ranked by how many of your papers point at it.
+ */
+export function harvestedSuggestions(allPapers: Paper[], groups: Pick<PaperGroup, "paperIds">[] = []): HarvestedSuggestion[] {
+  const byRef = new Map<string, { ref: string; paperIds: Set<string>; sources: Set<HarvestedSuggestion["sources"][number]> }>();
+  const add = (ref: string, paperId: string, source: HarvestedSuggestion["sources"][number]) => {
+    const key = normalize(ref);
+    if (key.length < 4) return;
+    const entry = byRef.get(key) ?? { ref: ref.trim(), paperIds: new Set(), sources: new Set() };
+    entry.paperIds.add(paperId);
+    entry.sources.add(source);
+    byRef.set(key, entry);
+  };
+  for (const paper of allPapers) {
+    const pass2 = paper.pass2?.output as Pass2Output | undefined;
+    for (const ref of pass2?.unreadReferencesMarked ?? []) add(ref, paper.id, "unread-reference");
+    for (const ref of pass2?.returnAfter?.backgroundToRead ?? []) add(ref, paper.id, "background");
+    for (const ref of paper.layeredNotes?.citationsToRead ?? []) add(ref, paper.id, "citation-to-read");
+  }
+  for (const group of groups) {
+    const groupPapers = allPapers.filter((paper) => group.paperIds.includes(paper.id));
+    for (const citation of computeSharedCitations(groupPapers, allPapers)) {
+      for (const paperId of citation.citedByPaperIds) add(citation.ref, paperId, "shared-citation");
+    }
+  }
+  return [...byRef.values()]
+    .filter((entry) => !alreadyInLibrary(entry.ref, allPapers))
+    .map((entry) => ({ ref: entry.ref, citedByPaperIds: [...entry.paperIds], sources: [...entry.sources] }))
+    .sort((a, b) => b.citedByPaperIds.length - a.citedByPaperIds.length);
 }

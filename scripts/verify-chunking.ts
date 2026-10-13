@@ -501,7 +501,9 @@ const donePass = (minutes: number, output?: unknown) => ({ status: "done" as con
   const ids = plannable.map((item) => item.paper.id);
   check("a paper added today is plannable", ids.includes("fresh"), ids.join(","));
   check("a finished paper is not offered", !ids.includes("done"), ids.join(","));
-  check("pass 1 without a reading goal is held back, not proposed", !ids.includes("blocked") && needsGoal.some((p) => p.id === "blocked"), ids.join(","));
+  // plan/17 §5.3 / F8 — the goal is asked when the sitting starts, so it no longer keeps a paper out
+  // of the week; it's still reported, so a caller can say the Skim will ask for one.
+  check("pass 1 without a reading goal is planned, and flagged as needing one", ids.includes("blocked") && needsGoal.some((p) => p.id === "blocked"), ids.join(","));
   check("a paper with a goal is proposed", ids.includes("goal"), ids.join(","));
   check("every candidate carries a pass and a length", plannable.every((item) => item.passNo >= 1 && item.minutes > 0));
   check("high priority is offered first", plannable[0]?.paper.id === "fresh", ids.join(","));

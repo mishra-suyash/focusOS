@@ -63,7 +63,7 @@ export const copy = {
   },
   readingTime: {
     label: "Reading time",
-    hint: "Total time spent in the reading window — separate from Progress, which only tracks Skim/Read/Deep dive completion. Time spent doesn't move the bar."
+    hint: "Total focus-sitting time on this paper — one clock, the focus timer. Separate from Progress, which only tracks Skim/Read/Deep dive completion. Time spent doesn't move the bar."
   },
   paperProgress: {
     label: "Progress",
@@ -72,12 +72,12 @@ export const copy = {
   skim: { label: "Skim", hint: "Read a paper in stages (Keshav's three-pass method); stop whenever you have enough" },
   skimDropParkRate: {
     label: "Skim drop/park rate",
-    hint: "All-time share of Skim-verdict papers you chose to Drop or Park, rather than continue to Read — not filtered to this week."
+    hint: "All-time share of Skim-verdict papers you chose to drop or shelve, rather than continue to Read — not filtered to this week."
   },
   read: { label: "Read", hint: "Grasp the content — Pass 2 of Keshav's three-pass method, after Skim decides this paper is worth it" },
   deepDive: { label: "Deep dive", hint: "Re-implement or reproduce the core idea — opt-in; most papers never need this pass" },
   keepReading: { label: "Keep reading" },
-  saveForLater: { label: "Save for later", hint: "Brings the paper back in ~6 months" },
+  saveForLater: { label: "Shelve", hint: "Puts the paper on the shelf until the date you pick (30 days by default); it comes back in \"What should I read?\" on that day" },
   notRelevant: { label: "Not relevant" },
   whyAmIReadingThis: { label: "Why am I reading this?" },
   paperSet: { label: "Paper set", hint: "Compare related papers together" },

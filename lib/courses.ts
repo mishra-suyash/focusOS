@@ -3,6 +3,7 @@ import { weekDates, weekStartKey } from "@/lib/dates";
 import { fetchCollection, saveDailySchedule, setRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/firestore";
 import { planRevisionTemplateSync } from "@/lib/recurring-tasks";
 import { minutesFromTime, sortedSlots } from "@/lib/schedule";
+import { slotCoverageMinutes } from "@/lib/tracking";
 import type {
   Course,
   CourseStatus,
@@ -201,16 +202,51 @@ function slotMinutes(slot: Pick<ScheduleSlot, "startTime" | "endTime">): number 
   return Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime));
 }
 
+/**
+ * plan/17 §7.2 — the line between "behind you" and "still ahead", for the three `planned*` helpers
+ * below. Without it they counted every slot on a week's days as placed — including a Monday sitting
+ * you never worked — so missed work never came back as something to plan, and replanning a week had
+ * nothing to replan.
+ */
+export interface PlanningCutoff {
+  todayKey: string;
+  /** Minutes since midnight now. A sitting today whose end has passed counts as behind you; one
+   *  under way or later today still counts as planned. */
+  nowMinutes: number;
+  /** Every session that could cover a slot. Filtered to each slot's own date before use, because
+   *  a recurring class/routine slot reuses one id on every date it materializes on. */
+  sessions: Pick<PomodoroSession, "slotId" | "mode" | "minutes" | "completedAt">[];
+}
+
+/**
+ * What one slot contributes to "placed": its real length while it's still ahead, or — once it's
+ * behind you — only what was actually worked against it (`slotCoverageMinutes`, the same coverage the
+ * 60% completion rule reads), never more than its length. No cutoff = the pre-plan/17 behaviour, the
+ * slot's length wherever it is.
+ */
+export function accountedSlotMinutes(slot: Pick<ScheduleSlot, "id" | "startTime" | "endTime">, dateKey: string, cutoff?: PlanningCutoff): number {
+  const length = slotMinutes(slot);
+  if (!cutoff) return length;
+  const behind = dateKey < cutoff.todayKey || (dateKey === cutoff.todayKey && minutesFromTime(slot.endTime) <= cutoff.nowMinutes);
+  if (!behind) return length;
+  const sameDay = cutoff.sessions.filter((session) => session.completedAt.startsWith(dateKey));
+  return Math.min(slotCoverageMinutes(slot, sameDay), length);
+}
+
+/** Every slot of the week's schedules, with the date it sits on. */
+function slotsInWeek(schedules: Pick<DailySchedule, "dateKey" | "slots">[], weekDateKeys: string[]): { slot: ScheduleSlot; dateKey: string }[] {
+  const inWeek = new Set(weekDateKeys);
+  return schedules.filter((schedule) => inWeek.has(schedule.dateKey)).flatMap((schedule) => schedule.slots.map((slot) => ({ slot, dateKey: schedule.dateKey })));
+}
+
 export function plannedMinutesThisWeek(
   schedules: Pick<DailySchedule, "dateKey" | "slots">[],
   courseId: string,
   bucket: TaskBucket,
-  weekDateKeys: string[] = currentWeekDateKeys()
+  weekDateKeys: string[] = currentWeekDateKeys(),
+  cutoff?: PlanningCutoff
 ): number {
-  const inWeek = new Set(weekDateKeys);
-  return schedules
-    .filter((schedule) => inWeek.has(schedule.dateKey))
-    .flatMap((schedule) => schedule.slots)
+  return slotsInWeek(schedules, weekDateKeys)
     // Task-derived blocks are deliberately excluded. `scheduledMinutesThisWeek` above already counts
     // task-shaped work (via the task's own estimate), and `createTaskBlock` copies the task's
     // `courseId`/`bucket` onto the block it creates — so without this filter a course task that has
@@ -218,8 +254,8 @@ export function plannedMinutesThisWeek(
     // isn't. The two pools have to stay disjoint or their sum lies, and they are separable by
     // construction: a planner-accepted *bucket* proposal carries no `assignedTaskIds` (bucket
     // candidates have no `taskId`), while every task-derived block does.
-    .filter((slot) => slot.courseId === courseId && slot.bucket === bucket && !slot.assignedTaskIds?.length)
-    .reduce((sum, slot) => sum + slotMinutes(slot), 0);
+    .filter(({ slot }) => slot.courseId === courseId && slot.bucket === bucket && !slot.assignedTaskIds?.length)
+    .reduce((sum, { slot, dateKey }) => sum + accountedSlotMinutes(slot, dateKey, cutoff), 0);
 }
 
 /**
@@ -235,14 +271,12 @@ export function plannedMinutesThisWeek(
 export function plannedMinutesForTask(
   schedules: Pick<DailySchedule, "dateKey" | "slots">[],
   taskId: string,
-  weekDateKeys: string[] = currentWeekDateKeys()
+  weekDateKeys: string[] = currentWeekDateKeys(),
+  cutoff?: PlanningCutoff
 ): number {
-  const inWeek = new Set(weekDateKeys);
-  return schedules
-    .filter((schedule) => inWeek.has(schedule.dateKey))
-    .flatMap((schedule) => schedule.slots)
-    .filter((slot) => slot.assignedTaskIds?.includes(taskId))
-    .reduce((sum, slot) => sum + slotMinutes(slot), 0);
+  return slotsInWeek(schedules, weekDateKeys)
+    .filter(({ slot }) => slot.assignedTaskIds?.includes(taskId))
+    .reduce((sum, { slot, dateKey }) => sum + accountedSlotMinutes(slot, dateKey, cutoff), 0);
 }
 
 type BucketedSession = Pick<PomodoroSession, "mode" | "minutes" | "completedAt" | "courseId" | "bucket" | "taskId">;
@@ -294,12 +328,11 @@ export function completedMinutesThisWeek(
 export function plannedMinutesForObjective(
   schedules: Pick<DailySchedule, "dateKey" | "slots">[],
   ref: { kind: SlotObjectiveRef["kind"]; id?: string; milestoneId?: string },
-  weekDateKeys: string[] = currentWeekDateKeys()
+  weekDateKeys: string[] = currentWeekDateKeys(),
+  cutoff?: PlanningCutoff
 ): number {
-  return schedules
-    .filter((schedule) => weekDateKeys.includes(schedule.dateKey))
-    .flatMap((schedule) => schedule.slots)
-    .filter((slot) => {
+  return slotsInWeek(schedules, weekDateKeys)
+    .filter(({ slot }) => {
       const slotRef = slot.objectiveRef;
       if (!slotRef || slotRef.kind !== ref.kind) return false;
       if (ref.id === undefined) return true;
@@ -308,5 +341,5 @@ export function plannedMinutesForObjective(
       // work, so a sitting for one must not read as progress on the other.
       return ref.milestoneId === undefined || ("milestoneId" in slotRef && slotRef.milestoneId === ref.milestoneId);
     })
-    .reduce((sum, slot) => sum + slotMinutes(slot), 0);
+    .reduce((sum, { slot, dateKey }) => sum + accountedSlotMinutes(slot, dateKey, cutoff), 0);
 }

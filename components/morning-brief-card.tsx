@@ -74,7 +74,11 @@ export function MorningBriefCard({ brief, schedule }: { brief?: MorningBrief; sc
                 // day respectively — a real match (this block is course/reading context) rather
                 // than a precise per-item one, which the schema doesn't support yet.
                 const checkpointsHere = slot.type === "class" || slot.type === "deep_work" ? current.checkpointsInWindow.filter((cp) => !usedCheckpointIds.has(cp.id)) : [];
-                const papersHere = slot.type === "reading" ? current.papersScheduled.filter((p) => !usedPaperIds.has(p.id)) : [];
+                // plan/17 §9 — a paper names the sitting it's pinned to. (Older briefs carry no slotId
+                // and fall back to the first reading block, as before.)
+                const papersHere =
+                  slot.type === "reading" ? current.papersScheduled.filter((p) => !usedPaperIds.has(p.id) && (p.slotId ? p.slotId === slot.id : true)) : [];
+                const openHere = slot.type === "reading" && slot.objectiveRef?.kind === "readingHabit";
                 checkpointsHere.forEach((cp) => usedCheckpointIds.add(cp.id));
                 papersHere.forEach((p) => usedPaperIds.add(p.id));
                 return (
@@ -84,7 +88,8 @@ export function MorningBriefCard({ brief, schedule }: { brief?: MorningBrief; sc
                     {checkpointsHere.length > 0 ? (
                       <p className="mt-1 text-ink-600 dark:text-ink-300">Prep window: {checkpointsHere.map((c) => c.title).join(", ")}</p>
                     ) : null}
-                    {papersHere.length > 0 ? <p className="mt-1 text-ink-600 dark:text-ink-300">Reading queue: {papersHere.map((p) => p.title).join(", ")}</p> : null}
+                    {papersHere.length > 0 ? <p className="mt-1 text-ink-600 dark:text-ink-300">Reading: {papersHere.map((p) => p.title).join(", ")}</p> : null}
+                    {openHere ? <p className="mt-1 text-ink-600 dark:text-ink-300">Open sitting — pick what to read when it starts</p> : null}
                   </li>
                 );
               })}
@@ -95,7 +100,7 @@ export function MorningBriefCard({ brief, schedule }: { brief?: MorningBrief; sc
             const unmatchedPapers = current.papersScheduled.filter((p) => !usedPaperIds.has(p.id));
             const extras: string[] = [];
             if (unmatchedCheckpoints.length > 0) extras.push(`Prep window: ${unmatchedCheckpoints.map((c) => c.title).join(", ")}`);
-            if (unmatchedPapers.length > 0) extras.push(`Reading queue: ${unmatchedPapers.map((p) => p.title).join(", ")}`);
+            if (unmatchedPapers.length > 0) extras.push(`Reading: ${unmatchedPapers.map((p) => p.title).join(", ")}`);
             if (current.goalMilestonesThisWeek.length > 0) extras.push(`Goal milestones: ${current.goalMilestonesThisWeek.map((m) => m.title).join(", ")}`);
             if (current.externalTasksInWindow.length > 0) extras.push(`Hard deadlines: ${current.externalTasksInWindow.map((t) => `${t.title} (${t.dueDate})`).join(", ")}`);
             return extras.length > 0 ? (

@@ -12,7 +12,11 @@ export type ClassAttendance = "attended" | "missed" | "cancelled" | "self_study"
 export type TopicStatus = "active" | "retired";
 export type CheckpointType = "quiz" | "lab" | "assignment" | "midsem" | "endsem" | "presentation" | "other";
 export type CheckpointStatus = "upcoming" | "prepping" | "submitted" | "done" | "missed";
-export type PaperStatus = "to_read" | "reading" | "read" | "archived";
+/** plan/17 §5.2 — one status per paper, agreed on by every surface (always read it through
+ *  `derivePaperStatus`, lib/papers.ts — the stored copy is a cache for list rendering). `archived`
+ *  is legacy only: nothing writes it any more, and `derivePaperStatus` reads an old archived paper
+ *  as `shelved` or `dropped` from the Skim verdict that archived it (plan/17 §10). */
+export type PaperStatus = "inbox" | "to_read" | "reading" | "read" | "shelved" | "dropped" | "archived";
 export type AiProvider = "claude" | "gemini" | "ollama" | "fallback";
 export type AiInsightSource = "manual" | "cron";
 export type AiTaskId =
@@ -46,7 +50,8 @@ export type RevisionGrade = "again" | "hard" | "good" | "easy";
 export type LoadIndexBand = "behind" | "light" | "on_track" | "ahead" | "overrun";
 export type GoalKind = "survey" | "method" | "baseline" | "related-work" | "reproduce" | "critique";
 export type PassStatus = "not_started" | "in_progress" | "done" | "skipped";
-export type Pass1Verdict = "continue" | "park" | "drop";
+/** plan/17 §5.2 — `done` is "Skim was enough": the paper is finished at pass 1. */
+export type Pass1Verdict = "continue" | "park" | "drop" | "done";
 export type Pass1VerdictReason = "not-interested" | "insufficient-background" | "invalid-assumptions" | "outside-area-but-relevant-later" | "proceeding";
 export type Pass2Outcome = "grasped" | "set-aside" | "return-later" | "persevere";
 export type PaperNoteKind = "quote" | "idea" | "question" | "critique" | "todo";
@@ -213,6 +218,9 @@ export interface PomodoroSession {
   /** Set when this session was a paper-reading pass timer (category "reading"). */
   paperId?: string;
   passNo?: 1 | 2 | 3;
+  /** plan/17 §5.3 — a "Find a paper" sitting: reading time spent choosing what to read. Counts
+   *  toward the reading habit, capped at one per week for the streak (§13 Q8). */
+  findPaper?: boolean;
   /** Copied from the block/task this session was started against, at finalize time (plan/14 §6.2,
    *  §6.4) — the field that turns `completedMinutesThisWeek` from an estimate into a measurement. */
   courseId?: string;
@@ -231,7 +239,9 @@ export type SlotObjectiveRef =
   | { kind: "checkpoint"; id: string }
   | { kind: "paper"; id: string; passNo?: 1 | 2 | 3 }
   | { kind: "goal"; id: string; milestoneId?: string }
-  | { kind: "revisionQueue" };
+  | { kind: "revisionQueue" }
+  /** plan/17 §5.1 — an *open* reading sitting: the time is planned, the paper is chosen when it starts. */
+  | { kind: "readingHabit" };
 
 export interface ScheduleSlot {
   id: string;
@@ -272,6 +282,18 @@ export interface ScheduleSlot {
    *  timeline after planning, and the planner needs the original intent to compute what's left.
    *  Absent = fall back to the block's own duration. */
   plannedMinutes?: number;
+  /** plan/17 §7.3 — this sitting's time was set by hand (a drag or typed time in weekly planning)
+   *  before it was accepted. "Keep my moves" re-offers it at the same time when a replan releases it. */
+  placedByUser?: boolean;
+}
+
+/** plan/17 §5.1/§6.1 — a weekly reading habit: sittings × minutes, with soft placement preferences. */
+export interface ReadingHabit {
+  sittings: number;
+  minutes: number;
+  /** 0 (Sun) – 6 (Sat). Absent = any working day. */
+  preferredDays?: number[];
+  timeOfDay?: "morning" | "afternoon" | "evening";
 }
 
 /**
@@ -362,6 +384,11 @@ export interface WeekPlan {
   dismissedMinutes?: Record<string, number>;
   blockDecisions?: Record<string, ProposalDecision>;
   completedAt?: string;
+  /** plan/17 §6.1 — this week's reading habit, snapshotted at commit like `targets`. */
+  readingTarget?: ReadingHabit;
+  /** plan/17 §7.6 — one entry per accepted replan, so the current `proposedBlocks` can explain how
+   *  it got there. */
+  revisions?: { at: string; reason: "manual" | "missed" | "dayOff"; released: number; placed: number; keptMoves: number }[];
 }
 
 export interface CourseSession {
@@ -593,8 +620,13 @@ export interface PassState {
   status: PassStatus;
   startedAt?: string;
   completedAt?: string;
+  /** plan/17 §5.5 — a cached readout of the focus-session minutes logged against this pass
+   *  (`passSessionMinutes`), written when the pass ends. Never wall-clock: a Read left open over a
+   *  weekend used to record ~2,880 minutes here and feed it to `calibratedPassEstimate`. */
   minutes?: number;
   output?: Pass1Output | Pass2Output | Pass3Output;
+  /** plan/17 §5.4 — where the end-of-sitting check-in says you got to, so the next sitting resumes there. */
+  lastPage?: number;
 }
 
 export interface Paper {
@@ -636,6 +668,23 @@ export interface Paper {
    *  time is spread across the days leading up to that weekday, landing by it, instead of one
    *  floating 45-minute block placed wherever the general search finds room. */
   weeklyTargetDay?: number;
+  /** plan/17 §5.1 — position in Up next (ISO time; earlier = sooner; reordering rewrites it).
+   *  Absent = not queued. */
+  queuedAt?: string;
+  /** plan/17 §5.2 — the date (yyyy-MM-dd) a shelved paper comes back. `null` means "explicitly
+   *  taken off the shelf", which is what stops a legacy archived/set-aside paper being re-derived as
+   *  shelved; absent means "never touched by plan/17", where the legacy derivation applies. */
+  shelvedUntil?: string | null;
+  /** plan/17 §5.2 — set by "Drop" from any screen (not by a pass outcome, which derives it). */
+  droppedAt?: string;
+  /** plan/17 §5.6 — captured but not yet triaged (a pasted link, a harvested citation). Cleared by
+   *  Queue / Shelve / Drop. A paper with any pass started is never in the inbox. */
+  inbox?: boolean;
+  /** plan/17 §8 — where the paper came from, so a harvested suggestion can say which paper cited it. */
+  source?: { kind: "manual" | "link" | "citation" | "background"; fromPaperId?: string };
+  /** plan/17 §5.2 — a pass redone after the paper came back off the shelf keeps its earlier attempt
+   *  here rather than overwriting it. */
+  previousPasses?: { passNo: 1 | 2 | 3; state: PassState }[];
   createdAt: string;
   updatedAt: string;
 }
@@ -776,7 +825,12 @@ export interface MorningBrief {
   generatedAt: string;
   revisionsDue: number;
   checkpointsInWindow: { id: string; title: string; dueAt: string }[];
-  papersScheduled: { id: string; title: string }[];
+  /** plan/17 §9 — the papers pinned to today's reading sittings (with the slot they're pinned to),
+   *  not "every paper whose status is reading", which included papers you'd set aside and missed the
+   *  ones actually planned for today. */
+  papersScheduled: { id: string; title: string; slotId?: string }[];
+  /** plan/17 §9 — today's open reading sittings: time planned, paper picked when it starts. */
+  openReadingSittings?: number;
   goalMilestonesThisWeek: { goalId: string; goalTitle: string; milestoneId: string; title: string; dueAt?: string }[];
   externalTasksInWindow: { id: string; title: string; dueDate: string }[];
   unresolvedCriticalAlerts: number;
@@ -1016,6 +1070,10 @@ export interface UserSettings {
    *  most visible consequence of the earliest phase, so it is announced once rather than simply
    *  turning up. Absent = not yet seen. */
   seenSittingsNotice?: boolean;
+  /** plan/17 §5.1 — the default weekly reading habit, and the sources a "Find a paper" sitting
+   *  opens. Absent = `DEFAULT_READING_HABIT` (lib/papers.ts). Step 3 of weekly planning can change
+   *  one week without touching this. */
+  readingHabit?: ReadingHabit & { sources?: { label: string; url: string }[] };
   updatedAt: string;
 }
 

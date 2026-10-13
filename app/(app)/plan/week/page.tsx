@@ -26,21 +26,35 @@ import {
   plannedMinutesForTask,
   plannedMinutesThisWeek,
   scheduledMinutesThisWeek,
-  syncRevisionTemplate
+  syncRevisionTemplate,
+  type PlanningCutoff
 } from "@/lib/courses";
 import { addDaysToKey, todayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { clearDayOff, fetchCourseClassLogs, saveDailySchedule, saveWeeklyReviewFields, setDayOff, updateCourse, updateGoal, updatePaper, updateTask } from "@/lib/firestore";
 import { isGoalActiveForDate } from "@/lib/goals";
 import { computeDebtHours, computeLoadIndexStreak, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import { taskBucketLabels } from "@/lib/options";
-import { paperStatusLabels, readingCandidates } from "@/lib/papers";
+import {
+  DEFAULT_READING_HABIT,
+  derivePaperStatus,
+  isActivePaper,
+  lastStatusChangeAt,
+  nextReadingPass,
+  PASS_LABELS,
+  paperShelfDate,
+  passSessionMinutes,
+  readingCandidates,
+  readingHabitProgress,
+  readingOrder,
+  readingWeeksStreak
+} from "@/lib/papers";
 import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, estimatedReviewMinutes } from "@/lib/revision";
 import { commitmentSlotsForDate, isFixedCommitment, isFixedCommitmentOccurrence, isTemplateDueOn, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { describeObjective, objectiveChipText } from "@/lib/objectives";
 import { minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
 import { isBreakMode } from "@/lib/terms";
-import { loggedMinutesForTask } from "@/lib/tracking";
+import { loggedMinutesForTask, sittingOutcome } from "@/lib/tracking";
 import {
   DEFAULT_MAX_CHUNK_MINUTES,
   DEFAULT_MIN_CHUNK_MINUTES,
@@ -57,11 +71,18 @@ import {
   keyedAfterRemoval,
   placeInWindow,
   placeProposals,
+  isPlannerMade,
+  readingHabitPlan,
+  releasableSlots,
+  replanDiff,
   resolvePlacement,
+  TIME_OF_DAY_WINDOWS,
   usableWindow,
   weekCapacity,
   weeklyPlanningSlotForDate,
   type NowFloor,
+  type OwedPass,
+  type ReleasedSlot,
   type WeekProposal,
   type WeekProposalCandidate
 } from "@/lib/weekplan";
@@ -76,6 +97,7 @@ import type {
   PomodoroSession,
   ProposalDecision,
   RecurringTaskTemplate,
+  ReadingHabit,
   RevisionItem,
   ScheduleSlot,
   SlotObjectiveRef,
@@ -214,6 +236,35 @@ function PlanWeekContent() {
   // open stays honest; placement only moves when the clock crosses a 15-minute mark.
   const nowClock = new Date();
   const now: NowFloor = { dateKey: todayK, minutes: nowClock.getHours() * 60 + nowClock.getMinutes() };
+  /**
+   * plan/17 §7.2 — what counts as "placed": slots still ahead count their length, slots behind you
+   * count only what was worked against them. Read by every accounting call below, so a missed
+   * sitting's minutes come back as To place instead of being counted as done.
+   */
+  const cutoff: PlanningCutoff = { todayKey: todayK, nowMinutes: now.minutes, sessions };
+  // ---- plan/17 §7: Replan mode ----
+  type ReplanState = { reason: "manual" | "missed" | "dayOff"; keepMoves: boolean; resetDismissals: boolean };
+  const [replan, setReplan] = useState<ReplanState | null>(null);
+  const [dayOffNudge, setDayOffNudge] = useState<string | null>(null);
+  useEffect(() => {
+    setReplan(null);
+    setDayOffNudge(null);
+  }, [weekStart]);
+  const weekIsCurrent = weekDateKeys.includes(todayK);
+  /**
+   * The unstarted future of this week's plan, released for re-placing — in memory only. Nothing is
+   * written until "Accept replan"; leaving the page writes nothing.
+   */
+  const released: ReleasedSlot[] = replan
+    ? releasableSlots({ schedules, weekDateKeys, weekStart, todayKey: todayK, nowMinutes: now.minutes, sessions })
+    : [];
+  const releasedIds = new Set(released.map((item) => `${item.dateKey}|${item.slot.id}`));
+  /** The schedules the week is planned against. Replan mode swaps in a copy without the released
+   *  sittings — every accounting call and the claimed layer must read this, never `schedules`, or a
+   *  released sitting would be counted as placed and never offered again. */
+  const planningSchedules = replan
+    ? schedules.map((schedule) => ({ ...schedule, slots: schedule.slots.filter((slot) => !releasedIds.has(`${schedule.dateKey}|${slot.id}`)) }))
+    : schedules;
   /** This week's days that can still take a sitting: not off, not past, with window left today. */
   const liveDateKeys = weekDateKeys.filter((d) => !offDateKeys.has(d) && usableWindow(workingWindow, d, now) !== null);
 
@@ -239,9 +290,23 @@ function PlanWeekContent() {
   const existingReview = reviews.find((review) => review.weekStart === weekStart);
   const committed = Boolean(existingReview?.plan?.completedAt);
 
+  // ---- plan/17 §6.1: this week's reading habit ----
+  // The account's default (Settings), unless this week already committed its own, unless edited here.
+  // An edit is this week only — Commit snapshots it into `WeekPlan.readingTarget`, the same rule as
+  // course targets — until "Make this my default" writes it to settings.
+  const habitDefault: ReadingHabit = settings.readingHabit
+    ? { sittings: settings.readingHabit.sittings, minutes: settings.readingHabit.minutes, ...(settings.readingHabit.preferredDays ? { preferredDays: settings.readingHabit.preferredDays } : {}), ...(settings.readingHabit.timeOfDay ? { timeOfDay: settings.readingHabit.timeOfDay } : {}) }
+    : DEFAULT_READING_HABIT;
+  const [habitDraft, setHabitDraft] = useState<ReadingHabit | null>(null);
+  useEffect(() => setHabitDraft(null), [weekStart]);
+  const readingTarget: ReadingHabit = habitDraft ?? existingReview?.plan?.readingTarget ?? habitDefault;
+  function editHabit(patch: Partial<ReadingHabit>) {
+    setHabitDraft({ ...readingTarget, ...patch });
+  }
+
   // ---- Step 2: the week already contains (also the source of "claimed" minutes for Step 3's meter and Step 4's placement) ----
   function claimedSlotsForDate(dateKey: string): ScheduleSlot[] {
-    const saved = schedules.find((s) => s.dateKey === dateKey)?.slots ?? [];
+    const saved = planningSchedules.find((s) => s.dateKey === dateKey)?.slots ?? [];
     const classSlots = isBreakMode(terms, dateKey) ? [] : courseSlotsForDate(courses, dateKey);
     // A TA meeting or office hour is fixed reality the same way a lecture is, so it claims its time
     // whether the day is saved or not — a saved day is exactly the one with accepted blocks on it.
@@ -380,20 +445,23 @@ function PlanWeekContent() {
    * being rebuilt at any length — and because everything is measured in minutes against the
    * calendar, editing a target, resizing a block, or deleting one all flow through correctly.
    */
-  const dismissedMinutes = existingReview?.plan?.dismissedMinutes ?? {};
+  /** What's on the plan document. A replan may set it aside ("Reset dismissals", §7.5) for its own
+   *  arithmetic, but writes go against the stored map, so leaving the page loses nothing. */
+  const storedDismissed = existingReview?.plan?.dismissedMinutes ?? {};
+  const dismissedMinutes = replan?.resetDismissals ? {} : storedDismissed;
   function outstandingFor(family: string, asks: number, alreadyPlanned: number): number {
     return Math.max(0, asks - alreadyPlanned - (dismissedMinutes[family] ?? 0));
   }
 
   async function dismissFamily(family: string, minutes: number) {
     if (!user) return;
-    await patchPlan({ dismissedMinutes: { ...dismissedMinutes, [family]: (dismissedMinutes[family] ?? 0) + minutes } });
+    await patchPlan({ dismissedMinutes: { ...storedDismissed, [family]: (storedDismissed[family] ?? 0) + minutes } });
   }
 
   /** Undoes "not this week" for every family behind one ledger row. */
   async function restoreFamilies(families: string[]) {
     if (!user) return;
-    const next = { ...dismissedMinutes };
+    const next = { ...storedDismissed };
     for (const family of families) delete next[family];
     await patchPlan({ dismissedMinutes: next });
   }
@@ -516,7 +584,7 @@ function PlanWeekContent() {
       sittings: [],
       families: [family]
     };
-    const bucketBlocks = plannedMinutesThisWeek(schedules, course.id, bucket, weekDateKeys);
+    const bucketBlocks = plannedMinutesThisWeek(planningSchedules, course.id, bucket, weekDateKeys, cutoff);
     row.placed += bucketBlocks;
     const start = candidates.length;
 
@@ -529,7 +597,7 @@ function PlanWeekContent() {
         continue;
       }
       const taskFamily = `task:${task.id}`;
-      const remaining = outstandingFor(taskFamily, estimate, Math.max(loggedMinutesForTask(sessions, task.id), plannedMinutesForTask(schedules, task.id, weekDateKeys)));
+      const remaining = outstandingFor(taskFamily, estimate, Math.max(loggedMinutesForTask(sessions, task.id), plannedMinutesForTask(planningSchedules, task.id, weekDateKeys, cutoff)));
       const taskDismissed = dismissedMinutes[taskFamily] ?? 0;
       // Whatever of the estimate isn't still owed or dismissed is on a day or already worked.
       row.placed += Math.max(0, estimate - remaining - taskDismissed);
@@ -566,7 +634,7 @@ function PlanWeekContent() {
   const prepRow: LedgerRow = { id: "prep", label: "Checkpoint prep", ask: 0, placed: 0, dismissed: 0, sittings: [], families: [] };
   for (const cp of prepCheckpoints) {
     const family = `checkpoint:${cp.id}`;
-    const placed = plannedMinutesForObjective(schedules, { kind: "checkpoint", id: cp.id }, weekDateKeys);
+    const placed = plannedMinutesForObjective(planningSchedules, { kind: "checkpoint", id: cp.id }, weekDateKeys, cutoff);
     const prepOutstanding = outstandingFor(family, cp.prepEstimateMin, placed);
     prepRow.placed += placed;
     prepRow.dismissed += dismissedMinutes[family] ?? 0;
@@ -637,7 +705,7 @@ function PlanWeekContent() {
     for (const d of weekDateKeys.filter((d) => workingWindow.daysOfWeek.includes(getDay(parseISO(d))) && !offDateKeys.has(d))) {
       const family = `revisionQueue:${d}`;
       reviewRow.families.push(family);
-      const placed = plannedMinutesForObjective(schedules, { kind: "revisionQueue" }, [d]);
+      const placed = plannedMinutesForObjective(planningSchedules, { kind: "revisionQueue" }, [d], cutoff);
       if (placed > 0) {
         reviewRow.placed += placed;
         continue;
@@ -687,7 +755,7 @@ function PlanWeekContent() {
     // the middle, the safe direction — an over-proposal is visible and dismissable.
     const family = `task:${task.id}`;
     const logged = loggedMinutesForTask(sessions, task.id);
-    const planned = plannedMinutesForTask(schedules, task.id, weekDateKeys);
+    const planned = plannedMinutesForTask(planningSchedules, task.id, weekDateKeys, cutoff);
     taskRow.placed += planned;
     taskRow.dismissed += dismissedMinutes[family] ?? 0;
     taskRow.families.push(family);
@@ -701,53 +769,99 @@ function PlanWeekContent() {
   if (taskRow.ask > 0) ledger.push(taskRow);
 
   /**
-   * plan/16 §5.2 — reading is planned as the *pass the paper is actually owed*, at the length that
-   * pass takes for this reader (`readingCandidates`), carrying `passNo` so the block can say "Pass 2",
-   * arm that pass's length on the timer, and attribute the session to the right pass.
+   * plan/17 §6.2/§6.3 — reading is a *habit* with a weekly target (sittings × minutes), not a backlog
+   * of papers that happen to be ready. The row exists whenever the target does, so it can never
+   * vanish the way plan/16's did when no paper was owed a pass with a goal set (F1).
+   *
+   * Owed passes still shape the row: each pins the sittings it needs, in the picker's order; the rest
+   * are *open* — a time and a length, with the paper chosen when the sitting starts. Sittings are
+   * spread one a day before any day gets a second, and lean to the habit's preferred days and time.
    */
-  const { plannable: readingPlan, needsGoal: papersNeedingGoal } = readingCandidates(papers, todayK);
-  const readingRow: LedgerRow = { id: "reading", label: "Reading", ask: 0, placed: 0, dismissed: 0, sittings: [], families: [] };
-  for (const { paper, passNo, minutes: passMinutes } of readingPlan) {
-    const family = `paper:${paper.id}`;
-    const placed = plannedMinutesForObjective(schedules, { kind: "paper", id: paper.id }, weekDateKeys);
-    readingRow.placed += placed;
-    readingRow.dismissed += dismissedMinutes[family] ?? 0;
-    readingRow.families.push(family);
-    const readingOutstanding = outstandingFor(family, passMinutes, placed);
-    if (readingOutstanding <= 0) continue;
-    const start = candidates.length;
-    const readingMinutes = splitIntoChunks(readingOutstanding, chunkOpts);
-    const paperObjective = { objectiveRef: { kind: "paper" as const, id: paper.id, passNo }, refId: paper.id };
-    const title = `Read: ${paper.title} (pass ${passNo})`;
-    if (paper.weeklyTargetDay != null) {
-      readingMinutes.forEach((minutes, index) => {
-        candidates.push(
-          ...leadTimeCandidates(title, "reading", minutes, paper.weeklyTargetDay!, {
-            ...paperObjective,
-            plannedMinutes: minutes,
-            key: `paper:${paper.id}:${index}`,
-            family
-          })
-        );
+  const readingOwed: OwedPass[] = readingCandidates(papers, todayK, 20).plannable.map(({ paper, passNo, minutes }) => {
+    const pass = passNo === 1 ? paper.pass1 : passNo === 2 ? paper.pass2 : paper.pass3;
+    const logged = pass?.status === "in_progress" ? passSessionMinutes(sessions, paper.id, passNo, pass.startedAt) : 0;
+    return { paperId: paper.id, title: paper.title, passNo, minutes: Math.max(0, minutes - logged) };
+  }).filter((item) => item.minutes > 0);
+  const pinnedPaperIds = new Set(
+    planningSchedules
+      .filter((schedule) => weekDateKeys.includes(schedule.dateKey))
+      .flatMap((schedule) => schedule.slots.flatMap((slot) => (slot.objectiveRef?.kind === "paper" ? [slot.objectiveRef.id] : [])))
+  );
+  const placedByPaper = Object.fromEntries(
+    [...pinnedPaperIds].map((id) => [id, plannedMinutesForObjective(planningSchedules, { kind: "paper", id }, weekDateKeys, cutoff)] as const)
+  );
+  const habit = readingHabitPlan({
+    target: readingTarget,
+    owed: readingOwed,
+    placedOpen: plannedMinutesForObjective(planningSchedules, { kind: "readingHabit" }, weekDateKeys, cutoff),
+    placedByPaper,
+    dismissedMinutes,
+    maxChunkMinutes: chunkOpts.maxChunkMinutes,
+    minChunkMinutes: chunkOpts.minChunkMinutes
+  });
+  const readingFamilies = [
+    "readingHabit",
+    ...new Set([...readingOwed.map((item) => `paper:${item.paperId}`), ...Object.keys(dismissedMinutes).filter((family) => family.startsWith("paper:"))])
+  ];
+  const readingPreferredDays = readingTarget.preferredDays?.length
+    ? weekDateKeys.filter((d) => readingTarget.preferredDays!.includes(getDay(parseISO(d))))
+    : undefined;
+  const readingShared = {
+    type: "reading" as const,
+    capGroup: "reading",
+    spreadGroup: "reading" as const,
+    ...(readingPreferredDays ? { preferredDateKeys: readingPreferredDays } : {}),
+    ...(readingTarget.timeOfDay ? { preferredWindow: TIME_OF_DAY_WINDOWS[readingTarget.timeOfDay] } : {})
+  };
+  const readingStart = candidates.length;
+  for (const { paper, minutes } of habit.pinned) {
+    const base = `${PASS_LABELS[paper.passNo]}: ${paper.title}`;
+    minutes.forEach((sitting, index) => {
+      candidates.push({
+        ...readingShared,
+        title: sittingTitle(base, index + 1, minutes.length),
+        sittingBase: base,
+        durationMinutes: sitting,
+        plannedMinutes: sitting,
+        objectiveRef: { kind: "paper", id: paper.paperId, passNo: paper.passNo },
+        key: `paper:${paper.paperId}:${index}`,
+        family: `paper:${paper.paperId}`,
+        chunk: { groupId: `paper:${paper.paperId}:${weekStart}`, index: index + 1, total: minutes.length }
       });
-    } else {
-      readingMinutes.forEach((minutes, index) => {
-        candidates.push({
-          title,
-          type: "reading",
-          durationMinutes: minutes,
-          plannedMinutes: minutes,
-          ...paperObjective,
-          capGroup: "papers",
-          key: `paper:${paper.id}:${index}`,
-          family
-        });
-      });
-    }
-    readingRow.sittings.push(...offeredSince(start));
+    });
   }
-  readingRow.ask = readingRow.placed + readingRow.dismissed + toPlaceOf(readingRow);
-  if (readingRow.ask > 0) ledger.push(readingRow);
+  habit.open.forEach((sitting, index) => {
+    candidates.push({
+      ...readingShared,
+      title: sittingTitle("Reading", index + 1, habit.open.length),
+      sittingBase: "Reading",
+      durationMinutes: sitting,
+      plannedMinutes: sitting,
+      objectiveRef: { kind: "readingHabit" },
+      key: `readingHabit:${index}`,
+      family: "readingHabit",
+      chunk: { groupId: `readingHabit:${weekStart}`, index: index + 1, total: habit.open.length }
+    });
+  });
+  const pinnedCount = habit.pinned.reduce((sum, item) => sum + item.minutes.length, 0);
+  const readingRow: LedgerRow = {
+    id: "reading",
+    label: "Reading habit",
+    detail:
+      readingTarget.sittings === 0
+        ? "0 this week — your choice"
+        : `${readingTarget.sittings} × ${habit.sittingMinutes}m${
+            pinnedCount + habit.open.length > 0
+              ? ` · to place: ${pinnedCount} pinned${pinnedCount > 0 ? ` (${habit.pinned.map((item) => `${PASS_LABELS[item.paper.passNo]} · ${item.paper.title}`).join(", ")})` : ""}, ${habit.open.length} open`
+              : ""
+          }${habit.alsoOwed.length > 0 ? ` · also owed: ${habit.alsoOwed.map((item) => item.title).join(", ")}` : ""}`,
+    ask: habit.ask - habit.shortfall,
+    placed: habit.placed,
+    dismissed: habit.dismissed,
+    sittings: offeredSince(readingStart),
+    families: readingFamilies
+  };
+  ledger.push(readingRow);
 
   /**
    * plan/16 §5.4 — "What's coming": dated things in the next `horizonDays` that nothing in Step 4
@@ -809,7 +923,7 @@ function PlanWeekContent() {
       continue;
     }
     const family = `task:${task.id}`;
-    const planned = plannedMinutesForTask(schedules, task.id, weekDateKeys);
+    const planned = plannedMinutesForTask(planningSchedules, task.id, weekDateKeys, cutoff);
     upcomingRows.push({
       id: family,
       family,
@@ -829,7 +943,7 @@ function PlanWeekContent() {
       if (milestone.done || !milestone.dueAt || milestone.dueAt < upcomingFrom || milestone.dueAt > horizonEnd) continue;
       const family = `milestone:${goal.id}:${milestone.id}`;
       const objectiveRef = { kind: "goal" as const, id: goal.id, milestoneId: milestone.id };
-      const planned = plannedMinutesForObjective(schedules, objectiveRef, weekDateKeys);
+      const planned = plannedMinutesForObjective(planningSchedules, objectiveRef, weekDateKeys, cutoff);
       upcomingRows.push({
         id: family,
         family,
@@ -853,16 +967,23 @@ function PlanWeekContent() {
       status: prepCheckpoints.includes(cp) ? "Proposed in step 4" : `Proposed from ${addDaysToKey(cp.dueAt, -cp.prepLeadDays)}`
     });
   }
-  // A paper whose pass 1 is blocked on a missing reading goal is *not* schedulable — starting it is
-  // gated — so it is surfaced as the small thing it actually is: go and set the goal.
-  for (const paper of papersNeedingGoal) {
+  // plan/17 §6.4 — the goal no longer gates planning (it's asked when a Skim starts), so the old
+  // "Set a reading goal" notes are gone. What reading *does* have coming: shelf dates and the inbox.
+  const weekEnd = weekDateKeys[6];
+  for (const paper of papers) {
+    const back = paperShelfDate(paper);
+    if (!back || back > weekEnd || back < weekStart) continue;
     upcomingNotes.push({
-      id: `paperGoal:${paper.id}`,
-      title: `Set a reading goal: ${paper.title}`,
-      detail: "Pass 1 can't start without one",
-      status: "Open paper",
+      id: `shelf:${paper.id}`,
+      title: `Back from the shelf: ${paper.title}`,
+      detail: `Shelved until ${back}`,
+      status: "Offered when a reading sitting starts",
       href: `/papers/${paper.id}`
     });
+  }
+  const inboxCount = papers.filter((paper) => derivePaperStatus(paper) === "inbox").length;
+  if (inboxCount > 0) {
+    upcomingNotes.push({ id: "inbox", title: `Inbox: ${inboxCount} paper${inboxCount === 1 ? "" : "s"} to triage`, detail: "Captured, not looked at yet", status: "Triage", href: "/papers" });
   }
 
   /** The days still worth offering: working, not off, and not already behind you. */
@@ -944,8 +1065,33 @@ function PlanWeekContent() {
    * taken. An added "What's coming" row carries exactly such a pin — the time the user confirmed —
    * so it goes first: a time the user chose claims its space before the search is allowed to guess.
    */
-  const freshProposals = placeProposals([...extraCandidates, ...candidates], weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys, now);
-  const proposals: WeekProposal[] = committed
+  /**
+   * plan/17 §7.3 "Keep my moves", widened in implementation: a released sitting is offered back at its
+   * own time whenever that time still works, by pinning the first candidate of its family there —
+   * sittings you placed by hand first, then the search's. Without it a replan re-ran the search from
+   * scratch and reshuffled sittings that were fine ("Fri 09:00 → Fri 09:45"), which made it feel
+   * random; now only what has to move does — sittings on a new day off, and missed work coming back.
+   * Unticking it gives the full re-layout. Pinned candidates go first, so they claim their space
+   * before the search places what's left.
+   */
+  const keptMoveKeys = new Set<string>();
+  if (replan?.keepMoves) {
+    const byHandFirst = [...released].sort((a, b) => Number(Boolean(b.slot.placedByUser)) - Number(Boolean(a.slot.placedByUser)));
+    for (const item of byHandFirst) {
+      if (!item.family || !liveDateKeys.includes(item.dateKey)) continue;
+      const candidate = candidates.find((c) => c.key && !keptMoveKeys.has(c.key) && (c.family ?? c.key) === item.family);
+      if (!candidate?.key) continue;
+      candidate.dateKey = item.dateKey;
+      candidate.fixedStartTime = item.slot.startTime;
+      delete candidate.preferredDateKeys;
+      keptMoveKeys.add(candidate.key);
+    }
+  }
+  const orderedCandidates = [...extraCandidates, ...candidates.filter((c) => c.key && keptMoveKeys.has(c.key)), ...candidates.filter((c) => !c.key || !keptMoveKeys.has(c.key))];
+  const freshProposals = placeProposals(orderedCandidates, weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys, now);
+  /** A committed week shows what was committed and can't be edited — except in Replan mode. */
+  const frozen = committed && !replan;
+  const proposals: WeekProposal[] = frozen
     ? (existingReview!.plan!.proposedBlocks.map((p, index) => ({ ...p, key: p.key ?? `${index}`, fits: true })) as WeekProposal[])
     : freshProposals;
 
@@ -980,12 +1126,46 @@ function PlanWeekContent() {
   const [gridMessage, setGridMessage] = useState("");
 
   /**
+   * plan/17 §6.3 — a reading sitting pinned to a paper, or unpinned to an open one, by key. Local until
+   * Accept, like a drag. Pinning moves the sitting between families (`readingHabit` ↔ `paper:<id>`)
+   * and between numbering groups, so an accepted pinned sitting never reads "Reading (3 of 4)".
+   */
+  const [pinOverrides, setPinOverrides] = useState<Record<string, string | null>>({});
+  useEffect(() => setPinOverrides({}), [weekStart]);
+  const pinnablePapers = papers.filter((paper) => isActivePaper(paper)).sort(readingOrder);
+  function pinProposal(p: WeekProposal, paperId: string | null): WeekProposal {
+    const { chunk: _chunk, sittingBase: _base, ...rest } = p;
+    const paper = paperId ? papers.find((item) => item.id === paperId) : undefined;
+    if (paper) {
+      const passNo = nextReadingPass(paper) ?? undefined;
+      const base = passNo ? `${PASS_LABELS[passNo]}: ${paper.title}` : `Reading: ${paper.title}`;
+      return {
+        ...rest,
+        title: base,
+        sittingBase: base,
+        objectiveRef: { kind: "paper", id: paper.id, ...(passNo ? { passNo } : {}) },
+        family: `paper:${paper.id}`,
+        chunk: { groupId: `paper:${paper.id}:${weekStart}`, index: 1, total: 1 }
+      };
+    }
+    return {
+      ...rest,
+      title: "Reading",
+      sittingBase: "Reading",
+      objectiveRef: { kind: "readingHabit" },
+      family: "readingHabit",
+      chunk: { groupId: `readingHabit:${weekStart}`, index: 1, total: 1 }
+    };
+  }
+
+  /**
    * A proposal as the user has last left it: the placement search's answer, overridden by any move.
    * A proposal the search couldn't fit anywhere (`fits: false`) becomes acceptable the moment it is
    * given a position by hand — which is the point of the inspector, and the only route that existed
    * for such a proposal before this was Dismiss.
    */
-  const movedProposals: WeekProposal[] = proposals.map((p) => {
+  const movedProposals: WeekProposal[] = proposals.map((original) => {
+    const p = original.key in pinOverrides ? pinProposal(original, pinOverrides[original.key]) : original;
     const placement = placements[p.key];
     if (!placement) return p;
     return {
@@ -1191,8 +1371,73 @@ function PlanWeekContent() {
     return objectiveChipText(asSlot, describeObjective(asSlot, objectiveCtx));
   }
 
+  /** plan/17 §6.3 — the pin control a reading sitting's row offers: Open, or any paper being read. */
+  function pinPropsFor(p: WeekProposal) {
+    const ref = p.objectiveRef;
+    if (p.type !== "reading" || (ref?.kind !== "readingHabit" && ref?.kind !== "paper")) return {};
+    return {
+      pinOptions: pinnablePapers.map((paper) => {
+        const passNo = nextReadingPass(paper);
+        return { value: paper.id, label: `${passNo ? `${PASS_LABELS[passNo]}: ` : ""}${paper.title}` };
+      }),
+      pinValue: ref.kind === "paper" ? ref.id : "",
+      onPin: (key: string, paperId: string | null) => setPinOverrides((current) => ({ ...current, [key]: paperId }))
+    };
+  }
+
   /** What "Accept all" takes: every proposal with a position that `placementProblem` has nothing to say about. */
   const acceptableProposals = undecidedProposals.filter((p) => p.fits && !placementProblem(p));
+
+  /** plan/17 §7.4 — the replan as a diff, for the preview. */
+  const diff = replan ? replanDiff(released, undecidedProposals) : null;
+
+  /**
+   * plan/17 §7.1 — sittings behind you this week that got under 60% of their length (the completion
+   * rule, `sittingOutcome`), so the nudge can say what a replan would recover.
+   */
+  const missedSittings = committed && weekIsCurrent
+    ? schedules
+        .filter((schedule) => weekDateKeys.includes(schedule.dateKey) && schedule.dateKey <= todayK)
+        .flatMap((schedule) =>
+          schedule.slots.filter(
+            (slot) =>
+              isPlannerMade(slot, weekStart) &&
+              (schedule.dateKey < todayK || minutesFromTime(slot.endTime) <= now.minutes) &&
+              sittingOutcome(slot, sessions.filter((session) => session.completedAt.startsWith(schedule.dateKey))) !== "closed"
+          )
+        ).length
+    : 0;
+
+  function startReplan(reason: ReplanState["reason"]) {
+    setPlacements({});
+    setPlacementNotes({});
+    setPinOverrides({});
+    setDayOffNudge(null);
+    setReplan({ reason, keepMoves: true, resetDismissals: false });
+  }
+
+  /** plan/17 §7.4/§7.6 — writes the replan day by day, then records it in the plan's history. */
+  async function acceptReplan() {
+    if (!replan) return;
+    const ok = await acceptProposals(acceptableProposals, released);
+    if (!ok) return;
+    await patchPlan({
+      proposedBlocks: effectiveProposals.map(({ fits, ...rest }) => rest),
+      dismissedMinutes: replan.resetDismissals ? {} : storedDismissed,
+      readingTarget,
+      revisions: [
+        ...(existingReview?.plan?.revisions ?? []),
+        {
+          at: new Date().toISOString(),
+          reason: replan.reason,
+          released: released.length,
+          placed: acceptableProposals.length,
+          keptMoves: acceptableProposals.filter((p) => keptMoveKeys.has(p.key)).length
+        }
+      ]
+    });
+    setReplan(null);
+  }
 
   const [acceptError, setAcceptError] = useState("");
   const [accepting, setAccepting] = useState(false);
@@ -1217,15 +1462,18 @@ function PlanWeekContent() {
       blockDecisions: legacyBlockDecisions,
       // `saveWeeklyReviewFields` replaces the whole `plan` field on an existing doc, so anything not
       // carried here is erased — committing the week used to wipe every dismissal made before it.
-      dismissedMinutes,
+      dismissedMinutes: storedDismissed,
       ...(existingReview?.plan?.completedAt ? { completedAt: existingReview.plan.completedAt } : {}),
+      // plan/17 — carried forward like every other plan field, or the next dismissal would erase them.
+      ...(existingReview?.plan?.readingTarget ? { readingTarget: existingReview.plan.readingTarget } : {}),
+      ...(existingReview?.plan?.revisions ? { revisions: existingReview.plan.revisions } : {}),
       ...patch
     };
     await saveWeeklyReviewFields(user.uid, weekStart, { plan: nextPlan });
   }
 
-  async function acceptProposals(toAccept: WeekProposal[]) {
-    if (!user) return;
+  async function acceptProposals(toAccept: WeekProposal[], release: ReleasedSlot[] = []): Promise<boolean> {
+    if (!user) return false;
     setAcceptError("");
     setAccepting(true);
     try {
@@ -1241,6 +1489,14 @@ function PlanWeekContent() {
       const acceptedGroups = new Set(fitting.flatMap((p) => (p.chunk ? [p.chunk.groupId] : [])));
       const siblingUpdates = [...renumberedSaved.values()].filter((e) => e.slot!.chunk && acceptedGroups.has(e.slot!.chunk.groupId));
       for (const e of siblingUpdates) if (!byDate.has(e.dateKey)) byDate.set(e.dateKey, []);
+      // plan/17 §7.4 — a replan also writes the days its released sittings leave, including a day
+      // whose sittings were all released and nothing new lands on.
+      const releasedOn = new Map<string, Set<string>>();
+      for (const item of release) {
+        if (!releasedOn.has(item.dateKey)) releasedOn.set(item.dateKey, new Set());
+        releasedOn.get(item.dateKey)!.add(item.slot.id);
+        if (!byDate.has(item.dateKey)) byDate.set(item.dateKey, []);
+      }
       const writes: { dateKey: string; templateId?: string; slots: ScheduleSlot[] }[] = [];
       for (const [dateKey, props] of byDate) {
         const savedSlots = schedules.find((s) => s.dateKey === dateKey)?.slots;
@@ -1248,7 +1504,8 @@ function PlanWeekContent() {
         // A saved day gets its fixed commitments here too, so what is written matches the grid the
         // proposals were placed against (and an overlapping routine block steps aside, as it does there).
         const baseSlots = savedSlots ? withCommitments(savedSlots, commitmentSlotsForDate(recurringTemplates, dateKey, savedSlots)) : claimedSlotsForDate(dateKey);
-        const existingSlots = baseSlots.map((slot) => {
+        const releasedHere = releasedOn.get(dateKey);
+        const existingSlots = baseSlots.filter((slot) => !releasedHere?.has(slot.id)).map((slot) => {
           const numbered = siblingUpdates.find((e) => e.slot!.id === slot.id && e.dateKey === dateKey);
           return numbered ? withSittingNumber(slot, numbered) : slot;
         });
@@ -1269,13 +1526,15 @@ function PlanWeekContent() {
           ...(p.taskId ? { assignedTaskIds: [p.taskId] } : {}),
           ...(p.objectiveRef ? { objectiveRef: p.objectiveRef } : {}),
           ...(p.chunk ? { chunk: p.chunk } : {}),
-          ...(p.plannedMinutes != null ? { plannedMinutes: p.plannedMinutes } : {})
+          ...(p.plannedMinutes != null ? { plannedMinutes: p.plannedMinutes } : {}),
+          // plan/17 §7.3 — a time set by hand (drag or typed) is remembered, so a replan can keep it.
+          ...(placements[p.key] || keptMoveKeys.has(p.key) ? { placedByUser: true } : {})
         }));
         const merged = sortedSlots([...existingSlots, ...newSlots]);
         const errors = validateSlots(merged);
         if (errors.length > 0) {
           setAcceptError(`${dateKey}: ${errors[0]}`);
-          return;
+          return false;
         }
         writes.push({ dateKey, templateId: schedules.find((s) => s.dateKey === dateKey)?.templateId, slots: merged });
       }
@@ -1285,11 +1544,12 @@ function PlanWeekContent() {
       const acceptedKeys = fitting.map((p) => p.key);
       setPlacements((current) => keyedAfterRemoval(current, acceptedKeys));
       setPlacementNotes((current) => keyedAfterRemoval(current, acceptedKeys));
+      setPinOverrides((current) => keyedAfterRemoval(current, acceptedKeys));
 
       // No accept flag is written. The `ScheduleSlot` just saved onto the day *is* the record that
       // this work is planned, and every generator now subtracts what is on the calendar — so a second
       // record would only be a chance for the two to disagree, which is exactly what went wrong.
-
+      return true;
     } finally {
       setAccepting(false);
     }
@@ -1308,6 +1568,7 @@ function PlanWeekContent() {
     // The family regenerates one sitting shorter, the same as after an Accept.
     setPlacements((current) => keyedAfterRemoval(current, [p.key]));
     setPlacementNotes((current) => keyedAfterRemoval(current, [p.key]));
+    setPinOverrides((current) => keyedAfterRemoval(current, [p.key]));
   }
 
   // ---- Step 5: commit ----
@@ -1327,6 +1588,8 @@ function PlanWeekContent() {
         // left it, drags and typed times included. Committing the search's own positions would
         // silently discard every move the moment the week was committed and re-opened.
         proposedBlocks: effectiveProposals.map(({ fits, ...rest }) => rest),
+        // plan/17 §6.6 — this week's reading habit, snapshotted like `targets`.
+        readingTarget,
         completedAt: new Date().toISOString()
       });
     } finally {
@@ -1368,10 +1631,20 @@ function PlanWeekContent() {
     }
   }
 
-  const priorStalePapers = papers
-    .filter((paper) => paper.status === "reading")
-    .map((paper) => ({ ...paper, daysSinceUpdate: Math.round((new Date(todayK).getTime() - new Date(paper.updatedAt).getTime()) / 86_400_000) }))
-    .filter((paper) => paper.daysSinceUpdate > 14);
+  // plan/17 §6.5 — reading in Look back: sittings done against the habit, minutes, the streak, and
+  // what happened to papers. Replaces "Stale papers (14d+)", the one reading signal there used to be.
+  const priorReview = reviews.find((review) => review.weekStart === priorWeekStart);
+  const readingTargetFor = (start: string): ReadingHabit =>
+    reviews.find((review) => review.weekStart === start)?.plan?.readingTarget ?? habitDefault;
+  const priorReadingTarget = readingTargetFor(priorWeekStart);
+  const priorReading = readingHabitProgress(sessions, priorWeekDateKeys, priorReadingTarget);
+  const readingStreak = readingWeeksStreak(sessions, weekStart <= todayK ? weekStart : priorWeekStart, readingTargetFor);
+  const priorMoved = { read: 0, shelved: 0, dropped: 0 };
+  for (const paper of papers) {
+    const status = derivePaperStatus(paper);
+    if ((status === "read" || status === "shelved" || status === "dropped") && priorWeekDateKeys.includes(lastStatusChangeAt(paper).slice(0, 10))) priorMoved[status] += 1;
+  }
+  const priorReplans = priorReview?.plan?.revisions?.length ?? 0;
 
   const overdueOpenTasks = tasks.filter((task) => task.status !== "done" && task.dueDate && priorWeekDateKeys.includes(task.dueDate));
 
@@ -1425,9 +1698,22 @@ function PlanWeekContent() {
             </p>
           ) : null}
         </div>
-        <button className="btn-primary" onClick={commitWeek} disabled={committing}>
-          {committing ? "Committing..." : committed ? "Re-commit" : "Commit"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {committed && weekIsCurrent && !replan ? (
+            <button className="btn-secondary" onClick={() => startReplan("manual")} title="Lay out the rest of this week again from now">
+              Replan from today
+            </button>
+          ) : null}
+          {replan ? (
+            <button className="btn-secondary" onClick={() => setReplan(null)}>
+              Cancel replan
+            </button>
+          ) : (
+            <button className="btn-primary" onClick={commitWeek} disabled={committing}>
+              {committing ? "Committing..." : committed ? "Re-commit" : "Commit"}
+            </button>
+          )}
+        </div>
       </div>
 
       {!settings.seenSittingsNotice ? (
@@ -1459,7 +1745,13 @@ function PlanWeekContent() {
             <Stat label="Catch-up (14-day)" value={`${debtHours}h`} />
             <Stat label="On-track streak" value={`${streak}d`} />
             <Stat label="Classes logged" value={`${classesLogged} of ${classesHeld}`} />
-            <Stat label="Stale papers (14d+)" value={`${priorStalePapers.length}`} />
+            <Stat
+              label="Reading sittings"
+              value={priorReadingTarget.sittings === 0 ? "0 planned" : `${Math.min(priorReading.sittings, priorReadingTarget.sittings)} / ${priorReadingTarget.sittings} · ${priorReading.minutes}m`}
+            />
+            <Stat label="Reading streak" value={`${readingStreak} wk`} />
+            <Stat label="Papers finished · shelved · dropped" value={`${priorMoved.read} · ${priorMoved.shelved} · ${priorMoved.dropped}`} />
+            {priorReplans > 0 ? <Stat label="Replanned" value={`×${priorReplans}`} /> : null}
             <Stat label="Tasks still open" value={`${overdueOpenTasks.length}`} />
             <Stat label="Focus average" value={avgFocus ? `${avgFocus}` : "-"} />
             {dayScoreOn ? <Stat label="Average day score" value={avgDayScore != null ? `${avgDayScore}` : "-"} /> : null}
@@ -1524,7 +1816,17 @@ function PlanWeekContent() {
                   <p className="font-medium">{DAY_LABELS[i]} {d.slice(5)}</p>
                   <button
                     className="text-[10px] text-ink-500 underline decoration-dotted hover:text-ink-700 dark:hover:text-ink-300"
-                    onClick={() => user && (dayOff ? clearDayOff(user.uid, d) : setDayOff(user.uid, d))}
+                    onClick={() => {
+                      if (!user) return;
+                      if (dayOff) {
+                        void clearDayOff(user.uid, d);
+                        return;
+                      }
+                      void setDayOff(user.uid, d);
+                      // plan/17 §7.1 — a day off that held accepted sittings: offer to replan them.
+                      const held = (schedules.find((schedule) => schedule.dateKey === d)?.slots ?? []).some((slot) => isPlannerMade(slot, weekStart) && slot.status === "upcoming");
+                      if (committed && weekIsCurrent && d >= todayK && held) setDayOffNudge(d);
+                    }}
                   >
                     {dayOff ? "Undo" : "Day off"}
                   </button>
@@ -1604,7 +1906,7 @@ function PlanWeekContent() {
                           ? `Added · ${sittingShape(left)} in step 4, from ${DAY_LABELS[weekDateKeys.indexOf(add.dateKey)]} ${add.startTime}`
                           : "Added · all placed"}
                       </span>
-                      <button className="btn-secondary px-2 py-1" onClick={() => removeUpcoming(row.id)} disabled={committed}>
+                      <button className="btn-secondary px-2 py-1" onClick={() => removeUpcoming(row.id)} disabled={frozen}>
                         Remove
                       </button>
                     </div>
@@ -1629,7 +1931,7 @@ function PlanWeekContent() {
                         step={5}
                         aria-label={`Minutes for ${row.title}`}
                         value={values.minutes}
-                        disabled={committed}
+                        disabled={frozen}
                         onChange={(e) =>
                           setUpcomingDrafts((current) => ({ ...current, [row.id]: { ...current[row.id], minutes: Math.max(5, Number(e.target.value)) } }))
                         }
@@ -1640,7 +1942,7 @@ function PlanWeekContent() {
                       className="input w-28 py-1 text-xs"
                       aria-label={`First day for ${row.title}`}
                       value={values.dateKey}
-                      disabled={committed}
+                      disabled={frozen}
                       onChange={(e) =>
                         // A new day re-derives the time: the old one was a gap on the old day.
                         setUpcomingDrafts((current) => ({ ...current, [row.id]: { ...current[row.id], dateKey: e.target.value, startTime: undefined } }))
@@ -1656,10 +1958,10 @@ function PlanWeekContent() {
                     <TypedTimeInput
                       className="input w-20 py-1 text-xs"
                       value={values.startTime}
-                      disabled={committed}
+                      disabled={frozen}
                       onChange={(time) => setUpcomingDrafts((current) => ({ ...current, [row.id]: { ...current[row.id], startTime: time } }))}
                     />
-                    <button className="btn-secondary px-2 py-1" onClick={() => addUpcoming(row)} disabled={committed}>
+                    <button className="btn-secondary px-2 py-1" onClick={() => addUpcoming(row)} disabled={frozen}>
                       Add to week
                     </button>
                     {sittings.length > 1 ? (
@@ -1774,6 +2076,106 @@ function PlanWeekContent() {
           {hoursDirty ? <span className="text-xs text-ink-500">Unsaved — step 4 is already using these numbers.</span> : null}
         </div>
 
+        <div className="mt-5 rounded-md border border-ink-200 p-3 dark:border-ink-800">
+          <p className="label mb-2 inline-flex items-center gap-1">Reading habit</p>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <input
+              type="number"
+              min={0}
+              max={14}
+              className="input w-16 py-1"
+              aria-label="Reading sittings this week"
+              value={readingTarget.sittings}
+              onChange={(e) => editHabit({ sittings: Math.max(0, Math.min(14, Math.round(Number(e.target.value)))) })}
+            />
+            <span>sittings ×</span>
+            <input
+              type="number"
+              min={chunkOpts.minChunkMinutes}
+              max={chunkOpts.maxChunkMinutes}
+              step={5}
+              className="input w-16 py-1"
+              aria-label="Minutes per reading sitting"
+              value={readingTarget.minutes}
+              onChange={(e) => editHabit({ minutes: Math.max(chunkOpts.minChunkMinutes, Math.min(chunkOpts.maxChunkMinutes, Math.round(Number(e.target.value)))) })}
+            />
+            <span>min</span>
+            <select
+              className="input w-36 py-1 text-xs"
+              aria-label="Preferred time of day for reading"
+              value={readingTarget.timeOfDay ?? ""}
+              onChange={(e) => editHabit({ timeOfDay: (e.target.value || undefined) as ReadingHabit["timeOfDay"] })}
+            >
+              <option value="">Any time</option>
+              <option value="morning">Mornings</option>
+              <option value="afternoon">Afternoons</option>
+              <option value="evening">Evenings</option>
+            </select>
+            <span className="flex gap-0.5" role="group" aria-label="Preferred reading days">
+              {DAY_LABELS.map((label, i) => {
+                const dow = (i + 1) % 7;
+                const on = readingTarget.preferredDays?.includes(dow) ?? false;
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    aria-pressed={on}
+                    className={`rounded px-1.5 py-0.5 text-[11px] ${on ? "bg-moss-600 text-white" : "bg-ink-100 text-ink-600 dark:bg-ink-800 dark:text-ink-300"}`}
+                    onClick={() => {
+                      const days = new Set(readingTarget.preferredDays ?? []);
+                      if (on) days.delete(dow);
+                      else days.add(dow);
+                      editHabit({ preferredDays: days.size > 0 ? [...days].sort() : undefined });
+                    }}
+                  >
+                    {label.slice(0, 2)}
+                  </button>
+                );
+              })}
+            </span>
+          </div>
+          <p className="mt-2 text-xs text-ink-500">
+            {readingTarget.sittings === 0
+              ? "No reading this week — a deliberate 0, shown as such in next week's look back."
+              : `Reading is planned as sittings, at most one a day until every working day has one. Papers owed a pass are pinned first; the rest stay open and you pick what to read when the sitting starts.`}
+            {habitDraft ? " This week only until you commit." : ""}
+          </p>
+          {habit.alsoOwed.length > 0 ? (
+            <div className="mt-2 text-xs text-ink-500">
+              Also owed, beyond this week&apos;s sittings:
+              {habit.alsoOwed.map((item) => (
+                <span key={item.paperId} className="ml-2 inline-flex items-center gap-1">
+                  {PASS_LABELS[item.passNo]} · {item.title} ({item.minutes}m)
+                  <button className="underline" onClick={() => editHabit({ sittings: readingTarget.sittings + Math.ceil(item.minutes / habit.sittingMinutes) })} disabled={frozen}>
+                    +{Math.ceil(item.minutes / habit.sittingMinutes)} sitting{Math.ceil(item.minutes / habit.sittingMinutes) === 1 ? "" : "s"}
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {(readingTarget.sittings !== habitDefault.sittings ||
+            readingTarget.minutes !== habitDefault.minutes ||
+            readingTarget.timeOfDay !== habitDefault.timeOfDay ||
+            (readingTarget.preferredDays ?? []).join() !== (habitDefault.preferredDays ?? []).join()) ? (
+            <button
+              className="btn-secondary mt-2 px-2 py-1 text-xs"
+              onClick={() =>
+                updateSettings({
+                  readingHabit: {
+                    ...settings.readingHabit,
+                    sittings: readingTarget.sittings,
+                    minutes: readingTarget.minutes,
+                    preferredDays: readingTarget.preferredDays,
+                    timeOfDay: readingTarget.timeOfDay
+                  }
+                })
+              }
+            >
+              Make this my default
+            </button>
+          ) : null}
+        </div>
+
         <div className="mt-5 overflow-x-auto">
           <p className="label mb-1">The week, in minutes</p>
           <table className="w-full text-sm tabular-nums">
@@ -1804,7 +2206,7 @@ function PlanWeekContent() {
                           <button
                             className="text-xs text-ink-500 underline decoration-dotted"
                             onClick={() => restoreFamilies(row.families)}
-                            disabled={committed}
+                            disabled={frozen}
                           >
                             restore
                           </button>
@@ -1831,8 +2233,9 @@ function PlanWeekContent() {
           </table>
           <p className="mt-1 text-xs text-ink-500">
             Asked = placed + dismissed + to place
-            {totals.over > 0 ? `, less ${formatHours(totals.over)} placed beyond what was asked` : ""}. Placed means on a day this week
-            {weekStart <= todayK ? " (including days already behind you)" : ""} or already worked; a course&apos;s hours include its tasks due this week.
+            {totals.over > 0 ? `, less ${formatHours(totals.over)} placed beyond what was asked` : ""}. Placed means worked, on days behind
+            you, or planned, from today on — a sitting you missed comes back here to place again. A course&apos;s hours include its tasks due
+            this week.
           </p>
           {activeGoals.some((goal) => goal.targetHoursPerWeek) ? (
             <div className="mt-3 text-xs text-ink-500">
@@ -1858,9 +2261,103 @@ function PlanWeekContent() {
           until you accept it.
         </p>
         {acceptError ? <p className="mb-2 text-sm text-red-600">{acceptError}</p> : null}
-        {acceptableProposals.length > 0 ? (
+        {/* Only when there's something to recover: missed time already re-placed (an Accept after it
+            was missed) makes the nudge noise. */}
+        {!replan && committed && weekIsCurrent && ((missedSittings > 0 && totals.toPlace > 0) || dayOffNudge) ? (
+          <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            <span className="flex-1">
+              {dayOffNudge
+                ? `${DAY_LABELS[weekDateKeys.indexOf(dayOffNudge)]} is now a day off, and it held sittings you'd accepted.`
+                : `${missedSittings} sitting${missedSittings === 1 ? "" : "s"} behind you this week got less than 60% of its time.`}{" "}
+              Replanning lays the rest of the week out again from now.
+            </span>
+            <button className="btn-primary py-1.5 text-xs" onClick={() => startReplan(dayOffNudge ? "dayOff" : "missed")}>
+              Replan from today
+            </button>
+            {dayOffNudge ? (
+              <button className="text-xs text-ink-500 underline" onClick={() => setDayOffNudge(null)}>
+                Not now
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {replan ? (
+          liveDateKeys.length === 0 ? (
+            <div className="mb-3 rounded-md border border-ink-200 p-3 text-sm dark:border-ink-800">
+              Nothing left to replan this week —{" "}
+              <Link href={`/plan/week?week=${addDaysToKey(weekStart, 7)}`} className="underline">
+                plan next week
+              </Link>
+              .
+            </div>
+          ) : (
+            <div className="mb-3 space-y-2 rounded-md border border-moss-600/50 bg-moss-600/5 p-3 text-sm">
+              <p className="font-medium">Replanning from now</p>
+              <p className="text-xs text-ink-500">
+                {(() => {
+                  const stay = diff ? diff.moved.filter(({ from, to }) => from.dateKey === to.dateKey && from.slot.startTime === to.startTime).length : 0;
+                  const move = diff ? diff.moved.length - stay : 0;
+                  return `${released.length} unstarted sitting${released.length === 1 ? "" : "s"} from now on re-placed: ${stay} stay where they are, ${move} move${
+                    diff && diff.added.length > 0 ? `, ${diff.added.length} new` : ""
+                  }${diff && diff.dropped.length > 0 ? `, ${diff.dropped.length} no longer owed` : ""}. `;
+                })()}
+                Time missed earlier this week is counted back in. Blocks you added yourself, classes, routine, commitments and anything you&apos;ve
+                worked are never touched. Nothing is written until you accept.
+              </p>
+              {diff ? (
+                <ul className="space-y-0.5 text-xs">
+                  {diff.moved.map(({ from, to }) => {
+                    const same = from.dateKey === to.dateKey && from.slot.startTime === to.startTime;
+                    return (
+                      <li key={`m:${from.slot.id}`}>
+                        {same ? "Kept" : "Moved"} · {from.slot.title} ·{" "}
+                        {same
+                          ? `${DAY_LABELS[weekDateKeys.indexOf(to.dateKey)]} ${to.startTime}`
+                          : `${DAY_LABELS[weekDateKeys.indexOf(from.dateKey)]} ${from.slot.startTime} → ${DAY_LABELS[weekDateKeys.indexOf(to.dateKey)]} ${to.startTime}`}
+                      </li>
+                    );
+                  })}
+                  {diff.added.map((p) => (
+                    <li key={`a:${p.key}`}>
+                      New · {p.title} · {DAY_LABELS[weekDateKeys.indexOf(p.dateKey)]} {p.startTime}
+                    </li>
+                  ))}
+                  {diff.dropped.map((item) => (
+                    <li key={`d:${item.slot.id}`} className="text-ink-500">
+                      Removed · {item.slot.title} · no longer owed this week
+                    </li>
+                  ))}
+                  {diff.unplaced.map((p) => (
+                    <li key={`u:${p.key}`} className="text-amber-700 dark:text-amber-400">
+                      Didn&apos;t fit · {p.title} · {p.durationMinutes}m
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="flex flex-wrap items-center gap-4 text-xs">
+                <label className="flex items-center gap-1.5">
+                  <input type="checkbox" checked={replan.keepMoves} onChange={(e) => setReplan({ ...replan, keepMoves: e.target.checked })} />
+                  Keep sittings where they are when their time still works (off: lay everything out again)
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input type="checkbox" checked={replan.resetDismissals} onChange={(e) => setReplan({ ...replan, resetDismissals: e.target.checked })} />
+                  Reset dismissals
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button className="btn-primary py-1.5 text-xs" onClick={acceptReplan} disabled={accepting}>
+                  {accepting ? "Replanning..." : `Accept replan · ${acceptableProposals.length} sitting${acceptableProposals.length === 1 ? "" : "s"}`}
+                </button>
+                <button className="btn-secondary py-1.5 text-xs" onClick={() => setReplan(null)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )
+        ) : null}
+        {!replan && acceptableProposals.length > 0 ? (
           <div className="mb-3 flex flex-wrap items-center gap-3">
-            <button className="btn-primary" onClick={() => acceptProposals(acceptableProposals)} disabled={accepting || committed}>
+            <button className="btn-primary" onClick={() => acceptProposals(acceptableProposals)} disabled={accepting || frozen}>
               {accepting ? "Accepting..." : `Accept all ${acceptableProposals.length} (${formatHours(acceptableProposals.reduce((sum, p) => sum + p.durationMinutes, 0))})`}
             </button>
             <span className="text-xs text-ink-500">
@@ -1874,20 +2371,12 @@ function PlanWeekContent() {
         <p className="sr-only" role="status" aria-live="polite">
           {gridMessage}
         </p>
-        {readingPlan.length > 0 || backlogTasks.length > 0 ? (
+        {backlogTasks.length > 0 ? (
           <div className="mb-4 space-y-1">
             <p className="label mb-1 inline-flex items-center gap-1">
               Target a day (optional)
               <InfoHint term="weeklyTargetDay" />
             </p>
-            {readingPlan.map(({ paper, passNo }) => (
-              <TargetDayRow
-                key={paper.id}
-                title={`Read: ${paper.title} (pass ${passNo})`}
-                value={paper.weeklyTargetDay}
-                onChange={(day) => user && updatePaper(user.uid, paper.id, { weeklyTargetDay: day })}
-              />
-            ))}
             {backlogTasks.map((task) => (
               <TargetDayRow
                 key={task.id}
@@ -1910,7 +2399,7 @@ function PlanWeekContent() {
             fixedSlotsByDate={gridFixedSlotsByDate}
             proposals={undecidedProposals.filter((p) => p.fits)}
             onPlace={applyPlacement}
-            disabled={accepting || committed}
+            disabled={accepting || frozen}
             now={now}
             chipFor={chipForProposal}
             dayScoreFor={dayScoreOn ? (dateKey) => (dateKey < todayK ? weekDayDocs.get(dateKey)?.game?.score ?? null : null) : undefined}
@@ -1947,12 +2436,14 @@ function PlanWeekContent() {
                           const proposal = effectiveProposals.find((item) => item.key === key);
                           if (proposal) dismissProposal(proposal);
                         }}
-                        disabled={accepting || committed}
+                        disabled={accepting || frozen}
                         chip={chipForProposal(p)}
                         invalidReason={placementProblem(p)}
                         notice={placementNotes[p.key]}
                         maxMinutes={chunkOpts.maxChunkMinutes}
                         suggestStart={suggestStartOn}
+                        {...pinPropsFor(p)}
+                        hideAccept={Boolean(replan)}
                       />
                     ))}
                   </div>
@@ -1987,12 +2478,14 @@ function PlanWeekContent() {
                       const proposal = effectiveProposals.find((item) => item.key === key);
                       if (proposal) dismissProposal(proposal);
                     }}
-                    disabled={accepting || committed}
+                    disabled={accepting || frozen}
                     chip={chipForProposal(p)}
                     invalidReason={placementProblem(p)}
                     notice={placementNotes[p.key]}
                     maxMinutes={chunkOpts.maxChunkMinutes}
                     suggestStart={suggestStartOn}
+                    {...pinPropsFor(p)}
+                    hideAccept={Boolean(replan)}
                   />
                 ))}
             </div>

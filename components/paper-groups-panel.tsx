@@ -9,6 +9,7 @@ import { useUserCollection } from "@/hooks/use-user-collection";
 import { createPaperGroup, createRevisionItem, deletePaperGroup, updatePaperGroup } from "@/lib/firestore";
 import { computeRepeatedAuthors, computeSharedCitations } from "@/lib/papergroups";
 import type { Paper, PaperGroup, PaperGroupKind } from "@/types";
+import { AddToInboxButton } from "@/components/add-to-inbox-button";
 
 export function PaperGroupsPanel({ papers }: { papers: Paper[] }) {
   const { user } = useAuth();
@@ -152,7 +153,12 @@ function GroupRow({
               {sharedCitations.slice(0, 5).map((citation) => (
                 <p key={citation.ref} className="text-xs text-ink-600 dark:text-ink-300">
                   {citation.citedByPaperIds.length} of {groupPapers.length} papers cite &ldquo;{citation.ref}&rdquo;
-                  {!citation.inLibrary ? <span className="ml-1 text-amber-700 dark:text-amber-400">— not in your library</span> : null}
+                  {!citation.inLibrary ? (
+                    <>
+                      <span className="ml-1 text-amber-700 dark:text-amber-400">— not in your library</span>
+                      <AddToInboxButton title={citation.ref} fromPaperId={citation.citedByPaperIds[0]} />
+                    </>
+                  ) : null}
                 </p>
               ))}
             </div>

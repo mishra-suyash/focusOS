@@ -1,6 +1,7 @@
 import { averageFocusRating, completionRate, focusedMinutesByCategory, todayMetrics, weeklyPomodoros } from "@/lib/analytics";
 import type { InsightData } from "@/lib/admin-firestore";
 import type { InsightDailyOutput } from "@/lib/ai/schemas";
+import { derivePaperStatus, isActivePaper } from "@/lib/papers";
 
 export function buildInsightPrompt({ tasks, sessions, days, papers, checkpoints }: InsightData) {
   const metrics = todayMetrics(tasks, sessions);
@@ -22,9 +23,9 @@ export function buildInsightPrompt({ tasks, sessions, days, papers, checkpoints 
     .join("\n");
 
   const readingQueue = papers
-    .filter((paper) => paper.status === "to_read" || paper.status === "reading")
+    .filter((paper) => isActivePaper(paper))
     .slice(0, 10)
-    .map((paper) => `- [${paper.status}] ${paper.title}`)
+    .map((paper) => `- [${derivePaperStatus(paper)}] ${paper.title}`)
     .join("\n");
 
   const recentComments = sessions
@@ -73,7 +74,7 @@ export function buildInsightFallback({ tasks, sessions, checkpoints, papers }: I
   const topTask = tasks.find((task) => task.status !== "done" && task.priority === "high");
   if (topTask) suggestions.push(`Highest-priority open task: ${topTask.title}`);
 
-  const readingPaper = papers.find((paper) => paper.status === "reading");
+  const readingPaper = papers.find((paper) => derivePaperStatus(paper) === "reading");
   if (readingPaper) suggestions.push(`Continue reading: ${readingPaper.title}`);
 
   if (suggestions.length === 0) suggestions.push("No urgent items — a good day to get ahead on the revision queue or reading list.");

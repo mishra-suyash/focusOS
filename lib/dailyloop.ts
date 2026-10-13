@@ -1,6 +1,6 @@
 import { upcomingMilestones } from "@/lib/goals";
 import { DEFAULT_MAX_REVISION_MINUTES_PER_DAY, DEFAULT_MAX_REVISIONS_PER_DAY, MINUTES_PER_REVISION, estimatedReviewMinutes } from "@/lib/revision";
-import type { Checkpoint, Goal, MorningBrief, Paper, ProposedSlot, ProposedTask, Task } from "@/types";
+import type { Checkpoint, Goal, MorningBrief, Paper, ProposedSlot, ProposedTask, ScheduleSlot, Task } from "@/types";
 
 const DEFAULT_WORK_MINUTES = 25;
 
@@ -39,6 +39,8 @@ export interface MorningBriefInputs {
   dueRevisionCount: number;
   checkpoints: Checkpoint[];
   papers: Paper[];
+  /** Today's saved slots — where the brief reads which papers are actually planned. */
+  todaySlots?: ScheduleSlot[];
   goals: Goal[];
   externalTasks: Task[];
   unresolvedCriticalAlertCount: number;
@@ -55,7 +57,16 @@ export function buildMorningBrief(inputs: MorningBriefInputs): MorningBrief {
     .sort((a, b) => (a.dueAt < b.dueAt ? -1 : 1))
     .map((c) => ({ id: c.id, title: c.title, dueAt: c.dueAt }));
 
-  const papersScheduled = inputs.papers.filter((p) => p.status === "reading").map((p) => ({ id: p.id, title: p.title }));
+  // plan/17 §9 — what's actually on today's plan: papers pinned to reading sittings, plus how many
+  // sittings are open (paper chosen when they start).
+  const readingSlots = (inputs.todaySlots ?? []).filter((slot) => slot.type === "reading");
+  const papersScheduled = readingSlots.flatMap((slot) => {
+    const ref = slot.objectiveRef;
+    if (ref?.kind !== "paper") return [];
+    const paper = inputs.papers.find((p) => p.id === ref.id);
+    return paper ? [{ id: paper.id, title: paper.title, slotId: slot.id }] : [];
+  });
+  const openReadingSittings = readingSlots.filter((slot) => slot.objectiveRef?.kind === "readingHabit").length;
 
   const goalMilestonesThisWeek = upcomingMilestones(inputs.goals, inputs.todayKey, 7).map((m) => ({
     goalId: m.goalId,
@@ -80,6 +91,7 @@ export function buildMorningBrief(inputs: MorningBriefInputs): MorningBrief {
     revisionsDue: inputs.dueRevisionCount,
     checkpointsInWindow,
     papersScheduled,
+    openReadingSittings,
     goalMilestonesThisWeek,
     externalTasksInWindow,
     unresolvedCriticalAlerts: inputs.unresolvedCriticalAlertCount,

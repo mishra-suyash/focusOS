@@ -7,6 +7,7 @@ import { InfoHint } from "@/components/info-hint";
 import { generateLayeredNotes } from "@/lib/ai/client";
 import { updatePaper } from "@/lib/firestore";
 import type { LayeredNotes } from "@/types";
+import { AddToInboxButton } from "@/components/add-to-inbox-button";
 
 function Field({ label, value }: { label: string; value: string }) {
   if (!value) return null;
@@ -18,14 +19,17 @@ function Field({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ListField({ label, items }: { label: string; items: string[] }) {
+function ListField({ label, items, inboxFrom }: { label: string; items: string[]; inboxFrom?: string }) {
   if (items.length === 0) return null;
   return (
     <div>
       <p className="label">{label}</p>
       <ul className="list-disc space-y-0.5 pl-4 text-sm">
         {items.map((item, i) => (
-          <li key={i}>{item}</li>
+          <li key={i}>
+            {item}
+            {inboxFrom ? <AddToInboxButton title={item} fromPaperId={inboxFrom} /> : null}
+          </li>
         ))}
       </ul>
     </div>
@@ -101,7 +105,7 @@ export function LayeredNotesCard({ paperId, layeredNotes }: { paperId: string; l
           <Field label="Hyperparameters" value={layeredNotes.L3.hyperparameters} />
           <ListField label="Failure modes" items={layeredNotes.L3.failureModes} />
           <ListField label="Reproduction checklist" items={layeredNotes.L3.reproductionChecklist} />
-          <ListField label="Citations to read" items={layeredNotes.citationsToRead} />
+          <ListField label="Citations to read" items={layeredNotes.citationsToRead} inboxFrom={paperId} />
           <ListField label="Open questions" items={layeredNotes.openQuestions} />
           <ListField label="Claims to verify" items={layeredNotes.claimsToVerify} />
           {layeredNotes.sourceRefs.length > 0 ? (

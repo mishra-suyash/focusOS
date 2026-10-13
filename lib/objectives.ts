@@ -1,4 +1,5 @@
 import { taskBucketLabels } from "@/lib/options";
+import { derivePaperStatus } from "@/lib/papers";
 import type { Checkpoint, Course, Goal, Paper, ScheduleSlot, Task, TaskBucket } from "@/types";
 
 /**
@@ -26,7 +27,9 @@ export interface Objective {
 
 type ObjectiveContext = {
   courses: Pick<Course, "id" | "name">[];
-  papers: Pick<Paper, "id" | "title">[];
+  /** The status fields are optional: given them, a sitting pinned to a paper that has since been
+   *  shelved or dropped says so instead of offering to read it (plan/17 L2). */
+  papers: (Pick<Paper, "id" | "title"> & Partial<Pick<Paper, "fileId" | "pass1" | "pass2" | "pass3" | "shelvedUntil" | "droppedAt" | "inbox">>)[];
   checkpoints: Pick<Checkpoint, "id" | "title">[];
   tasks: Pick<Task, "id" | "title" | "courseId" | "bucket">[];
   goals: Pick<Goal, "id" | "title" | "milestones">[];
@@ -79,10 +82,18 @@ export function describeObjective(slot: ScheduleSlot, ctx: ObjectiveContext): Ob
     }
     if (ref.kind === "paper") {
       const paper = ctx.papers.find((item) => item.id === ref.id);
+      // plan/17 L2 — the paper was shelved or dropped after this sitting was planned: the time is
+      // still reading time, so the sitting becomes an open one rather than a Start button for a paper
+      // you've stopped.
+      const stopped = paper && "pass1" in paper && ["shelved", "dropped", "read"].includes(derivePaperStatus(paper));
+      if (stopped) {
+        return { label: "Reading · pick at start", detail: `${paper.title} is ${derivePaperStatus(paper)}`, attribution: {} };
+      }
       return {
         label: ref.passNo ? `Paper reading · Pass ${ref.passNo}` : "Paper reading",
         detail: paper?.title,
-        href: `/papers/${ref.id}`,
+        // plan/17 F7 — the chip goes where you read: the reader when there's a PDF.
+        href: paper?.fileId ? `/read/${ref.id}` : `/papers/${ref.id}`,
         attribution: { paperId: ref.id, passNo: ref.passNo }
       };
     }
@@ -95,6 +106,10 @@ export function describeObjective(slot: ScheduleSlot, ctx: ObjectiveContext): Ob
         href: "/goals",
         attribution: { courseId: slot.courseId, bucket: slot.bucket }
       };
+    }
+    if (ref.kind === "readingHabit") {
+      // plan/17 §5.1 — an open sitting: the time is planned, the paper is chosen when it starts.
+      return { label: "Reading · pick at start", attribution: {} };
     }
     // revisionQueue — the spaced-repetition queue itself, which has no per-item reference: the block
     // is "work the queue", and which items come up is decided at review time, not planning time.

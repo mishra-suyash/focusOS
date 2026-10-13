@@ -89,6 +89,7 @@ export async function generateMorningBrief(uid: string): Promise<MorningBrief> {
     dueRevisionCount,
     checkpoints,
     papers,
+    todaySlots: schedule?.slots ?? [],
     goals,
     externalTasks: tasks,
     unresolvedCriticalAlertCount,

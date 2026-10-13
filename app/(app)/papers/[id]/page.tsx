@@ -1,26 +1,27 @@
 "use client";
 
-import { ArrowLeft, BookOpen, Sparkles } from "lucide-react";
+import { where } from "firebase/firestore";
+import { ArrowLeft, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { InfoHint } from "@/components/info-hint";
 import { LayeredNotesCard } from "@/components/layered-notes-card";
 import { MoreOptions } from "@/components/more-options";
 import { PaperFileAttach } from "@/components/paper-file-attach";
 import { PaperNotesPanel } from "@/components/paper-notes-panel";
 import { PaperPassSection } from "@/components/paper-pass-section";
+import { PaperStatusActions } from "@/components/paper-status-actions";
+import { GOAL_KINDS, ReadingGoalChips } from "@/components/reading-goal-chips";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useFeatures } from "@/hooks/use-features";
+import { useUserCollection } from "@/hooks/use-user-collection";
 import { callAiTask } from "@/lib/ai/client";
 import type { ReadingPlanOutput } from "@/lib/ai/schemas";
 import { subscribeDoc, updatePaper } from "@/lib/firestore";
-import { paperStatusLabels } from "@/lib/papers";
-import { BUILTIN_READING_GOAL_PRESETS } from "@/lib/templates/builtin/reading-goal-presets";
-import type { FileRef, GoalKind, Paper } from "@/types";
-
-const GOAL_KINDS: GoalKind[] = ["survey", "method", "baseline", "related-work", "reproduce", "critique"];
+import { derivePaperStatus, nextReadingPass, PASS_LABELS, paperStatusLabels, totalReadingMinutes } from "@/lib/papers";
+import type { FileRef, GoalKind, Pass1Output, Pass2Output, Paper, PomodoroSession } from "@/types";
 
 export default function PaperDetailPage() {
   const params = useParams<{ id: string }>();
@@ -30,6 +31,9 @@ export default function PaperDetailPage() {
   const [file, setFile] = useState<FileRef | null>(null);
   const [goal, setGoal] = useState("");
   const [goalKind, setGoalKind] = useState<GoalKind | "">("");
+  // plan/17 §5.5 — a pass's minutes are its focus sessions, so the pass panels need them.
+  const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [where("paperId", "==", params.id)], [params.id]));
+  const { items: library } = useUserCollection<Paper>("papers", useMemo(() => [], []));
 
   useEffect(() => {
     if (!user) return;
@@ -58,6 +62,18 @@ export default function PaperDetailPage() {
     await updatePaper(user.uid, paper!.id, { goal: goal.trim() || undefined, goalKind: goalKind || undefined });
   }
 
+  const status = derivePaperStatus(paper);
+  const verdict = (paper.pass1?.output as Pass1Output | undefined)?.verdict;
+  const outcome = (paper.pass2?.output as Pass2Output | undefined)?.outcome;
+  const owed = nextReadingPass(paper);
+  // Read is shown once Skim said "Keep reading", or whenever it's owed or has been touched (a paper
+  // back off the shelf after a parked Skim owes Read too).
+  const showRead = (paper.pass1?.status === "done" && verdict === "continue") || owed === 2 || (paper.pass2 && paper.pass2.status !== "not_started");
+  // plan/17 §5.2 — Deep dive is offered only after "Grasped it" or "Persevere", never after a Read
+  // that ended in Set aside or Return later (it used to appear after *any* finished Read).
+  const showDeepDive = (paper.pass2?.status === "done" && (outcome === "grasped" || outcome === "persevere")) || (paper.pass3 && paper.pass3.status !== "not_started");
+  const readingMinutes = totalReadingMinutes(sessions, paper.id);
+
   return (
     <>
       <SectionHeader title={paper.title} eyebrow={[paper.authors.join(", "), paper.venue, paper.year].filter(Boolean).join(" · ")}>
@@ -70,7 +86,11 @@ export default function PaperDetailPage() {
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <div className="card p-3">
           <p className="label">Status</p>
-          <p className="mt-1 text-lg font-semibold">{paperStatusLabels[paper.status]}</p>
+          <p className="mt-1 text-lg font-semibold">
+            {paperStatusLabels[status]}
+            {owed && status !== "inbox" ? <span className="ml-2 text-xs font-normal text-ink-500">{PASS_LABELS[owed]} next</span> : null}
+          </p>
+          {readingMinutes > 0 ? <p className="text-xs text-ink-500">{readingMinutes}m read in all</p> : null}
         </div>
         <div className="card p-3">
           <p className="label flex items-center gap-1">
@@ -93,26 +113,28 @@ export default function PaperDetailPage() {
         </div>
       </div>
 
+      <PaperStatusActions paper={paper} library={library} sessions={sessions} hasFile={Boolean(file) && isEnabled("paperTools")} className="mb-6" />
+
       <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
         <div className="space-y-6">
-          <section className="card p-5">
+          <section className="card p-5" id="pass-1">
             <h2 className="mb-3 flex items-center gap-1 text-lg font-semibold">
               Skim — bird&apos;s-eye view
               <InfoHint term="skim" />
             </h2>
-            <PaperPassSection paper={paper} passNo={1} file={file} />
+            <PaperPassSection paper={paper} passNo={1} file={file} sessions={sessions} library={library} />
           </section>
-          {paper.pass1?.status === "done" && (paper.pass1.output as { verdict?: string })?.verdict === "continue" ? (
-            <section className="card p-5">
+          {showRead ? (
+            <section className="card p-5" id="pass-2">
               <h2 className="mb-3 flex items-center gap-1 text-lg font-semibold">
                 Grasp the content
                 <InfoHint term="read" />
               </h2>
-              <PaperPassSection paper={paper} passNo={2} file={file} />
+              <PaperPassSection paper={paper} passNo={2} file={file} sessions={sessions} library={library} />
             </section>
           ) : null}
-          {paper.pass2?.status === "done" ? (
-            <section className="card p-5">
+          {showDeepDive ? (
+            <section className="card p-5" id="pass-3">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <h2 className="flex items-center gap-1 text-lg font-semibold">
                   Deep dive — re-implement (opt-in)
@@ -120,50 +142,39 @@ export default function PaperDetailPage() {
                 </h2>
                 {!paper.pass3 ? <span className="text-xs text-ink-500">Most papers never need this pass.</span> : null}
               </div>
-              <PaperPassSection paper={paper} passNo={3} file={file} />
+              <PaperPassSection paper={paper} passNo={3} file={file} sessions={sessions} library={library} />
+            </section>
+          ) : null}
+          {paper.previousPasses?.length ? (
+            <section className="card p-4 text-sm text-ink-500">
+              <p className="label mb-1">Earlier attempts</p>
+              <ul className="space-y-1">
+                {paper.previousPasses.map((entry, index) => (
+                  <li key={index}>
+                    {PASS_LABELS[entry.passNo]}
+                    {entry.state.completedAt ? ` · finished ${entry.state.completedAt.slice(0, 10)}` : ""}
+                    {(entry.state.output as Pass2Output | undefined)?.outcome ? ` · ${(entry.state.output as Pass2Output).outcome.replace(/-/g, " ")}` : ""}
+                    {(entry.state.output as Pass2Output | undefined)?.summary ? ` — “${(entry.state.output as Pass2Output).summary}”` : ""}
+                  </li>
+                ))}
+              </ul>
             </section>
           ) : null}
           <section className="card p-5">
             <h2 className="mb-3 text-lg font-semibold">Notes</h2>
             <PaperNotesPanel paperId={paper.id} />
           </section>
-          {file && isEnabled("paperTools") ? (
-            <section className="card flex flex-wrap items-center justify-between gap-3 p-5">
-              <div>
-                <h2 className="text-lg font-semibold">Highlights &amp; annotation</h2>
-                <p className="text-sm text-ink-500 dark:text-ink-400">Read, highlight, and annotate the PDF in a full-screen reading window.</p>
-              </div>
-              <Link href={`/read/${paper.id}`} className="btn-primary">
-                <BookOpen className="h-3.5 w-3.5" />
-                Open reading window
-              </Link>
-            </section>
-          ) : null}
         </div>
         <div className="space-y-6">
           <ReadingPlanCard paper={paper} />
           {file && isEnabled("paperTools") ? <LayeredNotesCard paperId={paper.id} layeredNotes={paper.layeredNotes} /> : null}
           <section className="card p-4">
             <h2 className="mb-3 text-base font-semibold">Why am I reading this?</h2>
-            <p className="mb-2 text-xs text-ink-500">Required before starting Skim — the highest-leverage field here, since it conditions everything else.</p>
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {GOAL_KINDS.map((kind) => (
-                <button
-                  key={kind}
-                  type="button"
-                  className="rounded-full border border-ink-200 px-2 py-1 text-[11px] text-ink-600 hover:border-moss-500 hover:text-moss-700 dark:border-ink-700 dark:text-ink-300 dark:hover:text-moss-400"
-                  title={BUILTIN_READING_GOAL_PRESETS[kind].text}
-                  onClick={() => {
-                    const text = BUILTIN_READING_GOAL_PRESETS[kind].text;
-                    setGoal(text);
-                    setGoalKind(kind);
-                    if (user) updatePaper(user.uid, paper.id, { goal: text, goalKind: kind });
-                  }}
-                >
-                  {kind}
-                </button>
-              ))}
+            <p className="mb-2 text-xs text-ink-500">Needed before Skim starts — it shapes what you look for. One tap is enough.</p>
+            <div className="mb-2">
+              <ReadingGoalChips paper={{ id: paper.id, goalKind: paper.goalKind }} onPicked={(kind, text) => { setGoal(text); setGoalKind(kind); }} />
             </div>
+            {paper.goal ? <p className="mb-2 text-xs italic text-ink-600 dark:text-ink-300">&ldquo;{paper.goal}&rdquo;</p> : null}
             <MoreOptions label="Edit free-text">
               <textarea className="input min-h-16" value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="Why am I reading this?" onBlur={saveGoal} />
               <select

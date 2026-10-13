@@ -192,7 +192,14 @@ function CourseCard({
   // and `/plan/day` already warn about this; the course card — the one page where the sessions were
   // configured — showed no warning and actively contradicted them with an ACTIVE badge.
   const classesWontShow = status === "active" && course.sessions.length > 0 && isBreakMode(terms, today);
-  const plannedRevisionMinutes = plannedMinutesThisWeek(schedules, course.id, "revision", currentWeekDateKeys());
+  // plan/17 §7.2 — the same "placed" the weekly planner uses: worked on days behind you, planned from
+  // today on, so a missed revision sitting reads as still to do here too.
+  const nowClock = new Date();
+  const plannedRevisionMinutes = plannedMinutesThisWeek(schedules, course.id, "revision", currentWeekDateKeys(), {
+    todayKey: today,
+    nowMinutes: nowClock.getHours() * 60 + nowClock.getMinutes(),
+    sessions
+  });
 
   // plan/14 §6.3 — Class time is real course time but not focus time, so it's summed separately
   // from the buckets above rather than folded into `completedMinutesThisWeek`. Gated by

@@ -418,7 +418,11 @@ export function ProposalInspector({
   notice,
   invalidReason,
   suggestStart,
-  maxMinutes
+  maxMinutes,
+  pinOptions,
+  pinValue,
+  onPin,
+  hideAccept = false
 }: {
   proposal: WeekProposal;
   weekDateKeys: string[];
@@ -446,6 +450,13 @@ export function ProposalInspector({
   /** Why this proposal can't be accepted where it currently sits, if it can't — the caller knows
    *  about the locked layer and the other proposals, so it decides; this only renders the sentence. */
   invalidReason?: string | null;
+  /** plan/17 §6.3 — a reading sitting can be pinned to a paper or left open (picked at start).
+   *  `""` is "Open"; any other value is a paper id. Absent = not a reading sitting. */
+  pinOptions?: { value: string; label: string }[];
+  pinValue?: string;
+  onPin?: (key: string, paperId: string | null) => void;
+  /** plan/17 §7.4 — in Replan mode sittings are accepted together ("Accept replan"), not one by one. */
+  hideAccept?: boolean;
 }) {
   const duration = Math.max(5, minutesFromTime(proposal.endTime) - minutesFromTime(proposal.startTime));
   const placed = proposal.fits || Boolean(proposal.startTime && proposal.startTime !== "00:00");
@@ -456,6 +467,22 @@ export function ProposalInspector({
         {proposal.title}
         {chip ? <span className="ml-1 text-ink-500">· {chip}</span> : null}
       </span>
+      {pinOptions && onPin ? (
+        <select
+          className="input w-44 py-1 text-xs"
+          aria-label={`Paper for ${proposal.title}`}
+          value={pinValue ?? ""}
+          disabled={disabled}
+          onChange={(event) => onPin(proposal.key, event.target.value || null)}
+        >
+          <option value="">Open — pick at start</option>
+          {pinOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      ) : null}
       <select
         className="input w-28 py-1 text-xs"
         aria-label={`Day for ${proposal.title}`}
@@ -507,14 +534,16 @@ export function ProposalInspector({
         <span className="text-ink-500">{decision}</span>
       ) : (
         <>
-          <button
-            className="btn-secondary px-2 py-1"
-            onClick={() => onAccept(proposal.key)}
-            disabled={disabled || !placed || Boolean(invalidReason)}
-            title={invalidReason ?? undefined}
-          >
-            Accept
-          </button>
+          {!hideAccept ? (
+            <button
+              className="btn-secondary px-2 py-1"
+              onClick={() => onAccept(proposal.key)}
+              disabled={disabled || !placed || Boolean(invalidReason)}
+              title={invalidReason ?? undefined}
+            >
+              Accept
+            </button>
+          ) : null}
           <button className="btn-secondary px-2 py-1" onClick={() => onDismiss(proposal.key)} disabled={disabled}>
             Dismiss
           </button>

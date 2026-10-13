@@ -649,10 +649,12 @@ export function subscribeDueRevisionItems(uid: string, todayKey: string, callbac
   ]);
 }
 
-export async function createPaper(uid: string, paper: NewPaper) {
+/** Returns the new paper's id — the reading picker starts a sitting on a paper it has just captured. */
+export async function createPaper(uid: string, paper: NewPaper): Promise<string> {
   const createdAt = now();
   trackWrite();
-  await addDoc(userCollection(uid, "papers"), withoutUndefined({ progress: 0, groupIds: [], ...paper, createdAt, updatedAt: createdAt }));
+  const ref = await addDoc(userCollection(uid, "papers"), withoutUndefined({ progress: 0, groupIds: [], ...paper, createdAt, updatedAt: createdAt }));
+  return ref.id;
 }
 
 export async function updatePaper(uid: string, id: string, patch: Partial<Paper>) {
@@ -660,6 +662,12 @@ export async function updatePaper(uid: string, id: string, patch: Partial<Paper>
   if ("readAt" in patch && patch.readAt === undefined) payload.readAt = deleteField();
   if ("fileId" in patch && patch.fileId === undefined) payload.fileId = deleteField();
   if ("weeklyTargetDay" in patch && patch.weeklyTargetDay === undefined) payload.weeklyTargetDay = deleteField();
+  // plan/17 §5.2 — the shelf/queue/drop/inbox fields are cleared by passing `undefined` (the exit
+  // patches in lib/papers.ts do), which `withoutUndefined` would otherwise silently drop — leaving
+  // "Read now" or "Undo drop" doing nothing at all. `shelvedUntil: null` is a real value and is kept.
+  for (const key of ["queuedAt", "shelvedUntil", "droppedAt", "inbox"] as const) {
+    if (key in patch && patch[key] === undefined) payload[key] = deleteField();
+  }
   // Replacing or removing the attached PDF invalidates any cached Anthropic
   // file reference and the layered notes generated from it — a stale summary
   // of a since-replaced PDF would be actively misleading, not just outdated.
@@ -834,6 +842,17 @@ export async function saveUserSettings(uid: string, patch: Partial<Omit<UserSett
   // `enabledModules: undefined` — under merge:true that's normally a no-op (the key is just
   // omitted), the same bug class `setPackDefaultTemplate` had to work around in U2.
   if ("enabledModules" in patch && patch.enabledModules === undefined) payload.enabledModules = deleteField();
+  // plan/17 — `merge: true` deep-merges maps, so clearing the reading habit's preferred days or time
+  // of day would otherwise leave the old value in place. Cleared optional keys are deleted explicitly.
+  if (patch.readingHabit) {
+    const habit = patch.readingHabit;
+    payload.readingHabit = {
+      ...(withoutUndefined(habit as unknown as Record<string, unknown>)),
+      ...(habit.preferredDays?.length ? {} : { preferredDays: deleteField() }),
+      ...(habit.timeOfDay ? {} : { timeOfDay: deleteField() }),
+      ...("sources" in habit && !habit.sources ? { sources: deleteField() } : {})
+    };
+  }
   trackWrite();
   await setDoc(doc(userCollection(uid, "meta"), SETTINGS_DOC_ID), payload, { merge: true });
 }

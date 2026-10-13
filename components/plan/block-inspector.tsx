@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { MoreOptions } from "@/components/more-options";
 import { TypedTimeInput } from "@/components/plan/typed-time-input";
 import { describeObjective, objectiveChipText } from "@/lib/objectives";
+import { isActivePaper, nextReadingPass, PASS_LABELS, readingOrder } from "@/lib/papers";
 import { taskBucketLabels, taskBuckets } from "@/lib/options";
 import { isLockedSlot, minutesFromTime, slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
 import { categoryForSlotType, rangeOverlapsSlots } from "@/lib/timeline";
@@ -114,6 +115,39 @@ export function BlockInspector({
             chip
           )}
         </p>
+      ) : null}
+      {slot.type === "reading" && !isLocked ? (
+        // plan/17 §9 — pin this sitting to a paper, or leave it open (picked when it starts).
+        <label className="block text-xs text-ink-500">
+          Paper
+          <select
+            className="input mt-1"
+            value={slot.objectiveRef?.kind === "paper" ? slot.objectiveRef.id : ""}
+            onChange={(event) => {
+              const paper = papers.find((item) => item.id === event.target.value);
+              if (!paper) {
+                onChange({ ...slot, objectiveRef: { kind: "readingHabit" }, title: slot.objectiveRef?.kind === "paper" ? "Reading" : slot.title });
+                return;
+              }
+              const passNo = nextReadingPass(paper) ?? undefined;
+              onChange({
+                ...slot,
+                objectiveRef: { kind: "paper", id: paper.id, ...(passNo ? { passNo } : {}) },
+                title: passNo ? `${PASS_LABELS[passNo]}: ${paper.title}` : `Reading: ${paper.title}`
+              });
+            }}
+          >
+            <option value="">Open — pick at start</option>
+            {papers
+              .filter((paper) => isActivePaper(paper) || (slot.objectiveRef?.kind === "paper" && slot.objectiveRef.id === paper.id))
+              .sort(readingOrder)
+              .map((paper) => (
+                <option key={paper.id} value={paper.id}>
+                  {paper.title}
+                </option>
+              ))}
+          </select>
+        </label>
       ) : null}
       <div className="grid grid-cols-2 gap-2">
         <TypedTimeInput value={slot.startTime} onChange={(startTime) => commitTime("startTime", startTime)} disabled={isLocked} />

@@ -1,12 +1,14 @@
 "use client";
 
+import { where } from "firebase/firestore";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { PaperReadingWindow } from "@/components/paper-reading-window";
+import { useUserCollection } from "@/hooks/use-user-collection";
 import { subscribeDoc } from "@/lib/firestore";
-import type { FileRef, Paper } from "@/types";
+import type { FileRef, Paper, PomodoroSession } from "@/types";
 
 /**
  * Deliberately outside `app/(app)/` — a page nested inside that route group
@@ -21,6 +23,10 @@ export default function ReadPaperPage() {
   const { user, loading } = useAuth();
   const [paper, setPaper] = useState<Paper | null>(null);
   const [file, setFile] = useState<FileRef | null>(null);
+  // plan/17 F10 — the pass panel inside the reader needs the pass's sessions (its minutes) and the
+  // library (its calibrated estimate), the same inputs the paper page gives it.
+  const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [where("paperId", "==", params.paperId)], [params.paperId]));
+  const { items: library } = useUserCollection<Paper>("papers", useMemo(() => [], []));
 
   useEffect(() => {
     if (!user) return;
@@ -72,5 +78,5 @@ export default function ReadPaperPage() {
     );
   }
 
-  return <PaperReadingWindow paper={paper} pdfUrl={file.url} />;
+  return <PaperReadingWindow paper={paper} pdfUrl={file.url} file={file} sessions={sessions} library={library} />;
 }

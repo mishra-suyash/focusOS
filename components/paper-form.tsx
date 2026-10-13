@@ -26,15 +26,19 @@ export function PaperForm({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!title.trim()) return;
+    // plan/17 §5.6 — a link on its own is a capture: it goes to the inbox, titled by the link until
+    // it's edited (no metadata lookup — plan/17 §13 Q4).
+    const linkOnly = !title.trim() && Boolean(link.trim());
+    if (!title.trim() && !linkOnly) return;
     setSaving(true);
     await onCreate({
-      title: title.trim(),
+      title: title.trim() || link.trim(),
+      ...(linkOnly ? { inbox: true, source: { kind: "link" as const } } : {}),
       authors: authors.split(",").map((item) => item.trim()).filter(Boolean),
       venue: venue.trim() || undefined,
       year: year ? Number(year) : undefined,
       link: link.trim() || undefined,
-      status: "to_read",
+      status: linkOnly ? "inbox" : "to_read",
       priority,
       tags: tags.split(",").map((item) => item.trim()).filter(Boolean),
       relatedCourseId: relatedCourseId || undefined
@@ -53,6 +57,7 @@ export function PaperForm({
     <form onSubmit={submit} className="space-y-3">
       <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Paper title" />
       <input className="input" value={link} onChange={(e) => setLink(e.target.value)} placeholder="Link or DOI URL" />
+      {!title.trim() && link.trim() ? <p className="-mt-1 text-xs text-ink-500">Just a link? It goes to your inbox to triage later.</p> : null}
       <MoreOptions>
         <input className="input" value={authors} onChange={(e) => setAuthors(e.target.value)} placeholder="Authors (comma separated)" />
         <div className="grid gap-3 sm:grid-cols-2">
@@ -79,7 +84,7 @@ export function PaperForm({
         ) : null}
       </MoreOptions>
       <button className="btn-primary w-full sm:w-auto" disabled={saving}>
-        Add to reading list
+        {!title.trim() && link.trim() ? "Add to inbox" : "Add to reading list"}
       </button>
     </form>
   );

@@ -10,6 +10,7 @@ import { AlertsBanner } from "@/components/alerts-banner";
 import { NudgeBanner } from "@/components/nudge-banner";
 import { DashboardCustomizeDialog } from "@/components/dashboard-customize";
 import { useFocusSession } from "@/components/focus-session-provider";
+import { useReadingPicker } from "@/components/reading-picker";
 import { GettingStartedChecklist } from "@/components/getting-started-checklist";
 import { LoadIndexWidget } from "@/components/load-index-widget";
 import { DayScoreLine } from "@/components/day-score-line";
@@ -66,7 +67,7 @@ function DashboardContent() {
     useMemo(() => [orderBy("updatedAt", "desc")], [])
   );
   const { items: terms } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
-  const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: papers, loading: papersLoading } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: recentDays } = useUserCollection<Day>("days", useMemo(() => [orderBy("date", "desc"), limit(30)], []));
@@ -98,6 +99,7 @@ function DashboardContent() {
   const { action: nextAction } = useNextAction(today);
 
   const { startFocus } = useFocusSession();
+  const { startReadingSlot } = useReadingPicker();
 
   // DP5 S4 "Start focus session from a block" — `BlockInspector` links here with
   // `?startFocus=1&label=...&category=...&slotId=...`. `FocusSessionProvider` now owns the timer
@@ -126,6 +128,14 @@ function DashboardContent() {
     const linkedSlot = slotId ? dailySchedule?.slots.find((slot) => slot.id === slotId) : undefined;
     const objective = linkedSlot ? describeObjective(linkedSlot, { courses, papers, checkpoints: allCheckpoints, tasks, goals }) : null;
     const sittingLeft = linkedSlot ? sittingRemainingMinutes(linkedSlot, todaysSessions) : 0;
+    // plan/17 §5.4 — a reading block from /plan/day starts reading the way the Now card does.
+    if (linkedSlot?.type === "reading") {
+      // Wait for the papers too: a pinned sitting starts its paper, which has to be loaded to be found.
+      if (papersLoading) return;
+      router.replace("/dashboard", { scroll: false });
+      void startReadingSlot(linkedSlot, { papers, sessions: todaysSessions, minutes: sittingLeft > 0 ? sittingLeft : undefined });
+      return;
+    }
     startFocus({
       label,
       category,
@@ -138,7 +148,7 @@ function DashboardContent() {
       minutes: sittingLeft > 0 ? sittingLeft : undefined
     });
     router.replace("/dashboard", { scroll: false });
-  }, [searchParams, dailySchedule, dailySchedulesLoading]);
+  }, [searchParams, dailySchedule, dailySchedulesLoading, papersLoading]);
 
   /** S5 "Schedule it" on the Up next card — places it in the next free gap after now and opens Plan — Day. */
   async function scheduleAction() {
@@ -365,7 +375,7 @@ function DashboardContent() {
           {widgets.has("workload") ? (
             <LoadIndexWidget snapshot={loadIndex} debtHours={widgets.has("catchUpHours") ? debtHours : undefined} streak={liStreak} dayOff={Boolean(day?.dayOff)} />
           ) : null}
-          <ReadingNowCard papers={papers} onBreak={isBreakMode(terms, today)} />
+          <ReadingNowCard papers={papers} sessions={sessions} onBreak={isBreakMode(terms, today)} />
           {widgets.has("scratchpad") ? (
             <section className="card p-4">
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

@@ -27,7 +27,8 @@
     "verify:tracking": "tsx scripts/verify-tracking.ts",
     "verify:weekplan": "tsx scripts/verify-weekplan.ts",
     "verify:next-action": "tsx scripts/verify-next-action.ts",
-    "verify:chunking": "tsx scripts/verify-chunking.ts"
+    "verify:chunking": "tsx scripts/verify-chunking.ts",
+    "verify:reading": "tsx scripts/verify-reading.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { useFocusSession } from "@/components/focus-session-provider";
+import { useReadingPicker } from "@/components/reading-picker";
+import { isActivePaper } from "@/lib/papers";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { clearDayOff, updateTask } from "@/lib/firestore";
 import { describeObjective, objectiveChipText } from "@/lib/objectives";
@@ -58,6 +60,7 @@ export function NowCard({
 }) {
   const { user } = useAuth();
   const { startFocus, running } = useFocusSession();
+  const { startReadingSlot } = useReadingPicker();
   const [showAll, setShowAll] = useState(false);
   const minute = useCurrentMinute();
 
@@ -113,6 +116,22 @@ export function NowCard({
     }
     if (running) {
       return <span className="text-xs text-ink-500">A focus session is already running.</span>;
+    }
+    // plan/17 §5.4 — a reading block starts reading: the timer, the pass the paper owes now, and the
+    // reader together. An open sitting (or one whose paper was since shelved) asks what to read.
+    if (active.type === "reading") {
+      const ref = active.objectiveRef;
+      const pinned = ref?.kind === "paper" ? papers.find((paper) => paper.id === ref.id) : undefined;
+      const ready = pinned && isActivePaper(pinned);
+      return (
+        <button
+          className="btn-primary py-1.5 text-xs"
+          onClick={() => startReadingSlot(active, { papers, sessions, minutes: sittingLeft > 0 ? sittingLeft : undefined })}
+        >
+          {ready ? "Start reading" : "Pick & start reading"}
+          {sittingLeft > 0 ? ` · ${formatMinutes(sittingLeft)}` : ""}
+        </button>
+      );
     }
     return (
       <button
