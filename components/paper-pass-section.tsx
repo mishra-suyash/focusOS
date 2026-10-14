@@ -94,7 +94,8 @@ export function PaperPassSection({
   const [message, setMessage] = useState("");
   const [confirmCancel, setConfirmCancel] = useState(false);
 
-  const sittingHere = focus.running && focus.mode === "work" && focus.paperId === paper.id;
+  // Running or paused: a paused sitting is still this pass's, and finishing the pass must log it.
+  const sittingHere = focus.focusInProgress && focus.paperId === paper.id;
   const loggedMinutes = pass?.startedAt ? passSessionMinutes(sessions, paper.id, passNo, pass.startedAt) : 0;
   const sittings = pass?.startedAt ? passSittingCount(sessions, paper.id, passNo, pass.startedAt) : 0;
   const estimate = nextPassEstimateMinutes(paper, library.length > 0 ? library : [paper]);
@@ -102,7 +103,7 @@ export function PaperPassSection({
   async function begin() {
     setMessage("");
     const result = await startSitting({ paper, library, sessions, navigate: !compact });
-    if (result === "busy") setMessage("Another focus session is running — finish it first.");
+    if (result === "busy") setMessage("Another focus session is in progress — finish it first.");
     if (result === "needsGoal") setMessage("Pick why you're reading this first.");
   }
 
@@ -112,7 +113,7 @@ export function PaperPassSection({
     // count them in the cached total rather than leaving the pass short by exactly that sitting.
     let runningMinutes = 0;
     if (sittingHere && focus.passNo === passNo) {
-      runningMinutes = Math.max(0, Math.round((focus.duration * 60 - focus.secondsLeft) / 60));
+      runningMinutes = Math.round(focus.elapsedSeconds / 60);
       focus.finishNow();
     }
     const nextPass: PassState = {

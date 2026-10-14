@@ -127,9 +127,13 @@ export function DayTimelineEditor({
   const workMinutes = settings.workMinutes ?? 25;
   // S2 "planned vs done" lane — this day's actual completed focus sessions, for `DayStrip`'s
   // optional lane. `useUserCollection` fetches every session (matches the dashboard's own pattern);
-  // filtering to this date happens client-side below.
+  // filtering to this date happens client-side below. Focus sessions only: breaks were logged too
+  // until the timer stopped writing them, and older break docs must not draw as work on the lane.
   const { items: allSessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
-  const todaySessions = useMemo(() => allSessions.filter((session) => session.completedAt.startsWith(dateKey)), [allSessions, dateKey]);
+  const todaySessions = useMemo(
+    () => allSessions.filter((session) => session.mode === "work" && session.completedAt.startsWith(dateKey)),
+    [allSessions, dateKey]
+  );
 
   const { present: slots, action, canUndo, canRedo, commit, undo, redo, reset } = useUndoStack<ScheduleSlot[]>(
     mergeMissingLockedSlots(schedule?.slots ?? [], wantedLockedSlots ?? [])

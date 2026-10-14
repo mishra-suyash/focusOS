@@ -47,8 +47,11 @@ export function useReadingSitting() {
     if (!user) return "busy";
     const navigate = opts.navigate ?? true;
 
-    if (focus.running) {
+    // A break is not a sitting — starting one ends it. A focus session in progress (running or
+    // paused) on another paper blocks; one on this paper is resumed rather than restarted.
+    if (focus.focusInProgress) {
       if (focus.paperId !== paper.id) return "busy";
+      if (focus.phase === "paused") focus.toggleRunning();
       if (navigate) openPaper(paper);
       return "resumed";
     }
@@ -87,7 +90,7 @@ export function useReadingSitting() {
 
   /** plan/17 §5.3 — a "Find a paper" sitting: the habit's time spent choosing what to read. */
   function startFindPaper(opts: { slotId?: string; minutes?: number } = {}) {
-    if (focus.running) return "busy" as const;
+    if (focus.focusInProgress) return "busy" as const;
     focus.startFocus({
       label: "Find a paper",
       category: "reading",
@@ -98,5 +101,5 @@ export function useReadingSitting() {
     return "started" as const;
   }
 
-  return { startSitting, startFindPaper, openPaper, running: focus.running, runningPaperId: focus.paperId };
+  return { startSitting, startFindPaper, openPaper, running: focus.focusInProgress, runningPaperId: focus.paperId };
 }

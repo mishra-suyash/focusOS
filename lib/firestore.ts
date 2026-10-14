@@ -259,9 +259,21 @@ export async function deleteTask(uid: string, id: string) {
   await deleteDoc(doc(userCollection(uid, "tasks"), id));
 }
 
-export async function savePomodoro(uid: string, session: Omit<PomodoroSession, "id">) {
+/** Returns the doc's id, so the end-of-session survey can rate a session that is already logged
+ *  instead of holding the session hostage until the survey is answered. `id`, when given, makes the
+ *  write idempotent: the focus timer passes its countdown's run id, so two tabs that both saw the
+ *  same countdown end write one document, not two. */
+export async function savePomodoro(uid: string, session: Omit<PomodoroSession, "id">, id?: string): Promise<string> {
   trackWrite();
-  await addDoc(userCollection(uid, "pomodoroSessions"), withoutUndefined({ ...session }));
+  const collectionRef = userCollection(uid, "pomodoroSessions");
+  const ref = id ? doc(collectionRef, id) : doc(collectionRef);
+  await setDoc(ref, withoutUndefined({ ...session }));
+  return ref.id;
+}
+
+export async function updatePomodoro(uid: string, id: string, patch: Pick<Partial<PomodoroSession>, "productivityRating" | "comment">) {
+  trackWrite();
+  await updateDoc(doc(userCollection(uid, "pomodoroSessions"), id), withoutUndefined({ ...patch }));
 }
 
 /**

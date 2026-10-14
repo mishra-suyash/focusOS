@@ -2,6 +2,8 @@
 
 import { limit, orderBy } from "firebase/firestore";
 import { useMemo } from "react";
+import { useFocusSession } from "@/components/focus-session-provider";
+import { useReadingPicker } from "@/components/reading-picker";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useDay } from "@/hooks/use-day";
 import { useFeatures } from "@/hooks/use-features";
@@ -11,24 +13,12 @@ import { useUserCollection } from "@/hooks/use-user-collection";
 import { plannableTasks } from "@/lib/courses";
 import { weekDates, weekStartKey } from "@/lib/dates";
 import { pickNextAction, type NextAction } from "@/lib/next-action";
-import { describeObjective } from "@/lib/objectives";
+import { describeObjective, sittingStartArgs, type SittingStartArgs } from "@/lib/objectives";
 import { currentMinute, getActiveSlot, getNextSlot, sortedSlots } from "@/lib/schedule";
-import { categoryForSlotType } from "@/lib/timeline";
-import { sittingRemainingMinutes } from "@/lib/tracking";
-import type { Category, Course, DailySchedule, Goal, Paper, PomodoroSession, Task, TaskBucket } from "@/types";
+import type { Course, DailySchedule, Goal, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 /** Exactly `startFocus`'s parameter shape (components/focus-session-provider.tsx). */
-export interface FocusStartArgs {
-  label: string;
-  category: Category;
-  slotId?: string;
-  taskId?: string;
-  courseId?: string;
-  bucket?: TaskBucket;
-  paperId?: string;
-  passNo?: 1 | 2 | 3;
-  minutes?: number;
-}
+export type FocusStartArgs = SittingStartArgs;
 
 /**
  * plan/16 §5.7 — "what to do next", and the correctly-sized, correctly-attributed session that
@@ -44,7 +34,19 @@ export interface FocusStartArgs {
  * and pass — `describeObjective`'s `attribution` is deliberately shaped as `startFocus`'s argument
  * object, so there is no per-objective branching here.
  */
-export function useNextAction(todayKey: string): { action: NextAction | null; startArgs: FocusStartArgs | null } {
+export function useNextAction(todayKey: string): {
+  action: NextAction | null;
+  startArgs: FocusStartArgs | null;
+  /** The block active *now* (never the next one — `startArgs` above can be either), and how to start
+   *  it: the focus timer's Start and the floating widget's Play arm this, so they do exactly what the
+   *  Now card's "Start focus" does. Null for no active block or a class. */
+  active: { slot: ScheduleSlot; startArgs: FocusStartArgs } | null;
+  /** Starts a sitting on a block the way the Now card does: a reading block goes through the reading
+   *  picker (pass bookkeeping, the reader), anything else arms `startFocus` directly. */
+  startSitting: (slot: ScheduleSlot, startArgs: FocusStartArgs) => void;
+} {
+  const { startFocus } = useFocusSession();
+  const { startReadingSlot } = useReadingPicker();
   const { enabledModules } = useFeatures();
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc"), limit(200)], []));
@@ -76,28 +78,22 @@ export function useNextAction(todayKey: string): { action: NextAction | null; st
     isDayOff: Boolean(day?.dayOff)
   });
 
-  const slot = action?.slot;
-  if (!slot || slot.type === "class") return { action, startArgs: null };
-
   const todaysSessions = sessions.filter((session) => session.completedAt.startsWith(todayKey));
-  const objective = describeObjective(slot, { courses, papers, checkpoints: allCheckpoints, tasks, goals });
-  const assigned = slot.assignedTaskIds ?? [];
-  const left = sittingRemainingMinutes(slot, todaysSessions);
+  const ctx = { courses, papers, checkpoints: allCheckpoints, tasks, goals };
+  const argsFor = (slot: ScheduleSlot) => sittingStartArgs(slot, describeObjective(slot, ctx), todaysSessions);
 
-  return {
-    action,
-    startArgs: {
-      label: slot.title,
-      category: categoryForSlotType(slot.type),
-      slotId: slot.id,
-      // A block linked to exactly one task credits that task; zero or several is ambiguous, so it's
-      // left uncredited — the same rule the dashboard's own start path already applies.
-      taskId: assigned.length === 1 ? assigned[0] : undefined,
-      courseId: slot.courseId,
-      bucket: slot.bucket,
-      paperId: objective?.attribution.paperId,
-      passNo: objective?.attribution.passNo,
-      minutes: left > 0 ? left : undefined
+  const activeSlot = getActiveSlot(slots, minute);
+  const active = activeSlot && activeSlot.type !== "class" ? { slot: activeSlot, startArgs: argsFor(activeSlot) } : null;
+
+  function startSitting(slot: ScheduleSlot, startArgs: FocusStartArgs) {
+    if (slot.type === "reading") {
+      void startReadingSlot(slot, { papers, sessions: todaysSessions, minutes: startArgs.minutes });
+      return;
     }
-  };
+    startFocus(startArgs);
+  }
+
+  const slot = action?.slot;
+  const startArgs = slot && slot.type !== "class" ? argsFor(slot) : null;
+  return { action, startArgs, active, startSitting };
 }

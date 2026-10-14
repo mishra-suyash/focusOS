@@ -1,7 +1,8 @@
 "use client";
 
 import { format } from "date-fns";
-import { ArrowRight, Droplets, Pause, Play, X } from "lucide-react";
+import { ArrowRight, Droplets, FastForward, Pause, Play, SkipForward, X } from "lucide-react";
+import { useEffect } from "react";
 import { useFocusSession } from "@/components/focus-session-provider";
 import { useWorkdaySession } from "@/components/workday-session-provider";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
@@ -9,6 +10,7 @@ import { useDayReadout } from "@/hooks/use-day-readout";
 import { useFeatures } from "@/hooks/use-features";
 import { useLiveLoadIndex } from "@/hooks/use-live-load-index";
 import { useNextAction } from "@/hooks/use-next-action";
+import { useTimerPrimary } from "@/hooks/use-timer-primary";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { todayKey } from "@/lib/dates";
 import { resolveFloatingWidgetItems } from "@/lib/floating-widget";
@@ -29,13 +31,25 @@ import { formatDayReadout } from "@/lib/gamify";
  * ships. Motivational *text* stays banned — no praise strings, no streak-loss warnings; a motivating
  * *number* derived from real logged data is permitted, on plan/08's own "a number, not prose" test.
  */
-export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
+export function FloatingWidgetContent({ onClose, pipWindow }: { onClose: () => void; pipWindow: Window }) {
   const { settings } = useUserSettings();
   const items = resolveFloatingWidgetItems(settings);
-  const { modeLabel, secondsLeft, running, progress, label, toggleRunning, startFocus } = useFocusSession();
+  const { mode, modeLabel, phase, running, focusRunning, focusInProgress, progress, label, finishNow, skipBreak, syncClock } = useFocusSession();
   const { isEnabled } = useFeatures();
   const today = todayKey();
-  const { action: nextAction, startArgs } = useNextAction(today);
+  const { action: nextAction, startArgs, active, startSitting } = useNextAction(today);
+  // Play here is the dashboard timer's own primary button — the same hook — so on an active block it
+  // starts that block's sitting exactly as "Start focus" does, and otherwise pauses/resumes in place.
+  const primary = useTimerPrimary(active, startSitting);
+
+  // The widget is used while the app's tab is hidden, and Chrome throttles a hidden tab's timers
+  // (down to once a minute after a few minutes). This window is visible, so its own interval keeps
+  // the countdown — and its completion — on time.
+  useEffect(() => {
+    if (!running) return;
+    const id = pipWindow.setInterval(syncClock, 1000);
+    return () => pipWindow.clearInterval(id);
+  }, [pipWindow, running, syncClock]);
   const dayReadout = useDayReadout(today);
   const { reminder, acknowledgeReminder, dismissReminder } = useWorkdaySession();
   const loadIndex = useLiveLoadIndex(today);
@@ -45,10 +59,10 @@ export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
   useCurrentMinute();
   const dayTimeLabel = format(new Date(), "EEE · HH:mm");
 
-  const minutes = Math.floor(secondsLeft / 60)
+  const minutes = Math.floor(primary.displaySeconds / 60)
     .toString()
     .padStart(2, "0");
-  const seconds = (secondsLeft % 60).toString().padStart(2, "0");
+  const seconds = (primary.displaySeconds % 60).toString().padStart(2, "0");
 
   return (
     <div className="relative flex h-full flex-col gap-2 overflow-y-auto bg-ink-50 p-3 text-ink-950 dark:bg-ink-950 dark:text-ink-50">
@@ -62,11 +76,27 @@ export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
 
       {items.has("timer") ? (
         <section className="card p-3">
-          <div className="flex items-center justify-between">
-            <p className="label">{modeLabel}</p>
-            <button className="btn-secondary px-2 py-1" onClick={toggleRunning} aria-label={running ? "Pause" : "Start"}>
-              {running ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-            </button>
+          <div className="flex items-center justify-between gap-1">
+            <p className="label">
+              {modeLabel}
+              {phase === "paused" ? " · paused" : ""}
+            </p>
+            <div className="flex gap-1">
+              <button className="btn-secondary px-2 py-1" onClick={primary.run} aria-label={primary.label} title={primary.label}>
+                {running ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              </button>
+              {mode === "work" ? (
+                phase !== "idle" ? (
+                  <button className="btn-secondary px-2 py-1" onClick={finishNow} aria-label="Finish" title="Finish">
+                    <SkipForward className="h-3.5 w-3.5" />
+                  </button>
+                ) : null
+              ) : (
+                <button className="btn-secondary px-2 py-1" onClick={skipBreak} aria-label="Skip break" title="Skip break">
+                  <FastForward className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
           </div>
           <div className="mt-1 text-3xl font-semibold tabular-nums tracking-tight">
             {minutes}:{seconds}
@@ -80,7 +110,7 @@ export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
       {items.has("currentFocus") ? (
         <section className="card p-3 text-sm">
           <div className="flex items-baseline justify-between gap-2">
-            <p className="label">{running ? "Focusing on" : "Last focus"}</p>
+            <p className="label">{focusRunning ? "Focusing on" : focusInProgress ? "Paused on" : mode === "work" ? "Ready to focus on" : "Last focus"}</p>
             <span className="text-[11px] tabular-nums text-ink-500 dark:text-ink-400">{dayTimeLabel}</span>
           </div>
           <p className="mt-0.5 truncate font-medium">{label || "No session yet"}</p>
@@ -92,8 +122,9 @@ export function FloatingWidgetContent({ onClose }: { onClose: () => void }) {
           <p className="label">Next</p>
           <p className="mt-0.5 truncate font-medium">{nextAction.title}</p>
           <p className="truncate text-[11px] text-ink-500 dark:text-ink-400">{nextAction.why}</p>
-          {startArgs && !running ? (
-            <button className="btn-primary mt-2 w-full px-2 py-1 text-xs" onClick={() => startFocus(startArgs)}>
+          {/* A break doesn't block this (starting focus ends it); a focus session in progress does. */}
+          {startArgs && nextAction.slot && !focusInProgress ? (
+            <button className="btn-primary mt-2 w-full px-2 py-1 text-xs" onClick={() => startSitting(nextAction.slot!, startArgs)}>
               Start{startArgs.minutes ? ` ${startArgs.minutes}m` : ""}
               <ArrowRight className="ml-1 inline h-3 w-3" />
             </button>

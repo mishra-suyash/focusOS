@@ -1,34 +1,41 @@
 "use client";
 
 import { clsx } from "clsx";
-import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
+import { FastForward, Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import Link from "next/link";
 import { useFocusSession } from "@/components/focus-session-provider";
 import { InfoHint } from "@/components/info-hint";
 import { MoreOptions } from "@/components/more-options";
+import { useTimerPrimary, type ActiveSitting } from "@/hooks/use-timer-primary";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { categories } from "@/lib/options";
 import { BUILTIN_TIMER_PRESETS } from "@/lib/templates/builtin/timer-presets";
-import type { Category, PomodoroSession, Task } from "@/types";
+import type { FocusStartArgs } from "@/hooks/use-next-action";
+import type { Category, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 /** A view over `FocusSessionProvider` — the timer's state lives there now (so it survives
  * navigating away from whichever page mounts this), not in local state. */
 export function PomodoroTimer({
   sessions,
   tasks = [],
+  activeSitting = null,
+  onStartSitting,
   compact = false
 }: {
+  /** Today's *focus* sessions — the caller filters out breaks. */
   sessions: PomodoroSession[];
   tasks?: Task[];
+  /** The block active now and how to start it, so Start here is the Now card's "Start focus". */
+  activeSitting?: ActiveSitting;
+  onStartSitting?: (slot: ScheduleSlot, args: FocusStartArgs) => void;
   compact?: boolean;
 }) {
   const { settings } = useUserSettings();
   const {
     mode,
     modeLabel,
-    secondsLeft,
+    phase,
     running,
-    duration,
     progress,
     cycle,
     label,
@@ -45,16 +52,19 @@ export function PomodoroTimer({
     setBucket,
     setLength,
     applyPreset,
-    toggleRunning,
     reset,
-    finishNow
+    finishNow,
+    skipBreak,
+    startFocus
   } = useFocusSession();
+  const primary = useTimerPrimary(activeSitting, onStartSitting ?? ((_slot, args) => startFocus(args)));
   const openTasks = tasks.filter((task) => task.status !== "done");
 
-  const minutes = Math.floor(secondsLeft / 60)
+  const minutes = Math.floor(primary.displaySeconds / 60)
     .toString()
     .padStart(2, "0");
-  const seconds = (secondsLeft % 60).toString().padStart(2, "0");
+  const seconds = (primary.displaySeconds % 60).toString().padStart(2, "0");
+  const displayMinutes = primary.displayLengthMinutes;
 
   return (
     <section className={`card ${compact ? "p-4" : "p-5"}`}>
@@ -71,10 +81,11 @@ export function PomodoroTimer({
           {mode === "work" ? (
             <>
               Cycle {cycle}
-              <InfoHint term="focusCycle" />· {duration} minutes
+              <InfoHint term="focusCycle" />· {displayMinutes} minutes
+              {primary.startsSitting ? " · this block" : ""}
             </>
           ) : (
-            `${duration} minutes`
+            `${displayMinutes} minutes`
           )}
         </p>
       </div>
@@ -123,18 +134,26 @@ export function PomodoroTimer({
         </div>
       )}
       <div className="mt-4 grid grid-cols-3 gap-2">
-        <button className="btn-primary" onClick={toggleRunning}>
+        <button className="btn-primary" onClick={primary.run}>
           {running ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-          {running ? "Pause" : secondsLeft === duration * 60 ? "Start" : "Resume"}
+          {primary.label}
         </button>
-        <button className="btn-secondary" onClick={reset}>
+        <button className="btn-secondary" onClick={reset} disabled={phase === "idle"}>
           <RotateCcw className="h-4 w-4" />
           Reset
         </button>
-        <button className="btn-secondary" onClick={finishNow}>
-          <SkipForward className="h-4 w-4" />
-          Finish
-        </button>
+        {mode === "work" ? (
+          <button className="btn-secondary" onClick={finishNow} disabled={phase === "idle"}>
+            <SkipForward className="h-4 w-4" />
+            Finish
+          </button>
+        ) : (
+          // A break is never logged, so there is nothing to "finish" — only to skip.
+          <button className="btn-secondary" onClick={skipBreak}>
+            <FastForward className="h-4 w-4" />
+            Skip break
+          </button>
+        )}
       </div>
       <div className="mt-3">
         <MoreOptions label="Label & category">

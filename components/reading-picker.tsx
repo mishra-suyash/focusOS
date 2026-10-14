@@ -121,7 +121,7 @@ function ReadingPickerDialog({ options, onClose }: { options: PickerOptions; onC
       return;
     }
     if (result === "busy") {
-      setMessage("Another focus session is running — finish it first.");
+      setMessage("Another focus session is in progress — finish it first.");
       return;
     }
     onClose();
@@ -169,7 +169,7 @@ function ReadingPickerDialog({ options, onClose }: { options: PickerOptions; onC
             libraryEmpty={empty}
             onStart={() => {
               const result = startFindPaper({ slotId: options.slotId, minutes: options.minutes });
-              if (result === "busy") setMessage("Another focus session is running — finish it first.");
+              if (result === "busy") setMessage("Another focus session is in progress — finish it first.");
             }}
             running={running}
             onBack={empty ? undefined : () => setMode("pick")}
@@ -362,7 +362,7 @@ function FindPaperPanel({
       {added.length > 0 ? <p className="text-xs text-moss-700 dark:text-moss-400">Added: {added.join(" · ")}</p> : null}
       <div className="flex flex-wrap items-center gap-2">
         <button className="btn-primary py-1.5 text-xs" onClick={onStart} disabled={running}>
-          {running ? "A sitting is running" : "Start a Find-a-paper sitting"}
+          {running ? "A sitting is in progress" : "Start a Find-a-paper sitting"}
         </button>
         {onBack ? (
           <button className="text-xs text-ink-500 underline" onClick={onBack}>

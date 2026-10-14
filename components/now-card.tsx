@@ -9,8 +9,7 @@ import { useReadingPicker } from "@/components/reading-picker";
 import { isActivePaper } from "@/lib/papers";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { clearDayOff, updateTask } from "@/lib/firestore";
-import { describeObjective, objectiveChipText } from "@/lib/objectives";
-import { categoryForSlotType } from "@/lib/timeline";
+import { describeObjective, objectiveChipText, sittingStartArgs } from "@/lib/objectives";
 import { sittingRemainingMinutes, slotCoverageMinutes } from "@/lib/tracking";
 import { computeStatusPatch } from "@/lib/tasks";
 import {
@@ -59,7 +58,7 @@ export function NowCard({
   goals?: Goal[];
 }) {
   const { user } = useAuth();
-  const { startFocus, running } = useFocusSession();
+  const { startFocus, focusInProgress, focusRunning } = useFocusSession();
   const { startReadingSlot } = useReadingPicker();
   const [showAll, setShowAll] = useState(false);
   const minute = useCurrentMinute();
@@ -114,8 +113,10 @@ export function NowCard({
         </Link>
       );
     }
-    if (running) {
-      return <span className="text-xs text-ink-500">A focus session is already running.</span>;
+    // A break is not focus — starting a sitting simply ends it. Only a focus session in progress
+    // (running *or* paused) blocks, because starting another would replace it.
+    if (focusInProgress) {
+      return <span className="text-xs text-ink-500">{focusRunning ? "A focus session is running." : "A focus session is paused — resume or finish it in the timer."}</span>;
     }
     // plan/17 §5.4 — a reading block starts reading: the timer, the pass the paper owes now, and the
     // reader together. An open sitting (or one whose paper was since shelved) asks what to read.
@@ -136,23 +137,9 @@ export function NowCard({
     return (
       <button
         className="btn-primary py-1.5 text-xs"
-        onClick={() =>
-          startFocus({
-            label: active.title,
-            category: categoryForSlotType(active.type),
-            slotId: active.id,
-            taskId: assignedTasks.length === 1 ? assignedTasks[0].id : undefined,
-            courseId: active.courseId,
-            bucket: active.bucket,
-            // plan/16 §5.2 — paper/pass context the block carries, which `startFocus` could not
-            // accept before, so a reading block logged a session with no idea which paper it was for.
-            paperId: objective?.attribution.paperId,
-            passNo: objective?.attribution.passNo,
-            // plan/16 §5.5 — arm what's left of this sitting, not the settings default. A 50-minute
-            // block used to arm a 25-minute timer; a block already 22 minutes covered now arms 28.
-            minutes: sittingLeft > 0 ? sittingLeft : undefined
-          })
-        }
+        // plan/16 §5.2/§5.5 — the same arguments every block-start surface arms (`sittingStartArgs`):
+        // what's left of this sitting, attributed to its course/bucket/task/paper.
+        onClick={() => startFocus(sittingStartArgs(active, objective, sessions))}
       >
         {sittingLeft > 0 ? `Start focus · ${formatMinutes(sittingLeft)}` : "Start focus"}
       </button>

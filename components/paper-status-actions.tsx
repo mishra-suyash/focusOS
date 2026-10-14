@@ -61,7 +61,7 @@ export function PaperStatusActions({
   async function read() {
     setMessage("");
     const result = await startSitting({ paper, library, sessions });
-    if (result === "busy") setMessage("Another focus session is running — finish it first.");
+    if (result === "busy") setMessage("Another focus session is in progress — finish it first.");
     if (result === "needsGoal") setMessage("needsGoal");
   }
 

@@ -74,7 +74,9 @@ function DashboardContent() {
   const { allCheckpoints } = useCourseCheckpoints(courses);
   const { dueCount, reviewedTodayCount } = useRevisionCounts(today);
   const dailySchedule = dailySchedules.find((item) => item.dateKey === today);
-  const todaysSessions = sessions.filter((session) => session.completedAt.startsWith(today));
+  // Focus sessions only — every use below (history, sitting coverage, the Now card) is about work,
+  // and break docs logged before the timer stopped writing them must not read as work.
+  const todaysSessions = sessions.filter((session) => session.mode === "work" && session.completedAt.startsWith(today));
   const metrics = todayMetrics(tasks, sessions);
   const [note, setNote] = useState(day?.scratchpad ?? "");
 
@@ -96,7 +98,7 @@ function DashboardContent() {
   // plan/16 §5.7 — the same hook the floating widget's "Next" card uses, so the two surfaces can't
   // disagree about what's next or about what a session started from it should arm and attribute
   // (acceptance criteria #21/#22). It was inline `pickNextAction` here before the PiP needed it too.
-  const { action: nextAction } = useNextAction(today);
+  const { action: nextAction, active: activeSitting, startSitting } = useNextAction(today);
 
   const { startFocus } = useFocusSession();
   const { startReadingSlot } = useReadingPicker();
@@ -288,7 +290,7 @@ function DashboardContent() {
       */}
       <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)_340px]">
         <div className="space-y-4">
-          <PomodoroTimer sessions={todaysSessions} tasks={tasks} compact />
+          <PomodoroTimer sessions={todaysSessions} tasks={tasks} activeSitting={activeSitting} onStartSitting={startSitting} compact />
           <section className="card p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-base font-semibold">Today&apos;s tasks</h2>

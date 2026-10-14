@@ -1285,7 +1285,7 @@ function SittingReadout({
   onStart: () => void;
   message: string;
 }) {
-  const here = focus.mode === "work" && focus.paperId === paper.id && (focus.running || focus.secondsLeft < focus.duration * 60);
+  const here = focus.focusInProgress && focus.paperId === paper.id;
   if (here) {
     const minutes = Math.floor(focus.secondsLeft / 60);
     const seconds = focus.secondsLeft % 60;
@@ -1306,7 +1306,7 @@ function SittingReadout({
   }
   return (
     <div className="flex items-center gap-2">
-      <button className="btn-primary px-2 py-1 text-xs" onClick={onStart} disabled={focus.running} title={focus.running ? "Another focus session is running" : undefined}>
+      <button className="btn-primary px-2 py-1 text-xs" onClick={onStart} disabled={focus.focusInProgress} title={focus.focusInProgress ? "Another focus session is in progress" : undefined}>
         <Play className="h-3 w-3" />
         Start a sitting
       </button>

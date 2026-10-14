@@ -1,6 +1,8 @@
 import { taskBucketLabels } from "@/lib/options";
 import { derivePaperStatus } from "@/lib/papers";
-import type { Checkpoint, Course, Goal, Paper, ScheduleSlot, Task, TaskBucket } from "@/types";
+import { categoryForSlotType } from "@/lib/timeline";
+import { sittingRemainingMinutes } from "@/lib/tracking";
+import type { Category, Checkpoint, Course, Goal, Paper, PomodoroSession, ScheduleSlot, Task, TaskBucket } from "@/types";
 
 /**
  * plan/16 §5.2 — what a block is FOR, and what a focus session started inside it should attribute
@@ -142,4 +144,49 @@ export function objectiveChipText(slot: ScheduleSlot, objective: Objective | nul
   if (objective) parts.push(objective.detail ? `${objective.label} · ${objective.detail}` : objective.label);
   if (slot.chunk) parts.push(`${slot.chunk.index} of ${slot.chunk.total}`);
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+/**
+ * The one shape a focus session started *from a block* takes, for every surface that starts one —
+ * the Now card's "Start focus", the focus timer's own Start, the floating widget's Play and its Next
+ * card. Before this each built its own copy, and the floating widget's Play built none at all: it
+ * toggled whatever the timer happened to hold (a stale break, or a settings-length session), so it
+ * was never the same action as the "Start focus" button beside it.
+ *
+ * `minutes` is what is *left* of the sitting (plan/16 §5.5) — its planned minutes less real logged
+ * coverage, from the caller's same-day sessions — and `undefined` once it is covered, which arms the
+ * settings length. `startFocus` still clamps it to the sitting bounds; nothing here re-clamps.
+ * A block with exactly one assigned task credits it; zero or several is ambiguous (plan/13 A7).
+ */
+export function sittingStartArgs(
+  slot: ScheduleSlot,
+  objective: Objective | null,
+  sameDaySessions: Pick<PomodoroSession, "slotId" | "mode" | "minutes">[]
+): SittingStartArgs {
+  const assigned = slot.assignedTaskIds ?? [];
+  const left = sittingRemainingMinutes(slot, sameDaySessions);
+  return {
+    label: slot.title,
+    category: categoryForSlotType(slot.type),
+    slotId: slot.id,
+    taskId: assigned.length === 1 ? assigned[0] : undefined,
+    courseId: slot.courseId,
+    bucket: slot.bucket,
+    paperId: objective?.attribution.paperId,
+    passNo: objective?.attribution.passNo,
+    minutes: left > 0 ? left : undefined
+  };
+}
+
+/** Exactly `startFocus`'s parameter shape (components/focus-session-provider.tsx). */
+export interface SittingStartArgs {
+  label: string;
+  category: Category;
+  slotId?: string;
+  taskId?: string;
+  courseId?: string;
+  bucket?: TaskBucket;
+  paperId?: string;
+  passNo?: 1 | 2 | 3;
+  minutes?: number;
 }

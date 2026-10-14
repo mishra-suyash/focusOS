@@ -104,7 +104,7 @@ export function FloatingWidgetButton() {
       >
         <PictureInPicture2 className={clsx("h-4 w-4", pipWindow && "text-moss-600")} />
       </button>
-      {pipWindow ? createPortal(<FloatingWidgetContent onClose={() => pipWindow.close()} />, pipWindow.document.body) : null}
+      {pipWindow ? createPortal(<FloatingWidgetContent onClose={() => pipWindow.close()} pipWindow={pipWindow} />, pipWindow.document.body) : null}
     </>
   );
 }
