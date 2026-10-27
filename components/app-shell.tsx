@@ -28,6 +28,7 @@ import { useAuth } from "@/components/auth-provider";
 import { useTheme } from "@/components/theme-provider";
 import { DaySessionBar } from "@/components/day-session-bar";
 import { FloatingWidgetButton } from "@/components/floating-widget-button";
+import { SoundscapeButton } from "@/components/soundscape-mixer";
 import { useFeatures } from "@/hooks/use-features";
 import type { ModuleId } from "@/lib/features";
 import { MidnightRolloverBanner } from "@/components/midnight-rollover-banner";
@@ -281,6 +282,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <span className="rounded-md bg-amberline/15 px-2 py-1 text-xs font-medium text-amberline">Env needed</span>
               ) : null}
               <DaySessionBar />
+              <SoundscapeButton />
               <FloatingWidgetButton />
               <button className="btn-secondary px-2" onClick={toggleTheme} aria-label="Toggle dark mode">
                 {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}

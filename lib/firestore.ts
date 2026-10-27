@@ -840,6 +840,12 @@ export async function recordBreak(uid: string, date: string, breaksTaken: number
   await saveDayFields(uid, date, { "session.breaksTaken": breaksTaken, "session.lastBreakPromptAt": now() });
 }
 
+/** plan/18 §6 D2 — "Skip" on a reminder: restarts its interval for every open tab without counting
+ *  it. Only `WorkdaySessionProvider` reads these two timestamps, so no displayed number changes. */
+export async function snoozeReminder(uid: string, date: string, kind: "hydration" | "break") {
+  await saveDayFields(uid, date, kind === "hydration" ? { "session.lastHydrationAt": now() } : { "session.lastBreakPromptAt": now() });
+}
+
 export async function saveAiInsight(uid: string, insight: Omit<AiInsight, "id">) {
   trackWrite();
   await setDoc(doc(userCollection(uid, "aiInsights"), insight.date), withoutUndefined({ ...insight }), { merge: true });

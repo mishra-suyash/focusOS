@@ -1,8 +1,9 @@
 "use client";
 
 import { format } from "date-fns";
-import { ArrowRight, Droplets, FastForward, Pause, Play, SkipForward, X } from "lucide-react";
+import { ArrowRight, Droplets, FastForward, Pause, Play, SkipForward } from "lucide-react";
 import { useEffect } from "react";
+import { SoundscapeToggle } from "@/components/soundscape-mixer";
 import { useFocusSession } from "@/components/focus-session-provider";
 import { useWorkdaySession } from "@/components/workday-session-provider";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
@@ -31,7 +32,7 @@ import { formatDayReadout } from "@/lib/gamify";
  * ships. Motivational *text* stays banned — no praise strings, no streak-loss warnings; a motivating
  * *number* derived from real logged data is permitted, on plan/08's own "a number, not prose" test.
  */
-export function FloatingWidgetContent({ onClose, pipWindow }: { onClose: () => void; pipWindow: Window }) {
+export function FloatingWidgetContent({ pipWindow }: { pipWindow: Window }) {
   const { settings } = useUserSettings();
   const items = resolveFloatingWidgetItems(settings);
   const { mode, modeLabel, phase, running, focusRunning, focusInProgress, progress, label, finishNow, skipBreak, syncClock } = useFocusSession();
@@ -66,13 +67,9 @@ export function FloatingWidgetContent({ onClose, pipWindow }: { onClose: () => v
 
   return (
     <div className="relative flex h-full flex-col gap-2 overflow-y-auto bg-ink-50 p-3 text-ink-950 dark:bg-ink-950 dark:text-ink-50">
-      <button
-        className="absolute right-2 top-2 rounded-full bg-white/70 p-1 text-ink-500 shadow-sm transition hover:bg-white hover:text-ink-900 dark:bg-ink-800/70 dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-50"
-        onClick={onClose}
-        aria-label="Close floating widget"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
+      {/* The background-sound mixer's play/pause, where a close button used to be — the PiP window's
+          own title bar already has one, which Chromium always shows. */}
+      <SoundscapeToggle className="absolute right-2 top-2 rounded-full bg-white/70 p-1 text-ink-500 shadow-sm transition hover:bg-white hover:text-ink-900 dark:bg-ink-800/70 dark:text-ink-300 dark:hover:bg-ink-800 dark:hover:text-ink-50" />
 
       {items.has("timer") ? (
         <section className="card p-3">

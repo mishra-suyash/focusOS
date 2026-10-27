@@ -4,11 +4,15 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { useAuth } from "@/components/auth-provider";
 import { PomodoroSurveyModal } from "@/components/pomodoro-survey-modal";
 import { ReadingCheckIn } from "@/components/reading-check-in";
+import { useToast } from "@/components/toast-host";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { useFocusContext } from "@/hooks/use-focus-context";
 import { useUserSettings } from "@/hooks/use-user-settings";
+import { cueEnabled, cueKeys, resolveSounds, type CueName } from "@/lib/cues";
 import { todayKey } from "@/lib/dates";
 import { fetchCollection, incrementTaskCompletedPomodoros, savePomodoro, saveDailySchedule, updatePomodoro } from "@/lib/firestore";
+import { anyFocusOSWindowFocused, deliverCue, installFocusBeacon } from "@/lib/notify";
+import { installAudioUnlock } from "@/lib/sounds";
 import { DEFAULT_MAX_CHUNK_MINUTES } from "@/lib/timeline";
 import { slotAutoStatus } from "@/lib/tracking";
 import type { Category, DailySchedule, PomodoroSession, TaskBucket, TimerMode, TimerPresetId } from "@/types";
@@ -247,7 +251,7 @@ async function claimRun(runId: string): Promise<boolean> {
  * started against a class block via the normal path, and even if it were, attendance is logged
  * separately, not inferred from a timer running.
  */
-async function syncSlotAutoStatus(uid: string, slotId: string) {
+async function syncSlotAutoStatus(uid: string, slotId: string): Promise<string | null> {
   const dateKey = todayKey();
   const [schedules, sessions] = await Promise.all([
     fetchCollection<DailySchedule>(uid, "dailySchedules"),
@@ -255,17 +259,19 @@ async function syncSlotAutoStatus(uid: string, slotId: string) {
   ]);
   const schedule = schedules.find((item) => item.dateKey === dateKey);
   const slot = schedule?.slots.find((item) => item.id === slotId);
-  if (!schedule || !slot || slot.status === "completed") return;
+  if (!schedule || !slot || slot.status === "completed") return null;
   // A recurring class/routine slot reuses the same id on every date it materializes on — restrict
   // coverage to today's own sessions so a session logged weeks ago against the same slot id never
   // counts toward today's block.
   const todaySessions = sessions.filter((session) => session.completedAt.startsWith(dateKey));
-  if (slotAutoStatus(slot, todaySessions) !== "completed") return;
+  if (slotAutoStatus(slot, todaySessions) !== "completed") return null;
   await saveDailySchedule(uid, {
     dateKey,
     templateId: schedule.templateId,
     slots: schedule.slots.map((item) => (item.id === slotId ? { ...item, status: "completed" as const } : item))
   });
+  // plan/18 I3 — the block's title, so the caller can say it just closed.
+  return slot.title;
 }
 
 interface FocusSessionContextValue {
@@ -281,6 +287,8 @@ interface FocusSessionContextValue {
   /** A focus session has started and not ended — running or paused. Starting another sitting while
    *  this is true would replace it, so surfaces offering one check this first. */
   focusInProgress: boolean;
+  /** Identifies the current countdown — the background-sound mixer keys "paused for this session" on it. */
+  runId: string;
   /** Minutes the current countdown is armed with (live settings/sitting length while idle). */
   duration: number;
   totalSeconds: number;
@@ -395,6 +403,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   const [hydrated, setHydrated] = useState(false);
   // One completion per armed countdown, even if the zero-crossing effect re-runs before re-render.
   const completedRunRef = useRef<string | null>(null);
+  const toast = useToast();
 
   const { mode, phase } = core;
   // plan/16 §5.5 — a sitting's own length wins over the settings work length, and only in work mode:
@@ -445,6 +454,17 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     }
     setPendingSurvey(parsePendingSurvey(readStorage(PENDING_SURVEY_STORAGE_KEY)));
     setHydrated(true);
+  }, []);
+
+  // plan/18 §5.2 — audio can only start after a gesture, so the first click or key press anywhere
+  // unlocks it; the focus beacon lets a background tab tell that FocusOS is being looked at (N1).
+  useEffect(() => {
+    const removeUnlock = installAudioUnlock(document);
+    const removeBeacon = installFocusBeacon();
+    return () => {
+      removeUnlock();
+      removeBeacon();
+    };
   }, []);
 
   // Two tabs each mount this provider. Without this they ran two independent timers over one stored
@@ -566,7 +586,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     completedRunRef.current = core.runId;
     // The tab may have been backgrounded well past the real end — stamp completion at
     // `targetEndTime`, not now, so a session never lands hours late or on the wrong day.
-    complete({ endedAt: core.targetEndTime ?? Date.now(), minutes: Math.round(core.totalSeconds / 60) });
+    complete({ endedAt: core.targetEndTime ?? Date.now(), minutes: Math.round(core.totalSeconds / 60), natural: true });
   }, [phase, secondsLeft, user, core.runId]);
 
   /** The core for a countdown that starts now — a new run, armed with `seconds`. */
@@ -620,15 +640,39 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   }
 
   /**
+   * plan/18 S1/S2/N1 — the chime (and, if opted in, the OS notification) for a countdown that ran
+   * out on its own. Only `natural` ends cue: Finish now, Skip break, Reset and the auto-log on a
+   * switch are the user's own clicks, made while looking at the app. Every open tab reaches zero
+   * together, so `deliverCue` lets one of them speak — a tab whose audio is unlocked, which is not
+   * necessarily the `claimRun` winner that logs the session.
+   */
+  function announceEnd(endedMode: TimerMode, runId: string, minutes: number, nextBreakMinutes?: number) {
+    const sounds = resolveSounds(settings.sounds);
+    const cue: CueName = endedMode === "work" ? "sessionEnd" : "breakEnd";
+    const key = cueKeys.timer(runId);
+    const body =
+      endedMode === "work"
+        ? `Focus done — ${minutes} min on ${ctx.label}.${nextBreakMinutes ? ` Break: ${nextBreakMinutes} min.` : ""}`
+        : "Break over — ready for the next sitting.";
+    void deliverCue({
+      key,
+      sound: cueEnabled(sounds, cue) ? { cue, volume: sounds.volume } : undefined,
+      notification: settings.notifications?.timerEnd && !anyFocusOSWindowFocused() ? { body, tag: key } : undefined
+    });
+  }
+
+  /**
    * Ends the current countdown with `minutes` to its credit. A focus session is logged (unless it is
    * too short to be one) and the timer moves to its break; a break logs nothing and returns to focus.
    * Every state change here is synchronous — persistence runs after, and never gates the next state.
+   * Returns whether a focus session was logged.
    */
-  function complete(opts: { endedAt: number; minutes: number; survey?: boolean }) {
+  function complete(opts: { endedAt: number; minutes: number; survey?: boolean; natural?: boolean }): boolean {
     const at = Date.now();
     if (mode !== "work") {
+      if (opts.natural) announceEnd(mode, core.runId, opts.minutes);
       setCore({ ...core, mode: "work", phase: "idle", targetEndTime: null, phaseChangedAt: at });
-      return;
+      return false;
     }
     const reading = Boolean(ctx.paperId || ctx.findPaper);
     const loggable = opts.minutes >= 1 && !(reading && opts.minutes < MIN_READING_SESSION_MINUTES);
@@ -650,6 +694,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       };
       void persistWorkSession(record, core.runId, opts.survey !== false);
       const nextMode: TimerMode = cycle % 4 === 0 ? "long_break" : "short_break";
+      if (opts.natural) announceEnd("work", core.runId, opts.minutes, nextMode === "long_break" ? longBreak : shortBreak);
       setCore({ ...core, mode: nextMode, phase: "idle", targetEndTime: null, cycle: cycle + 1, cycleDateKey: todayKey(), phaseChangedAt: at });
     } else {
       // Too short to be a session: nothing logged, no break earned — back to an idle focus countdown.
@@ -666,6 +711,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       findPaper: undefined,
       contextTouched: current.taskId ? current.contextTouched : false
     }));
+    return loggable;
   }
 
   /**
@@ -674,16 +720,52 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
    */
   async function persistWorkSession(record: Omit<PomodoroSession, "id">, runId: string, survey: boolean) {
     if (!user) return;
-    const uid = user.uid;
     if (!(await claimRun(runId))) return;
     if (survey) showSurvey({ docId: runId, at: Date.now(), label: record.label, paperId: record.paperId, passNo: record.passNo });
-    try {
-      await savePomodoro(uid, record, runId);
-      if (record.taskId && record.minutes >= MIN_MINUTES_FOR_TASK_CREDIT) await incrementTaskCompletedPomodoros(uid, record.taskId);
+    await persistSteps(user.uid, record, runId, 0);
+  }
+
+  /**
+   * plan/18 I1 — the three writes behind a logged session, run in order from `from`. A failure stops
+   * there and raises a Retry that resumes from the step that failed — never from the top: only the
+   * save is idempotent (its doc id is the run id); re-running the increment would credit the task
+   * twice. Broadcast, because the tab that logs is often a background one (`claimRun`).
+   */
+  async function persistSteps(uid: string, record: Omit<PomodoroSession, "id">, runId: string, from: number) {
+    const steps: (() => Promise<unknown>)[] = [
+      () => savePomodoro(uid, record, runId),
+      async () => {
+        if (record.taskId && record.minutes >= MIN_MINUTES_FOR_TASK_CREDIT) await incrementTaskCompletedPomodoros(uid, record.taskId);
+      },
       // §6.5 — this session may have just pushed its block past the auto-complete threshold.
-      if (record.slotId) await syncSlotAutoStatus(uid, record.slotId);
-    } catch (error) {
-      console.error("[focus] logging the session failed", error);
+      async () => {
+        if (!record.slotId) return;
+        const closedTitle = await syncSlotAutoStatus(uid, record.slotId);
+        if (closedTitle) announceBlockClosed(closedTitle, record.slotId);
+      }
+    ];
+    for (let step = from; step < steps.length; step++) {
+      try {
+        await steps[step]();
+      } catch (error) {
+        console.error("[focus] logging the session failed", error);
+        toast({
+          tone: "error",
+          message: step === 0 ? `Couldn't save your ${record.minutes}-min session.` : "Session saved, but updating its task or block failed.",
+          action: { label: "Retry", onClick: () => void persistSteps(uid, record, runId, step) },
+          broadcast: true
+        });
+        return;
+      }
+    }
+  }
+
+  /** plan/18 I3/S5 — a block just crossed the 60% rule (`slotAutoStatus`) and closed. */
+  function announceBlockClosed(title: string, slotId: string) {
+    toast({ message: `${title} — closed.`, broadcast: true });
+    const sounds = resolveSounds(settings.sounds);
+    if (cueEnabled(sounds, "blockClosed")) {
+      void deliverCue({ key: cueKeys.blockClosed(todayKey(), slotId), sound: { cue: "blockClosed", volume: sounds.volume } });
     }
   }
 
@@ -706,7 +788,9 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     // A focus session already under way is logged for the time it ran — without a survey, since the
     // user has just chosen to move on — instead of being overwritten with nothing recorded.
     if (mode === "work" && phase !== "idle" && elapsedSeconds >= 60) {
-      complete({ endedAt: Date.now(), minutes: Math.round(elapsedSeconds / 60), survey: false });
+      const minutes = Math.round(elapsedSeconds / 60);
+      // plan/18 I2 — logged without a survey, so say so: otherwise the minutes vanish into the old block silently.
+      if (complete({ endedAt: Date.now(), minutes, survey: false })) toast({ message: `Logged ${minutes} min to ${ctx.label}.` });
     }
     // plan/16 §5.5 — arm the sitting's own length when the caller knows it, clamped: below 5 minutes
     // a sitting isn't worth a timer, and above the sitting cap a stale block could arm hours.
@@ -738,6 +822,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     running,
     focusRunning: running && mode === "work",
     focusInProgress: mode === "work" && phase !== "idle",
+    runId: core.runId,
     duration: Math.round(totalSeconds / 60),
     totalSeconds,
     elapsedSeconds,
@@ -783,6 +868,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       await updatePomodoro(user.uid, survey.docId, { productivityRating: rating.productivityRating, comment: rating.comment || undefined });
     } catch (error) {
       console.error("[focus] saving the rating failed", error);
+      toast({ tone: "error", message: "Couldn't save your rating.", action: { label: "Retry", onClick: () => void rate(survey, rating) } });
     }
   }
 

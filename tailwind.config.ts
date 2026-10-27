@@ -25,10 +25,17 @@ const config: Config = {
           900: "#1c2621",
           950: "#101713"
         },
+        // 200–400 are the light tints dark mode uses for moss text (`dark:text-moss-400` etc.); without
+        // them those classes generated nothing and the text fell back to 700, about 2:1 on ink-900.
+        // 400 is the darkest that still reads at 4.5:1+ on ink-800/900/950.
         moss: {
+          200: "#bcd9c7",
+          300: "#93c2a6",
+          400: "#6fae8a",
           500: "#4f8b67",
           600: "#3f7656",
-          700: "#315d45"
+          700: "#315d45",
+          800: "#264a37"
         },
         amberline: "#d39b40"
       },

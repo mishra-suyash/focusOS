@@ -1,6 +1,7 @@
 "use client";
 
 import { orderBy } from "firebase/firestore";
+import { Headphones } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
@@ -10,16 +11,20 @@ import { GoogleCalendarSettings } from "@/components/google-calendar-settings";
 import { InfoHint } from "@/components/info-hint";
 import { ReadingHabitSettings } from "@/components/reading-habit-settings";
 import { TermsPanel } from "@/components/terms-panel";
+import { useSoundscape } from "@/components/soundscape-provider";
 import { useTheme } from "@/components/theme-provider";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { useWorkdaySession } from "@/components/workday-session-provider";
+import { resolveSounds, type CueName } from "@/lib/cues";
 import { downloadFullExportJson, downloadPomodoroCsv } from "@/lib/export";
 import { DEFAULT_TIMEZONE } from "@/lib/google-calendar";
+import { requestNotificationPermission } from "@/lib/notify";
 import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, DEFAULT_LADDER } from "@/lib/revision";
+import { playCue, unlockAudio } from "@/lib/sounds";
 import { DEFAULT_MAX_CHUNK_MINUTES, DEFAULT_MIN_CHUNK_MINUTES } from "@/lib/timeline";
 import { useUserTier } from "@/lib/tiers";
-import type { DayTemplate } from "@/types";
+import type { DayTemplate, UserSettings } from "@/types";
 
 export default function SettingsPage() {
   const { user, isDemoMode } = useAuth();
@@ -98,7 +103,7 @@ export default function SettingsPage() {
         </section>
         <GoogleCalendarSettings />
         <section className="card p-5">
-          <h2 className="mb-4 text-lg font-semibold">Reminders</h2>
+          <h2 className="mb-4 text-lg font-semibold">Reminders, sounds &amp; notifications</h2>
           <div className="space-y-3">
             <label className="flex items-center justify-between gap-3 text-sm">
               <span>Hydration reminder every</span>
@@ -116,8 +121,11 @@ export default function SettingsPage() {
               <input className="input w-24" type="number" min={15} value={breakMinutes} onChange={(e) => setBreakMinutes(Number(e.target.value))} />
               <span className="text-xs text-ink-500">min</span>
             </label>
-            <p className="text-xs text-ink-500">Reminders only fire while your day is started and this tab is open. Allow browser notifications when prompted to get alerts outside the tab.</p>
+            <p className="text-xs text-ink-500">Reminders fire while your day is started and FocusOS is open in any tab, including the reader. With several tabs open, each reminder arrives once.</p>
           </div>
+          <SoundSettings value={settings.sounds} onChange={(sounds) => updateSettings({ sounds })} />
+          <BackgroundSoundSettings />
+          <NotificationSettings value={settings.notifications} onChange={(notifications) => updateSettings({ notifications })} />
           {/* plan/16 §5.7 / Phase 6 — opt-in, default off, and the permission is requested from this
               real click, never on page load. `SittingNotificationSettings` reads the live
               `Notification.permission` rather than the stored `granted` flag, because a permission
@@ -375,6 +383,137 @@ function SittingNotificationSettings({
             ? "Your browser is blocking notifications for this site — allow them in its site settings to receive these."
             : "One notification before a work block starts, and one when it ends. Sent from the app itself, so the floating window doesn't need to be open."}
       </p>
+    </div>
+  );
+}
+
+const CUE_ROWS: { cue: CueName; label: string; hint?: string }[] = [
+  { cue: "sessionEnd", label: "A focus session runs out" },
+  { cue: "breakEnd", label: "A break runs out" },
+  { cue: "headsUp", label: "A sitting is about to start", hint: "Needs “Notify me at the start and end of a sitting” below." },
+  { cue: "reminder", label: "Hydration and break reminders" },
+  { cue: "blockClosed", label: "A block closes" }
+];
+
+/**
+ * plan/18 §5.5 — every sound is a public-domain recording in `public/sounds/` (lib/sounds.ts). Only
+ * the two timer chimes are on until changed (§6 D1). Each ▶ button doubles as the click that unlocks audio for this tab.
+ * Sounds play from one open tab at a time, and never from the floating widget.
+ */
+function SoundSettings({ value, onChange }: { value: UserSettings["sounds"]; onChange: (value: NonNullable<UserSettings["sounds"]>) => void }) {
+  const sounds = resolveSounds(value);
+  const save = (patch: Partial<NonNullable<UserSettings["sounds"]>>) =>
+    onChange({ enabled: sounds.enabled, volume: sounds.volume, cues: sounds.cues, ...patch });
+
+  function test(cue: CueName) {
+    unlockAudio();
+    playCue(cue, sounds.volume);
+  }
+
+  return (
+    <div className="mt-4 space-y-2 border-t border-ink-100 pt-4 dark:border-ink-800">
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span className="font-medium">Alert sounds</span>
+        <input type="checkbox" className="h-4 w-4" checked={sounds.enabled} onChange={(e) => save({ enabled: e.target.checked })} />
+      </label>
+      {sounds.enabled ? (
+        <>
+          <label className="flex items-center justify-between gap-3 text-sm">
+            <span>Volume</span>
+            <input
+              className="w-40"
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={sounds.volume}
+              onChange={(e) => save({ volume: Number(e.target.value) })}
+              aria-label="Sound volume"
+            />
+          </label>
+          <p className="label pt-1">Play a sound when</p>
+          {CUE_ROWS.map(({ cue, label, hint }) => (
+            <div key={cue} className="flex items-center justify-between gap-3 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={sounds.cues[cue]}
+                  onChange={(e) => save({ cues: { ...sounds.cues, [cue]: e.target.checked } })}
+                />
+                <span>
+                  {label}
+                  {hint ? <span className="block text-xs text-ink-500">{hint}</span> : null}
+                </span>
+              </label>
+              <button type="button" className="btn-secondary px-2 py-0.5 text-xs" onClick={() => test(cue)} aria-label={`Play the sound for: ${label}`}>
+                ▶
+              </button>
+            </div>
+          ))}
+          <p className="text-xs text-ink-500">
+            Sounds play from one open FocusOS tab at a time. A tab can only play sound after you have clicked somewhere in it since it was
+            opened or reloaded.
+          </p>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** The mixer itself lives in the top bar (`SoundscapeButton`); this row only says where, and holds its one standing preference. */
+function BackgroundSoundSettings() {
+  const { mix, setAutoFocus } = useSoundscape();
+  return (
+    <div className="mt-4 space-y-2 border-t border-ink-100 pt-4 dark:border-ink-800">
+      <p className="flex items-center gap-1.5 text-sm font-medium">
+        <Headphones className="h-4 w-4" />
+        Background sounds
+      </p>
+      <p className="text-xs text-ink-500">
+        Rain, fire, café, waves and more. Mix them with the headphones button in the top bar (also in the reader), and play or
+        pause them from the floating widget.
+      </p>
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span>Also play the mix while a focus session runs</span>
+        <input type="checkbox" className="h-4 w-4" checked={mix.autoFocus} onChange={(e) => setAutoFocus(e.target.checked)} />
+      </label>
+    </div>
+  );
+}
+
+/**
+ * plan/18 §4 — N1 (opt-in) and N3 (on unless turned off — what it did before it had a setting). The
+ * permission is asked from this click only when it hasn't been answered; the live
+ * `Notification.permission` stays the authority at every fire site (`lib/notify.ts`).
+ */
+function NotificationSettings({
+  value,
+  onChange
+}: {
+  value: UserSettings["notifications"];
+  onChange: (value: NonNullable<UserSettings["notifications"]>) => void;
+}) {
+  const current = { timerEnd: value?.timerEnd ?? false, blockStart: value?.blockStart ?? true };
+
+  async function toggle(field: "timerEnd" | "blockStart", enabled: boolean) {
+    if (enabled) await requestNotificationPermission();
+    onChange({ ...current, [field]: enabled });
+  }
+
+  return (
+    <div className="mt-4 space-y-2 border-t border-ink-100 pt-4 dark:border-ink-800">
+      <p className="text-sm font-medium">Notifications</p>
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span>Notify me when a focus session or break runs out</span>
+        <input type="checkbox" className="h-4 w-4" checked={current.timerEnd} onChange={(e) => void toggle("timerEnd", e.target.checked)} />
+      </label>
+      <p className="text-xs text-ink-500">Skipped while you&rsquo;re looking at FocusOS or its floating widget &mdash; the survey is already in front of you.</p>
+      <label className="flex items-center justify-between gap-3 text-sm">
+        <span>Announce each work block as it starts</span>
+        <input type="checkbox" className="h-4 w-4" checked={current.blockStart} onChange={(e) => void toggle("blockStart", e.target.checked)} />
+      </label>
+      <p className="text-xs text-ink-500">Never for sleep, meal, break or free blocks.</p>
     </div>
   );
 }

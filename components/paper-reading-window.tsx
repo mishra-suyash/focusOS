@@ -26,6 +26,8 @@ import { PaperNotesPanel } from "@/components/paper-notes-panel";
 import { PaperPassSection } from "@/components/paper-pass-section";
 import { OPEN_PASS_PANEL_EVENT } from "@/components/reading-check-in";
 import { useReadingSitting } from "@/components/reading-sitting";
+import { ReminderBanner } from "@/components/reminder-banner";
+import { SoundscapeButton } from "@/components/soundscape-mixer";
 import { generateHighlightCandidates } from "@/lib/ai/client";
 import { createAnnotation, createAnnotationsBatch, deleteAnnotation, subscribeAnnotations } from "@/lib/firestore";
 import {
@@ -650,6 +652,8 @@ export function PaperReadingWindow({
 
   return (
     <div className="flex h-screen w-screen flex-col bg-white text-ink-900 dark:bg-ink-950 dark:text-ink-50">
+      {/* plan/18 §5.3 — the reader is outside the app shell, so it shows the shell's reminder banner itself. */}
+      <ReminderBanner />
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-2 border-b border-ink-200 bg-ink-50 px-3 py-2 dark:border-ink-800 dark:bg-ink-900">
         <div className="flex min-w-0 items-center gap-2">
@@ -676,6 +680,7 @@ export function PaperReadingWindow({
         </div>
 
         <div className="ml-auto flex items-center gap-2 text-sm">
+          <SoundscapeButton />
           <button className="btn-secondary px-2" onClick={() => goToPage(pageNum - 1)} disabled={pageNum <= 1} aria-label="Previous page">
             <ChevronLeft className="h-4 w-4" />
           </button>

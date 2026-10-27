@@ -1060,6 +1060,23 @@ export interface UserSettings {
    *  the browser permission at the time the user opted in; it is a UI hint only, never the
    *  authorization source — the live `Notification.permission` always is. */
   sittingNotifications?: { enabled: boolean; leadMinutes: number; granted?: boolean };
+  /** plan/18 §5.1 — in-app sound. Absent = on, with only the two timer-end chimes (`resolveSounds`,
+   *  lib/cues.ts). Every sound is a public-domain recording in `public/sounds/` (CREDITS.md there). */
+  sounds?: {
+    enabled: boolean;
+    volume: number;
+    cues?: Partial<Record<"sessionEnd" | "breakEnd" | "headsUp" | "reminder" | "blockClosed", boolean>>;
+    /** plan/18 Phase 5's single noise switch — superseded by `soundscape`, read only to carry an
+     *  existing choice over (`resolveSoundscape`, lib/soundscape.ts). Never written any more. */
+    ambient?: { enabled: boolean; kind: "brown" | "grey" | "white"; volume: number };
+  };
+  /** The background-sound mixer (lib/soundscape.ts): a level per track (0–1, absent = off), a master
+   *  level, and whether the mix also plays during focus countdowns. Absent = empty mix, autoFocus on.
+   *  The play/pause state itself is per device, not synced (`focusos-soundscape` in localStorage). */
+  soundscape?: { levels: Partial<Record<string, number>>; master: number; autoFocus: boolean };
+  /** plan/18 §4 — OS notifications beyond the sitting ones above. `timerEnd` absent = off;
+   *  `blockStart` absent = on (what the block-start notification did before it had a setting). */
+  notifications?: { timerEnd?: boolean; blockStart?: boolean };
   /** plan/16 §5.4 — how many days ahead weekly planning's "What's coming" looks. Absent = 14. */
   upcomingHorizonDays?: number;
   /** plan/16 §6 Phase 1's callout — whether the one-time "your week is shaped differently now"

@@ -5,8 +5,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from "@/components/auth-provider";
 import { useDay } from "@/hooks/use-day";
 import { useUserSettings } from "@/hooks/use-user-settings";
+import { blockStartNotificationsOn, cueEnabled, cueKeys, reminderClaimWindowMs, resolveSounds } from "@/lib/cues";
 import { todayKey, weekStartKey } from "@/lib/dates";
 import { courseSlotsForDate } from "@/lib/courses";
+import { deliverCue, notificationsAllowed } from "@/lib/notify";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import {
   endWorkdaySession,
@@ -17,6 +19,7 @@ import {
   recordHydration,
   saveDailySchedule,
   saveDayFields,
+  snoozeReminder,
   startWorkdaySession,
   subscribeDoc,
   undoEndWorkdaySession
@@ -99,13 +102,45 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     lastBreakRef.current = session.lastBreakPromptAt ? new Date(session.lastBreakPromptAt).getTime() : startedAtMs;
   }, [session?.startedAt, session?.lastHydrationAt, session?.lastBreakPromptAt]);
 
+  // plan/18 F2 — "Did it" and "Skip" both write these timestamps (`recordHydration`/`snoozeReminder`),
+  // so a reminder answered in another tab is over in this one too, not left on screen to answer twice.
+  useEffect(() => {
+    if (session?.lastHydrationAt) setReminder((current) => (current?.kind === "hydration" ? null : current));
+  }, [session?.lastHydrationAt]);
+  useEffect(() => {
+    if (session?.lastBreakPromptAt) setReminder((current) => (current?.kind === "break" ? null : current));
+  }, [session?.lastBreakPromptAt]);
+
   const active = Boolean(session?.startedAt && !session?.endedAt);
 
+  // Read by the interval callbacks below, so a settings or day change doesn't restart their 30-second
+  // clocks — a restart on every render could postpone a reminder indefinitely.
+  const reminderRef = useRef<ReminderEvent | null>(null);
+  const cueSettingsRef = useRef({ settings, today, dayOff: Boolean(day?.dayOff) });
+  useEffect(() => {
+    reminderRef.current = reminder;
+  }, [reminder]);
+  useEffect(() => {
+    cueSettingsRef.current = { settings, today, dayOff: Boolean(day?.dayOff) };
+  }, [settings, today, day?.dayOff]);
+
   const fireReminder = useCallback((kind: ReminderEvent["kind"], message: string) => {
-    setReminder((current) => current ?? { kind, message, firedAt: Date.now() });
-    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-      new Notification("FocusOS", { body: message });
-    }
+    // plan/18 F1 — once per reminder. The interval below keeps qualifying every 30 seconds until the
+    // reminder is answered; this used to raise a fresh OS notification on each of those ticks.
+    if (reminderRef.current) return;
+    const event: ReminderEvent = { kind, message, firedAt: Date.now() };
+    reminderRef.current = event;
+    setReminder(event);
+    const { settings: current, today: dateKey, dayOff } = cueSettingsRef.current;
+    const sounds = resolveSounds(current.sounds);
+    const key = cueKeys.reminder(kind, dateKey);
+    // plan/18 F2 — every tab reaches the same reminder; one of them speaks for all.
+    void deliverCue({
+      key,
+      windowMs: reminderClaimWindowMs(kind === "hydration" ? current.hydrationMinutes : current.breakMinutes),
+      sound: cueEnabled(sounds, "reminder", { dayOff }) ? { cue: "reminder", volume: sounds.volume } : undefined,
+      notification: { body: message, tag: key }
+    });
   }, []);
 
   useEffect(() => {
@@ -124,10 +159,16 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       // timed out" card (components/uncovered-blocks-review.tsx) catches anything still uncovered.
       if (schedule) {
         const currentActive = getActiveSlot(sortedSlots(schedule.slots));
-        if (currentActive && currentActive.id !== lastActiveSlotIdRef.current) {
-          if (typeof Notification !== "undefined" && Notification.permission === "granted") {
-            new Notification("FocusOS", { body: `${currentActive.title} starting.` });
-          }
+        // plan/18 F3 — behind its own setting (absent = on, as before), and never for the blocks the
+        // reminders already treat as rest: "Sleep starting." is not something anyone asked to hear.
+        if (
+          currentActive &&
+          currentActive.id !== lastActiveSlotIdRef.current &&
+          blockStartNotificationsOn(cueSettingsRef.current.settings) &&
+          !NO_PROMPT_SLOT_TYPES.has(currentActive.type)
+        ) {
+          const key = cueKeys.blockStart(cueSettingsRef.current.today, currentActive.id);
+          void deliverCue({ key, notification: { body: `${currentActive.title} starting.`, tag: key } });
         }
         lastActiveSlotIdRef.current = currentActive?.id ?? null;
       }
@@ -176,25 +217,34 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
   }, [today]);
 
   const sittingNotifications = settings.sittingNotifications;
+  // plan/18 S3 — the heads-up sound rides on the lead notification's trigger, so it needs the same
+  // opt-in; it plays even where the browser blocks notifications.
+  const sounds = resolveSounds(settings.sounds);
+  const headsUpVolume = cueEnabled(sounds, "headsUp", { dayOff: Boolean(day?.dayOff) }) ? sounds.volume : 0;
   useEffect(() => {
     if (!sittingNotifications?.enabled || day?.dayOff) return;
-    if (typeof Notification === "undefined") return;
 
     function check() {
       // Re-read the live permission every tick rather than trusting the stored `granted` flag:
       // permission can be revoked in browser settings without the app ever hearing about it.
-      if (Notification.permission !== "granted" || !schedule) return;
+      const canNotify = notificationsAllowed();
+      if ((!canNotify && headsUpVolume === 0) || !schedule) return;
       const leadMinutes = Math.max(0, sittingNotifications!.leadMinutes);
       const minute = currentMinute();
       for (const slot of schedule.slots) {
         if (!isScoredSitting(slot)) continue;
         const start = minutesFromTime(slot.startTime);
         const end = minutesFromTime(slot.endTime);
-        const leadKey = `${today}:${slot.id}:lead`;
-        const endKey = `${today}:${slot.id}:end`;
+        const leadKey = cueKeys.sittingLead(today, slot.id);
+        const endKey = cueKeys.sittingEnd(today, slot.id);
         if (minute >= start - leadMinutes && minute < start && !notifiedSittingsRef.current.has(leadKey)) {
           notifiedSittingsRef.current.add(leadKey);
-          new Notification("FocusOS", { body: `${slot.title} starts in ${Math.max(1, start - minute)} min.`, tag: leadKey });
+          // plan/18 F2 — `deliverCue` claims the key across tabs, so a sound plays once, not once per tab.
+          void deliverCue({
+            key: leadKey,
+            notification: { body: `${slot.title} starts in ${Math.max(1, start - minute)} min.`, tag: leadKey },
+            sound: headsUpVolume > 0 ? { cue: "headsUp", volume: headsUpVolume } : undefined
+          });
         }
         // Bounded to the minute the block ends rather than "any time after", so opening the app in
         // the evening doesn't fire a notification for every block the day already finished.
@@ -208,10 +258,12 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
           // strip beside it. Stated plainly and without judgement either way: an unfinished sitting
           // is a fact about a block, not a verdict on the person (§5.6).
           const closed = slot.status === "completed";
-          new Notification("FocusOS", {
-            body: closed ? `${slot.title} — done.` : `${slot.title} ended, not logged as finished.`,
-            tag: endKey
-          });
+          if (canNotify) {
+            void deliverCue({
+              key: endKey,
+              notification: { body: closed ? `${slot.title} — done.` : `${slot.title} ended, not logged as finished.`, tag: endKey }
+            });
+          }
         }
       }
     }
@@ -219,7 +271,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     check();
     const id = window.setInterval(check, 30_000);
     return () => window.clearInterval(id);
-  }, [sittingNotifications?.enabled, sittingNotifications?.leadMinutes, schedule, today, day?.dayOff, sittingNotifications]);
+  }, [sittingNotifications?.enabled, sittingNotifications?.leadMinutes, schedule, today, day?.dayOff, sittingNotifications, headsUpVolume]);
 
   const start = useCallback(async () => {
     if (!user || starting) return;
@@ -425,8 +477,10 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     const now = Date.now();
     if (reminder?.kind === "hydration") lastHydrationRef.current = now;
     if (reminder?.kind === "break") lastBreakRef.current = now;
+    // plan/18 §6 D2 — written, not just local, so every other open tab clears and restarts it too.
+    if (user && reminder) void snoozeReminder(user.uid, today, reminder.kind);
     setReminder(null);
-  }, [reminder]);
+  }, [reminder, user, today]);
 
   const setHydrationMinutes = useCallback((minutes: number) => updateSettings({ hydrationMinutes: minutes }), [updateSettings]);
   const setBreakMinutes = useCallback((minutes: number) => updateSettings({ breakMinutes: minutes }), [updateSettings]);

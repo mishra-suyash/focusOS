@@ -5,6 +5,7 @@ import { PictureInPicture2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { FloatingWidgetContent } from "@/components/floating-widget-content";
+import { installAudioUnlock } from "@/lib/sounds";
 
 const MIN_WIDTH = 240;
 const MIN_HEIGHT = 200;
@@ -85,10 +86,13 @@ export function FloatingWidgetButton() {
     // Chromium versions just ignore the unrecognized option). The origin/title text and the
     // window's own close button are NOT hideable through this API at all — Chromium always shows
     // them on every Document PiP window, from every site, as an anti-spoofing measure so a user
-    // can never be tricked about which page is controlling a floating window. A small close
-    // control is added in the body below as a themed-looking convenience, not a replacement.
+    // can never be tricked about which page is controlling a floating window — which is why the
+    // widget's own corner button can be the background-sound play/pause rather than a second close.
     const next = await window.documentPictureInPicture.requestWindow({ ...readStoredSize(), disallowReturnToOpener: true });
     primePipDocument(next.document);
+    // plan/18 C1 — a click in the widget unlocks the main document's audio, so a session started from
+    // the PiP can still chime. The listener goes away with the PiP's document.
+    installAudioUnlock(next.document);
     setPipWindow(next);
   }
 
@@ -104,7 +108,7 @@ export function FloatingWidgetButton() {
       >
         <PictureInPicture2 className={clsx("h-4 w-4", pipWindow && "text-moss-600")} />
       </button>
-      {pipWindow ? createPortal(<FloatingWidgetContent onClose={() => pipWindow.close()} pipWindow={pipWindow} />, pipWindow.document.body) : null}
+      {pipWindow ? createPortal(<FloatingWidgetContent pipWindow={pipWindow} />, pipWindow.document.body) : null}
     </>
   );
 }
