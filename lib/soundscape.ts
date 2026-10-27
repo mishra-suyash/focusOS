@@ -5,13 +5,16 @@ import type { UserSettings } from "@/types";
  * from, and how the saved mix turns into per-track volumes. No DOM here (`scripts/verify-notify.ts`
  * checks it); playback is `lib/sounds.ts`, state is `components/soundscape-provider.tsx`.
  *
- * Every recording is public domain or CC-BY, trimmed to a seamless loop and level-matched (about
- * −26 dBFS RMS) before it was added. CC-BY needs credit, which `credit` carries and the mixer
- * shows; `public/sounds/CREDITS.md` has the same list.
+ * The loops come mostly from two open-source ambient-sound apps whose sounds are curated for
+ * exactly this use — Blanket (GNOME; Freesound/SoundBible recordings edited to its ambience
+ * guidelines, each with its licence) and Moodist (CC0 / Pixabay Content License) — trimmed to a
+ * seamless loop and level-matched (about −27 dBFS RMS) before they were added. CC-BY needs credit,
+ * which `credit` carries and the mixer shows; `public/sounds/CREDITS.md` has the same list.
  */
 
 export type SoundscapeTrackId =
   | "rain"
+  | "heavyRain"
   | "thunder"
   | "wind"
   | "fire"
@@ -41,18 +44,26 @@ export interface SoundscapeTrack {
 
 const commons = (file: string) => `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(file.replace(/ /g, "_"))}`;
 
+const freesound = (user: string, id: number) => `https://freesound.org/people/${user}/sounds/${id}/`;
+/** Moodist (MIT app) ships these as CC0 or Pixabay Content License sounds without naming each one's source;
+ *  both licences allow use without attribution. Credited to the project that curated them. */
+const MOODIST = { author: "via Moodist (remvze/moodist)", license: "CC0 / Pixabay Content License", url: "https://github.com/remvze/moodist" };
+/** Blanket (GNOME) edits its sounds to its ambience guidelines; credit names the original recording. */
+const viaBlanket = (author: string) => `${author}, edited for Blanket`;
+
 export const SOUNDSCAPE_TRACKS: SoundscapeTrack[] = [
-  { id: "rain", label: "Rain", group: "Weather", file: "scape/rain.m4a", gain: 1, credit: { title: "Rain against the window", author: "cori", license: "Public domain", url: commons("Rain against the window.ogg") } },
-  { id: "thunder", label: "Thunder", group: "Weather", file: "scape/thunder.m4a", gain: 1, credit: { title: "Thunderstorm after hot summer day (part 2 of 4)", author: "stephan", license: "Public domain", url: commons("Thunderstorm after hot summer day 17 minutes 02 of 04.ogg") } },
-  { id: "wind", label: "Wind", group: "Weather", file: "scape/wind.m4a", gain: 1, credit: { title: "Wind in forest", author: "Gravity Sound", license: "CC BY 4.0", url: commons("Wind in forest (Gravity Sound).wav") } },
-  { id: "fire", label: "Fire", group: "Places", file: "scape/fire.m4a", gain: 1, credit: { title: "Campfire sound ambience", author: "Glaneur de sons", license: "CC BY 3.0", url: commons("Campfire sound ambience.ogg") } },
-  { id: "birds", label: "Birds", group: "Nature", file: "scape/birds.m4a", gain: 1, credit: { title: "Birds, Perungalathur Reserved Forest", author: "Mk170101", license: "CC BY 4.0", url: commons("Birds Perungalathur Reserved Forest.wav") } },
-  { id: "waves", label: "Waves", group: "Nature", file: "scape/waves.m4a", gain: 1, credit: { title: "Ocean Waves on a Tropical Beach", author: "Jarrod Stanley", license: "CC0", url: commons("Ocean Waves on a Tropical Beach.ogg") } },
-  { id: "stream", label: "Stream", group: "Nature", file: "scape/stream.m4a", gain: 1, credit: { title: "Stream, river water up close", author: "jackthemurray", license: "CC0", url: commons("433589 jackthemurray stream-river-water-up-close.wav") } },
-  { id: "cafe", label: "Café", group: "Places", file: "scape/cafe.m4a", gain: 1, credit: { title: "Restaurant ambience", author: "stephan", license: "Public domain", url: commons("Restaurant ambience.ogg") } },
+  { id: "rain", label: "Rain", group: "Weather", file: "scape/rain.m4a", gain: 1, credit: { title: "Rain", author: viaBlanket("alex36917"), license: "CC BY 4.0", url: freesound("alex36917", 524605) } },
+  { id: "heavyRain", label: "Heavy rain", group: "Weather", file: "scape/heavy-rain.m4a", gain: 1, credit: { title: "Heavy Rain", ...MOODIST } },
+  { id: "thunder", label: "Thunder", group: "Weather", file: "scape/thunder.m4a", gain: 1, credit: { title: "Storm", author: viaBlanket("digifishmusic"), license: "CC BY 4.0", url: freesound("digifishmusic", 41739) } },
+  { id: "wind", label: "Wind", group: "Weather", file: "scape/wind.m4a", gain: 1, credit: { title: "Wind in Trees", ...MOODIST } },
+  { id: "birds", label: "Birds", group: "Nature", file: "scape/birds.m4a", gain: 1, credit: { title: "Birds", author: viaBlanket("kvgarlic"), license: "CC0", url: freesound("kvgarlic", 156826) } },
+  { id: "waves", label: "Waves", group: "Nature", file: "scape/waves.m4a", gain: 1, credit: { title: "Waves", author: viaBlanket("Luftrum"), license: "CC BY 4.0", url: freesound("Luftrum", 48412) } },
+  { id: "stream", label: "Stream", group: "Nature", file: "scape/stream.m4a", gain: 1, credit: { title: "Stream", author: "gluckose (via Blanket)", license: "CC0", url: freesound("gluckose", 333987) } },
+  { id: "fire", label: "Fire", group: "Places", file: "scape/fire.m4a", gain: 1, credit: { title: "Fireplace", author: "ezwa (via Blanket)", license: "Public domain", url: "https://soundbible.com/1543-Fireplace.html" } },
+  { id: "cafe", label: "Café", group: "Places", file: "scape/cafe.m4a", gain: 1, credit: { title: "Cafe", ...MOODIST } },
   { id: "library", label: "Library", group: "Places", file: "scape/library.m4a", gain: 1, credit: { title: "TU Delft Library, quiet study room", author: "el_mar", license: "CC BY 3.0", url: commons("20121112 TU Delft Library, quiet study room - general ambience - SoundCloud - el mar.ogg") } },
-  { id: "keyboard", label: "Keyboard", group: "Places", file: "scape/keyboard.m4a", gain: 1, credit: { title: "Typing medium speed", author: "teto_yasha", license: "Public domain", url: commons("Typing medium speed.ogg") } },
-  { id: "train", label: "Train", group: "Places", file: "scape/train.m4a", gain: 1, credit: { title: "Taiwan railways EP727 train cars", author: "Jidanni", license: "CC0", url: commons("Taiwan railways EP727 train cars sounds.ogg") } },
+  { id: "keyboard", label: "Keyboard", group: "Places", file: "scape/keyboard.m4a", gain: 1, credit: { title: "Keyboard", ...MOODIST } },
+  { id: "train", label: "Train", group: "Places", file: "scape/train.m4a", gain: 1, credit: { title: "Inside a Train", ...MOODIST } },
   { id: "brown", label: "Brown noise", group: "Noise", file: "noise-brown", gain: 1, credit: { title: "Brownnoise", author: "Wikimedia Commons", license: "Public domain", url: commons("Brownnoise.ogg") } },
   { id: "grey", label: "Grey noise", group: "Noise", file: "noise-grey", gain: 0.33, credit: { title: "Gray noise", author: "Omegatron", license: "Public domain", url: commons("Gray noise.ogg") } },
   { id: "white", label: "White noise", group: "Noise", file: "noise-white", gain: 1, credit: { title: "White noise", author: "Wikimedia Commons", license: "Public domain", url: commons("White noise.ogg") } }

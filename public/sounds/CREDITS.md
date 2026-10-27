@@ -18,22 +18,32 @@ Kenney asks for credit as a courtesy, though CC0 doesn't require it: thanks to K
 
 ## Background-sound mixer (`scape/`)
 
-Each of these is a section of the original recording, trimmed, cross-faded into a seamless loop and
-level-matched (about −26 dBFS RMS; fire is soft-limited, keyboard sits lower on purpose), then
-encoded to AAC. The CC BY ones need credit, which the mixer's "Sound credits" list also gives.
+Most loops come from two open-source ambient-sound apps whose sounds are curated for background
+listening, not field recordings:
 
-| File | Original | Author | Licence |
-|---|---|---|---|
-| `scape/rain.m4a` | [Rain against the window.ogg](https://commons.wikimedia.org/wiki/File:Rain_against_the_window.ogg) | cori | Public domain |
-| `scape/thunder.m4a` | [Thunderstorm after hot summer day 17 minutes 02 of 04.ogg](https://commons.wikimedia.org/wiki/File:Thunderstorm_after_hot_summer_day_17_minutes_02_of_04.ogg) (85–177 s) | stephan | Public domain |
-| `scape/wind.m4a` | [Wind in forest (Gravity Sound).wav](https://commons.wikimedia.org/wiki/File:Wind_in_forest_(Gravity_Sound).wav) | Gravity Sound | CC BY 4.0 |
-| `scape/fire.m4a` | [Campfire sound ambience.ogg](https://commons.wikimedia.org/wiki/File:Campfire_sound_ambience.ogg) (10–48 s) | Glaneur de sons | CC BY 3.0 |
-| `scape/birds.m4a` | [Birds Perungalathur Reserved Forest.wav](https://commons.wikimedia.org/wiki/File:Birds_Perungalathur_Reserved_Forest.wav) | Mk170101 | CC BY 4.0 |
-| `scape/waves.m4a` | [Ocean Waves on a Tropical Beach.ogg](https://commons.wikimedia.org/wiki/File:Ocean_Waves_on_a_Tropical_Beach.ogg) (20–112 s) | Jarrod Stanley | CC0 |
-| `scape/stream.m4a` | [433589 jackthemurray stream-river-water-up-close.wav](https://commons.wikimedia.org/wiki/File:433589_jackthemurray_stream-river-water-up-close.wav) | jackthemurray | CC0 |
-| `scape/cafe.m4a` | [Restaurant ambience.ogg](https://commons.wikimedia.org/wiki/File:Restaurant_ambience.ogg) | stephan | Public domain |
-| `scape/library.m4a` | [TU Delft Library, quiet study room - general ambience](https://commons.wikimedia.org/wiki/File:20121112_TU_Delft_Library,_quiet_study_room_-_general_ambience_-_SoundCloud_-_el_mar.ogg) (120–212 s) | el_mar | CC BY 3.0 |
-| `scape/keyboard.m4a` | [Typing medium speed.ogg](https://commons.wikimedia.org/wiki/File:Typing_medium_speed.ogg) | teto_yasha | Public domain |
-| `scape/train.m4a` | [Taiwan railways EP727 train cars sounds.ogg](https://commons.wikimedia.org/wiki/File:Taiwan_railways_EP727_train_cars_sounds.ogg) | Jidanni | CC0 |
+- [Blanket](https://github.com/rafaelmardojai/blanket) (GNOME): Freesound and SoundBible recordings,
+  edited by Porrumentzio to Blanket's ambience loudness guidelines, each with its licence.
+- [Moodist](https://github.com/remvze/moodist): sounds under CC0 or the Pixabay Content License. Both
+  are free to use without attribution. Moodist doesn't record which applies to each sound, or its
+  original source.
+
+Each loop is a section of that file, trimmed, cross-faded into a seamless loop and level-matched
+(about −27 dBFS RMS; fire and keyboard sit lower on purpose), then encoded to AAC. The CC BY ones
+need credit, which the mixer's "Sound credits" list also gives.
+
+| File | Original | Author | Licence | Via |
+|---|---|---|---|---|
+| `scape/rain.m4a` | [Rain](https://freesound.org/people/alex36917/sounds/524605/) | alex36917 | CC BY 4.0 | Blanket |
+| `scape/heavy-rain.m4a` | Heavy Rain | unknown | CC0 or Pixabay Content License | Moodist |
+| `scape/thunder.m4a` | [Storm](https://freesound.org/people/digifishmusic/sounds/41739/) | digifishmusic | CC BY 4.0 | Blanket |
+| `scape/wind.m4a` | Wind in Trees | unknown | CC0 or Pixabay Content License | Moodist |
+| `scape/birds.m4a` | [Birds](https://freesound.org/people/kvgarlic/sounds/156826/) | kvgarlic | CC0 | Blanket |
+| `scape/waves.m4a` | [Waves](https://freesound.org/people/Luftrum/sounds/48412/) | Luftrum | CC BY 4.0 | Blanket |
+| `scape/stream.m4a` | [Stream](https://freesound.org/people/gluckose/sounds/333987/) | gluckose | CC0 | Blanket |
+| `scape/fire.m4a` | [Fireplace](https://soundbible.com/1543-Fireplace.html) | ezwa | Public domain | Blanket |
+| `scape/cafe.m4a` | Cafe | unknown | CC0 or Pixabay Content License | Moodist |
+| `scape/library.m4a` | [TU Delft Library, quiet study room - general ambience](https://commons.wikimedia.org/wiki/File:20121112_TU_Delft_Library,_quiet_study_room_-_general_ambience_-_SoundCloud_-_el_mar.ogg) (120–212 s) | el_mar | CC BY 3.0 | Wikimedia Commons |
+| `scape/keyboard.m4a` | Keyboard | unknown | CC0 or Pixabay Content License | Moodist |
+| `scape/train.m4a` | Inside a Train | unknown | CC0 or Pixabay Content License | Moodist |
 
 The mixer's brown, grey and white noise are the `noise-*` files listed above.

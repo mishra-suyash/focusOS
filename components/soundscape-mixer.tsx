@@ -6,6 +6,7 @@ import {
   Bird,
   CloudLightning,
   CloudRain,
+  CloudRainWind,
   Coffee,
   Droplets,
   Flame,
@@ -26,6 +27,7 @@ import { SOUNDSCAPE_GROUPS, SOUNDSCAPE_TRACKS, type SoundscapeTrackId } from "@/
 
 const TRACK_ICONS: Record<SoundscapeTrackId, LucideIcon> = {
   rain: CloudRain,
+  heavyRain: CloudRainWind,
   thunder: CloudLightning,
   wind: Wind,
   fire: Flame,
