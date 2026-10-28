@@ -25,7 +25,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
-import { BrandMark } from "@/components/brand-mark";
 import { useTheme } from "@/components/theme-provider";
 import { DaySessionBar } from "@/components/day-session-bar";
 import { FloatingWidgetButton } from "@/components/floating-widget-button";
@@ -192,7 +191,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (loading) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-ink-50 dark:bg-ink-950">
-        <BrandMark className="h-12 w-12 animate-pulse" />
+        <span className="grid h-12 w-12 animate-pulse place-items-center rounded-lg bg-moss-600 text-xl font-bold text-white">F</span>
         <p className="text-sm text-ink-500 dark:text-ink-400">Loading FocusOS…</p>
       </div>
     );
@@ -213,7 +212,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen bg-ink-50 text-ink-950 dark:bg-ink-950 dark:text-ink-50">
       <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r border-ink-200 bg-white p-4 dark:border-ink-800 dark:bg-ink-900 lg:flex">
         <Link href="/dashboard" className="flex items-center gap-3 px-2 py-3">
-          <BrandMark className="h-9 w-9" />
+          <span className="grid h-9 w-9 place-items-center rounded-md bg-moss-600 font-bold text-white">F</span>
           <div>
             <p className="text-base font-semibold">FocusOS</p>
             <p className="text-xs text-ink-500 dark:text-ink-400">Research command center</p>
@@ -241,7 +240,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col overflow-y-auto border-r border-ink-200 bg-white p-4 dark:border-ink-800 dark:bg-ink-900">
             <div className="mb-6 flex items-center justify-between gap-2">
               <Link href="/dashboard" className="flex items-center gap-3 px-2 py-1" onClick={() => setMobileNavOpen(false)}>
-                <BrandMark className="h-9 w-9" />
+                <span className="grid h-9 w-9 place-items-center rounded-md bg-moss-600 font-bold text-white">F</span>
                 <div>
                   <p className="text-base font-semibold">FocusOS</p>
                   <p className="text-xs text-ink-500 dark:text-ink-400">Research command center</p>
