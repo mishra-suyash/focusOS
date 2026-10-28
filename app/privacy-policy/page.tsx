@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { BrandMark } from "@/components/brand-mark";
 
 export const metadata: Metadata = {
   title: "Privacy Policy — FocusOS",
@@ -26,7 +27,7 @@ export default function PrivacyPolicyPage() {
     <main className="min-h-screen bg-ink-50 px-4 py-10 dark:bg-ink-950">
       <div className="mx-auto max-w-3xl">
         <div className="mb-8 flex items-center gap-3">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-md bg-moss-600 text-base font-bold text-white">F</div>
+          <BrandMark className="h-10 w-10" />
           <div>
             <p className="text-sm font-semibold text-ink-950 dark:text-ink-50">FocusOS</p>
             <Link href="/dashboard" className="text-xs text-moss-700 hover:underline dark:text-moss-400">
