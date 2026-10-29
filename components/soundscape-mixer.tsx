@@ -4,6 +4,8 @@ import { clsx } from "clsx";
 import {
   AudioWaveform,
   Bird,
+  Bookmark,
+  BookmarkPlus,
   CloudLightning,
   CloudRain,
   CloudRainWind,
@@ -23,7 +25,15 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useSoundscape } from "@/components/soundscape-provider";
-import { SOUNDSCAPE_GROUPS, SOUNDSCAPE_TRACKS, type SoundscapeTrackId } from "@/lib/soundscape";
+import {
+  mixIsEmpty,
+  sameLevels,
+  SOUNDSCAPE_GROUPS,
+  SOUNDSCAPE_PRESETS,
+  SOUNDSCAPE_TRACKS,
+  type SoundscapeLevels,
+  type SoundscapeTrackId
+} from "@/lib/soundscape";
 
 const TRACK_ICONS: Record<SoundscapeTrackId, LucideIcon> = {
   rain: CloudRain,
@@ -48,7 +58,7 @@ const TAP_ON_LEVEL = 0.5;
 
 /**
  * The top-bar mixer: one button that opens a panel of per-sound sliders (rain at 60%, fire at 30%…),
- * a master volume, play/pause, and "play while focusing". Mounted in the app shell's header and the
+ * a master volume, play/pause, "play while focusing", four premixes and one saved "My mix". Mounted in the app shell's header and the
  * reader's toolbar; both drive the one mix in `SoundscapeProvider`.
  */
 export function SoundscapeButton() {
@@ -91,7 +101,8 @@ export function SoundscapeButton() {
 }
 
 function MixerPanel() {
-  const { mix, active, setLevel, setMaster, setAutoFocus, clear, toggle } = useSoundscape();
+  const { mix, active, setLevel, setMaster, setAutoFocus, clear, applyLevels, saveCustom, toggle } = useSoundscape();
+  const customOn = mix.custom != null && sameLevels(mix.levels, mix.custom);
 
   return (
     <div
@@ -125,6 +136,40 @@ function MixerPanel() {
         <input type="checkbox" className="h-3.5 w-3.5" checked={mix.autoFocus} onChange={(e) => setAutoFocus(e.target.checked)} />
         Also play while a focus session runs
       </label>
+
+      <div className="mt-3">
+        <p className="label mb-1">Mixes</p>
+        <div className="grid grid-cols-2 gap-1.5">
+          {SOUNDSCAPE_PRESETS.map((preset) => (
+            <MixChip
+              key={preset.id}
+              label={preset.label}
+              levels={preset.levels}
+              on={sameLevels(mix.levels, preset.levels)}
+              onClick={() => applyLevels(preset.levels)}
+            />
+          ))}
+        </div>
+        <div className="mt-1.5 flex gap-1.5">
+          {mix.custom ? (
+            <MixChip label="My mix" icon={Bookmark} levels={mix.custom} on={customOn} onClick={() => applyLevels(mix.custom!)} className="flex-1" />
+          ) : (
+            <p className="flex-1 rounded-md border border-dashed border-ink-200 px-2 py-1.5 text-xs text-ink-500 dark:border-ink-700">
+              My mix: not saved yet
+            </p>
+          )}
+          <button
+            type="button"
+            className="btn-secondary px-2 py-1 text-xs"
+            onClick={saveCustom}
+            disabled={mixIsEmpty(mix.levels) || customOn}
+            title={mix.custom ? "Replace My mix with the sounds playing now" : "Save the sounds playing now as My mix"}
+          >
+            <BookmarkPlus className="h-3.5 w-3.5" />
+            {customOn ? "Saved" : "Save"}
+          </button>
+        </div>
+      </div>
 
       {SOUNDSCAPE_GROUPS.map((group) => (
         <div key={group} className="mt-3">
@@ -184,6 +229,45 @@ function MixerPanel() {
         </ul>
       </details>
     </div>
+  );
+}
+
+/** A premix (or My mix): plays it in place of the current levels. Highlighted while the levels match it. */
+function MixChip({
+  label,
+  levels,
+  on,
+  onClick,
+  icon: Icon,
+  className
+}: {
+  label: string;
+  levels: SoundscapeLevels;
+  on: boolean;
+  onClick: () => void;
+  icon?: LucideIcon;
+  className?: string;
+}) {
+  const contents = SOUNDSCAPE_TRACKS.filter((track) => (levels[track.id] ?? 0) > 0)
+    .map((track) => track.label)
+    .join(", ");
+  return (
+    <button
+      type="button"
+      className={clsx(
+        "flex min-w-0 items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs",
+        on
+          ? "border-moss-500 bg-moss-600/10 font-medium text-moss-700 dark:text-moss-400"
+          : "border-ink-200 text-ink-700 hover:bg-ink-50 dark:border-ink-700 dark:text-ink-200 dark:hover:bg-ink-800",
+        className
+      )}
+      onClick={onClick}
+      aria-pressed={on}
+      title={contents}
+    >
+      {Icon ? <Icon className="h-3.5 w-3.5 shrink-0" /> : null}
+      <span className="truncate">{label}</span>
+    </button>
   );
 }
 

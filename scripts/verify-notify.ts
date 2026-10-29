@@ -13,7 +13,16 @@ import {
   reminderClaimWindowMs,
   resolveSounds
 } from "../lib/cues";
-import { mixIsEmpty, mixVolumes, resolveSoundscape, soundscapeActive, SOUNDSCAPE_TRACKS } from "../lib/soundscape";
+import {
+  levelsForStorage,
+  mixIsEmpty,
+  mixVolumes,
+  resolveSoundscape,
+  sameLevels,
+  soundscapeActive,
+  SOUNDSCAPE_PRESETS,
+  SOUNDSCAPE_TRACKS
+} from "../lib/soundscape";
 
 const failures: string[] = [];
 
@@ -81,11 +90,11 @@ check("lead key keeps plan/16's shape", cueKeys.sittingLead("2026-10-27", "s") =
   check("unknown ids and zero levels are dropped, levels clamped", saved.levels.rain === 0.6 && !("fire" in saved.levels) && !("bogus" in saved.levels) && saved.levels.cafe === 1, JSON.stringify(saved));
   const volumes = mixVolumes(saved);
   check("track volume = level x master x gain", volumes.find((v) => v.track.id === "rain")?.volume === 0.3, JSON.stringify(volumes.map((v) => [v.track.id, v.volume])));
-  const grey = mixVolumes({ levels: { grey: 1 }, master: 1, autoFocus: true });
+  const grey = mixVolumes({ levels: { grey: 1 }, master: 1, autoFocus: true, custom: null });
   check("grey noise is evened out by its gain", grey[0]?.volume === 0.33);
   check("every track has a credit with a licence", SOUNDSCAPE_TRACKS.every((t) => t.credit.license && t.credit.url && t.credit.author));
 
-  const mix = { levels: { rain: 0.5 }, master: 1, autoFocus: true };
+  const mix = { levels: { rain: 0.5 }, master: 1, autoFocus: true, custom: null };
   check("play button plays", soundscapeActive({ mix, playing: true, focusRunning: false, runId: "a" }));
   check("auto-plays while focusing", soundscapeActive({ mix, playing: false, focusRunning: true, runId: "a" }));
   check("paused during a countdown stays quiet for that countdown", !soundscapeActive({ mix, playing: false, focusRunning: true, runId: "a", mutedRunId: "a" }));
@@ -93,6 +102,26 @@ check("lead key keeps plan/16's shape", cueKeys.sittingLead("2026-10-27", "s") =
   check("no auto-play when switched off", !soundscapeActive({ mix: { ...mix, autoFocus: false }, playing: false, focusRunning: true, runId: "a" }));
   check("an empty mix never plays", !soundscapeActive({ mix: { ...mix, levels: {} }, playing: true, focusRunning: true, runId: "a" }));
   check("master at zero never plays", !soundscapeActive({ mix: { ...mix, master: 0 }, playing: true, focusRunning: false, runId: "a" }));
+
+  // Presets and "My mix".
+  const trackIds = new Set(SOUNDSCAPE_TRACKS.map((track) => track.id));
+  check("four premixes", SOUNDSCAPE_PRESETS.length === 4);
+  check(
+    "every premix uses known tracks at levels in 0-1",
+    SOUNDSCAPE_PRESETS.every((preset) => !mixIsEmpty(preset.levels) && Object.entries(preset.levels).every(([id, level]) => trackIds.has(id as never) && level! > 0 && level! <= 1))
+  );
+  check("premix ids are unique", new Set(SOUNDSCAPE_PRESETS.map((preset) => preset.id)).size === SOUNDSCAPE_PRESETS.length);
+  const withCustom = resolveSoundscape({ soundscape: { levels: { rain: 0.5 }, master: 1, autoFocus: true, custom: { fire: 0.4, rain: 0, bogus: 1 } } });
+  check("a saved mix resolves, silent and unknown tracks dropped", withCustom.custom?.fire === 0.4 && !("rain" in (withCustom.custom ?? {})) && !("bogus" in (withCustom.custom ?? {})), JSON.stringify(withCustom.custom));
+  check("no saved mix resolves to null", resolveSoundscape({ soundscape: { levels: {}, master: 1, autoFocus: true } }).custom === null);
+  check("an all-zero saved mix counts as none", resolveSoundscape({ soundscape: { levels: {}, master: 1, autoFocus: true, custom: { rain: 0 } } }).custom === null);
+
+  // Firestore deep-merges maps, so every write must name every track.
+  const stored = levelsForStorage({ cafe: 0.5 });
+  check("stored levels name every track, silent ones as 0", Object.keys(stored).length === SOUNDSCAPE_TRACKS.length && stored.cafe === 0.5 && stored.rain === 0, JSON.stringify(stored));
+  const merged = resolveSoundscape({ soundscape: { levels: { ...levelsForStorage({ fire: 0.5, birds: 0.3 }), ...levelsForStorage(SOUNDSCAPE_PRESETS[0].levels) }, master: 1, autoFocus: true } });
+  check("a preset written over another mix leaves none of the old tracks", sameLevels(merged.levels, SOUNDSCAPE_PRESETS[0].levels), JSON.stringify(merged.levels));
+  check("sameLevels ignores explicit zeros", sameLevels({ rain: 0.5 }, { rain: 0.5, fire: 0 }) && !sameLevels({ rain: 0.5 }, { rain: 0.5, fire: 0.1 }));
 }
 
 // N3 keeps its pre-setting behaviour.

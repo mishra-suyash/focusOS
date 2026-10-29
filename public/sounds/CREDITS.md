@@ -1,7 +1,10 @@
 # Sound credits
 
-Every file here is public domain. Each `.m4a` is an AAC re-encode of the `.ogg` beside it, made
+The cues below are public domain. Each `.m4a` is an AAC re-encode of the `.ogg` beside it, made
 with macOS `afconvert`, for browsers that can't play Ogg Vorbis (Safari). Chosen by plan/18.
+
+Browsers keep every file here in Cache Storage after the first download (`lib/sounds.ts`). **When you
+replace a file, bump `SOUND_CACHE` in `lib/sounds.ts`**, or browsers that have it keep playing the old one.
 
 | File | Source | Original file | Licence |
 |---|---|---|---|
@@ -10,9 +13,6 @@ with macOS `afconvert`, for browsers that can't play Ogg Vorbis (Safari). Chosen
 | `heads-up` | Kenney, *Interface Sounds* — https://kenney.nl/assets/interface-sounds | `glass_001.ogg` | CC0 1.0 |
 | `reminder` | Kenney, *Interface Sounds* | `drop_003.ogg` | CC0 1.0 |
 | `block-closed` | Kenney, *Interface Sounds* | `confirmation_001.ogg` | CC0 1.0 |
-| `noise-brown` | Wikimedia Commons — https://commons.wikimedia.org/wiki/File:Brownnoise.ogg | `Brownnoise.ogg` | Public domain (PD-ineligible) |
-| `noise-grey` | Wikimedia Commons — https://commons.wikimedia.org/wiki/File:Gray_noise.ogg | `Gray_noise.ogg` | Public domain (PD-ineligible) |
-| `noise-white` | Wikimedia Commons — https://commons.wikimedia.org/wiki/File:White_noise.ogg | `White_noise.ogg` | Public domain (PD-ineligible) |
 
 Kenney asks for credit as a courtesy, though CC0 doesn't require it: thanks to Kenney (www.kenney.nl).
 
@@ -45,5 +45,9 @@ need credit, which the mixer's "Sound credits" list also gives.
 | `scape/library.m4a` | [TU Delft Library, quiet study room - general ambience](https://commons.wikimedia.org/wiki/File:20121112_TU_Delft_Library,_quiet_study_room_-_general_ambience_-_SoundCloud_-_el_mar.ogg) (120–212 s) | el_mar | CC BY 3.0 | Wikimedia Commons |
 | `scape/keyboard.m4a` | Keyboard | unknown | CC0 or Pixabay Content License | Moodist |
 | `scape/train.m4a` | Inside a Train | unknown | CC0 or Pixabay Content License | Moodist |
+| `scape/brown-noise.m4a` | [Brownnoise](https://commons.wikimedia.org/wiki/File:Brownnoise.ogg) | — | Public domain (PD-ineligible) | Wikimedia Commons |
+| `scape/grey-noise.m4a` | [Gray noise](https://commons.wikimedia.org/wiki/File:Gray_noise.ogg) | Omegatron | Public domain (PD-ineligible) | Wikimedia Commons |
+| `scape/white-noise.m4a` | [White noise](https://commons.wikimedia.org/wiki/File:White_noise.ogg) | — | Public domain (PD-ineligible) | Wikimedia Commons |
 
-The mixer's brown, grey and white noise are the `noise-*` files listed above.
+The three noise loops are the whole 10 s recordings, cross-faded (1.5 s) into 8.5 s loops at their
+original level; grey noise is about 3× louder, which the mixer evens out with its per-track gain.

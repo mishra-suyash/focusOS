@@ -1073,7 +1073,13 @@ export interface UserSettings {
   /** The background-sound mixer (lib/soundscape.ts): a level per track (0–1, absent = off), a master
    *  level, and whether the mix also plays during focus countdowns. Absent = empty mix, autoFocus on.
    *  The play/pause state itself is per device, not synced (`focusos-soundscape` in localStorage). */
-  soundscape?: { levels: Partial<Record<string, number>>; master: number; autoFocus: boolean };
+  soundscape?: {
+    levels: Partial<Record<string, number>>;
+    master: number;
+    autoFocus: boolean;
+    /** "My mix": the one mix the user saved, to come back to after trying a preset. */
+    custom?: Partial<Record<string, number>>;
+  };
   /** plan/18 §4 — OS notifications beyond the sitting ones above. `timerEnd` absent = off;
    *  `blockStart` absent = on (what the block-start notification did before it had a setting). */
   notifications?: { timerEnd?: boolean; blockStart?: boolean };

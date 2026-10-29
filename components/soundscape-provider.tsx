@@ -4,12 +4,15 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useFocusSession } from "@/components/focus-session-provider";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import {
+  levelsForStorage,
   mixIsEmpty,
   mixVolumes,
   resolveSoundscape,
+  sameLevels,
   soundscapeActive,
   STARTER_MIX,
   type ResolvedSoundscape,
+  type SoundscapeLevels,
   type SoundscapeTrackId
 } from "@/lib/soundscape";
 import { AUDIO_UNLOCKED_EVENT, audioReady, setMix, stopMix, unlockAudio } from "@/lib/sounds";
@@ -18,7 +21,7 @@ import { AUDIO_UNLOCKED_EVENT, audioReady, setMix, stopMix, unlockAudio } from "
  * The background-sound mixer's state, above every route (root layout) so the top bar, the reader's
  * toolbar and the floating widget all drive one mix.
  *
- * - The mix (levels, master, "play while focusing") is a synced setting. Slider drags apply to the
+ * - The mix (levels, master, "play while focusing", the saved "My mix") is a synced setting. Slider drags apply to the
  *   sound at once and are written to Firestore once the drag settles, not on every tick.
  * - Play/pause is per device: pressing play on a laptop shouldn't start rain on a phone. It lives in
  *   localStorage, so every tab on this device agrees on it (the `storage` event).
@@ -44,6 +47,10 @@ interface SoundscapeContextValue {
   setMaster: (level: number) => void;
   setAutoFocus: (on: boolean) => void;
   clear: () => void;
+  /** Replaces every level with `levels` (a preset, or "My mix") and plays it. */
+  applyLevels: (levels: SoundscapeLevels) => void;
+  /** Keeps the current levels as "My mix". */
+  saveCustom: () => void;
   /** Play when quiet, pause when sounding — the one button in the top bar and the floating widget. */
   toggle: () => void;
 }
@@ -92,7 +99,14 @@ export function SoundscapeProvider({ children }: { children: React.ReactNode }) 
       setDraft(next);
       if (writeTimer.current) window.clearTimeout(writeTimer.current);
       writeTimer.current = window.setTimeout(() => {
-        update({ soundscape: { levels: next.levels, master: next.master, autoFocus: next.autoFocus } });
+        update({
+          soundscape: {
+            levels: levelsForStorage(next.levels),
+            master: next.master,
+            autoFocus: next.autoFocus,
+            ...(next.custom ? { custom: levelsForStorage(next.custom) } : {})
+          }
+        });
         writeTimer.current = null;
       }, WRITE_DELAY_MS);
     },
@@ -120,6 +134,14 @@ export function SoundscapeProvider({ children }: { children: React.ReactNode }) 
       setMaster: (level) => commit({ ...mix, master: Math.max(0, Math.min(1, level)) }),
       setAutoFocus: (on) => commit({ ...mix, autoFocus: on }),
       clear: () => commit({ ...mix, levels: {} }),
+      applyLevels: (levels) => {
+        unlockAudio();
+        commit({ ...mix, levels, master: mix.master > 0 ? mix.master : 1 });
+        writePlayState({ playing: true });
+      },
+      saveCustom: () => {
+        if (!mixIsEmpty(mix.levels)) commit({ ...mix, custom: mix.levels });
+      },
       toggle: () => {
         unlockAudio();
         if (active) {
@@ -195,11 +217,11 @@ function useSoundscapePlayer(active: boolean, volumes: { file: string; volume: n
   }, [active]);
 }
 
-/** Key order differs between a draft and what Firestore hands back, so compare track by track. */
+/** Key order and explicit zeros differ between a draft and what Firestore hands back, so compare track by track. */
 function sameMix(a: ResolvedSoundscape, b: ResolvedSoundscape) {
   if (a.master !== b.master || a.autoFocus !== b.autoFocus) return false;
-  const ids = new Set([...Object.keys(a.levels), ...Object.keys(b.levels)]) as Set<SoundscapeTrackId>;
-  return [...ids].every((id) => (a.levels[id] ?? 0) === (b.levels[id] ?? 0));
+  if (!sameLevels(a.levels, b.levels)) return false;
+  return a.custom && b.custom ? sameLevels(a.custom, b.custom) : !a.custom && !b.custom;
 }
 
 export function useSoundscape() {
