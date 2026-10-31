@@ -62,8 +62,10 @@ async function fetchSound(url: string): Promise<Response> {
   const cache = await soundCache();
   const hit = await cache?.match(url).catch(() => undefined);
   if (hit) return hit;
-  const response = await fetch(url);
-  if (response.ok && cache) await cache.put(url, response.clone()).catch(() => undefined);
+  // "reload" skips the HTTP cache: a partial entry left there by an <audio> element's range requests
+  // came back as a 206 — truncated bytes to decode, and a response Cache Storage refuses to keep.
+  const response = await fetch(url, { cache: "reload" });
+  if (response.status === 200 && cache) await cache.put(url, response.clone()).catch(() => undefined);
   return response;
 }
 
