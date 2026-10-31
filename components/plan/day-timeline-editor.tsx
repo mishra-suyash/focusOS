@@ -30,7 +30,7 @@ import {
   sortedSlots,
   userSelectableSlotTypes
 } from "@/lib/schedule";
-import { addDaysToKey, todayKey } from "@/lib/dates";
+import { addDaysToKey, dateKeyOfIso, todayKey } from "@/lib/dates";
 import { MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay } from "@/lib/timeline";
 import type { Checkpoint, Course, DailySchedule, DayTemplate, Goal, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
@@ -131,7 +131,7 @@ export function DayTimelineEditor({
   // until the timer stopped writing them, and older break docs must not draw as work on the lane.
   const { items: allSessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
   const todaySessions = useMemo(
-    () => allSessions.filter((session) => session.mode === "work" && session.completedAt.startsWith(dateKey)),
+    () => allSessions.filter((session) => session.mode === "work" && dateKeyOfIso(session.completedAt) === dateKey),
     [allSessions, dateKey]
   );
 

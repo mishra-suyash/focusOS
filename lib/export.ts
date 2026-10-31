@@ -1,4 +1,5 @@
 import { getDocs, orderBy, type QueryConstraint } from "firebase/firestore";
+import { todayKey } from "@/lib/dates";
 import { fetchCollection, fetchCourseCheckpoints, fetchCourseClassLogs, paperSubcollection } from "@/lib/firestore";
 import type {
   AiInsight,
@@ -110,7 +111,7 @@ export async function downloadPomodoroCsv(uid: string) {
   const rows = sessions.map((session) =>
     headers.map((key) => csvCell(session[key as keyof PomodoroSession])).join(",")
   );
-  downloadBlob([headers.join(","), ...rows].join("\n"), `focusos-pomodoro-log-${new Date().toISOString().slice(0, 10)}.csv`, "text/csv");
+  downloadBlob([headers.join(","), ...rows].join("\n"), `focusos-pomodoro-log-${todayKey()}.csv`, "text/csv");
 }
 
 function csvCell(value: unknown) {

@@ -6,7 +6,7 @@ import { useAuth } from "@/components/auth-provider";
 import { useDay } from "@/hooks/use-day";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { blockStartNotificationsOn, cueEnabled, cueKeys, reminderClaimWindowMs, resolveSounds } from "@/lib/cues";
-import { todayKey, weekStartKey } from "@/lib/dates";
+import { dateKeyOfIso, todayKey, weekStartKey } from "@/lib/dates";
 import { courseSlotsForDate } from "@/lib/courses";
 import { deliverCue, notificationsAllowed } from "@/lib/notify";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
@@ -407,7 +407,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         // (`course-${courseId}-${sessionId}`, `routineSlotsForDate`'s own ids) — coverage must only
         // ever look at today's own sessions, or a session logged against last Thursday's identical
         // slot id would silently count toward today's.
-        const todaySessions = sessions.filter((session) => session.completedAt.startsWith(today));
+        const todaySessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === today);
         let changed = false;
         todaySlots = todaySchedule.slots.map((slot) => {
           if (slot.status === "completed") return slot;
@@ -422,7 +422,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       }
 
       const focusedMinutes = sessions
-        .filter((item) => item.mode === "work" && item.completedAt.startsWith(today))
+        .filter((item) => item.mode === "work" && dateKeyOfIso(item.completedAt) === today)
         .reduce((sum, item) => sum + item.minutes, 0);
       const snapshot = buildLoadIndexSnapshot({
         scheduledDeepWorkMinutes: scheduleSummary(todaySlots).plannedDeepWork,
@@ -440,7 +440,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       // reason as the Load Index one: a historical record that must not silently change when a later
       // edit changes what "today" would compute to. Every field is derived from data already stored
       // elsewhere, so a missing snapshot is simply recomputed for display.
-      const todaySessions = sessions.filter((session) => session.completedAt.startsWith(today));
+      const todaySessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === today);
       const game = computeDayScore({
         slots: todaySlots,
         sessions: todaySessions,

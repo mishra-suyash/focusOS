@@ -1,4 +1,5 @@
 import { getDay, parseISO } from "date-fns";
+import { dateKeyOfIso } from "@/lib/dates";
 import { minutesFromTime, minutesToTime } from "@/lib/schedule";
 import type { ReadingHabit, ScheduleSlot, ScheduleSlotType, SlotObjectiveRef, TaskBucket, UserSettings } from "@/types";
 
@@ -672,7 +673,7 @@ export function releasableSlots(params: {
       if (slot.id.startsWith("commitment-") || slot.id === "weekly-planning") continue;
       if (slot.status !== "upcoming") continue;
       if (!isPlannerMade(slot, weekStart)) continue;
-      const worked = sessions.some((session) => session.mode === "work" && session.slotId === slot.id && session.completedAt.startsWith(dateKey) && session.minutes > 0);
+      const worked = sessions.some((session) => session.mode === "work" && session.slotId === slot.id && dateKeyOfIso(session.completedAt) === dateKey && session.minutes > 0);
       if (worked) continue;
       released.push({ dateKey, slot, family: slotFamily(slot, dateKey) });
     }

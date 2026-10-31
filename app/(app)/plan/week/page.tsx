@@ -29,7 +29,7 @@ import {
   syncRevisionTemplate,
   type PlanningCutoff
 } from "@/lib/courses";
-import { addDaysToKey, todayKey, weekDates, weekStartKey } from "@/lib/dates";
+import { addDaysToKey, dateKeyOfIso, todayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { clearDayOff, fetchCourseClassLogs, saveDailySchedule, saveWeeklyReviewFields, setDayOff, updateCourse, updateGoal, updatePaper, updateTask } from "@/lib/firestore";
 import { isGoalActiveForDate } from "@/lib/goals";
 import { computeDebtHours, computeLoadIndexStreak, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
@@ -1416,7 +1416,7 @@ function PlanWeekContent() {
             (slot) =>
               isPlannerMade(slot, weekStart) &&
               (schedule.dateKey < todayK || minutesFromTime(slot.endTime) <= now.minutes) &&
-              sittingOutcome(slot, sessions.filter((session) => session.completedAt.startsWith(schedule.dateKey))) !== "closed"
+              sittingOutcome(slot, sessions.filter((session) => dateKeyOfIso(session.completedAt) === schedule.dateKey)) !== "closed"
           )
         ).length
     : 0;

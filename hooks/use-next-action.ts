@@ -11,7 +11,7 @@ import { useLiveLoadIndex } from "@/hooks/use-live-load-index";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { plannableTasks } from "@/lib/courses";
-import { weekDates, weekStartKey } from "@/lib/dates";
+import { dateKeyOfIso, weekDates, weekStartKey } from "@/lib/dates";
 import { pickNextAction, type NextAction } from "@/lib/next-action";
 import { describeObjective, sittingStartArgs, type SittingStartArgs } from "@/lib/objectives";
 import { currentMinute, getActiveSlot, getNextSlot, sortedSlots } from "@/lib/schedule";
@@ -78,7 +78,7 @@ export function useNextAction(todayKey: string): {
     isDayOff: Boolean(day?.dayOff)
   });
 
-  const todaysSessions = sessions.filter((session) => session.completedAt.startsWith(todayKey));
+  const todaysSessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === todayKey);
   const ctx = { courses, papers, checkpoints: allCheckpoints, tasks, goals };
   const argsFor = (slot: ScheduleSlot) => sittingStartArgs(slot, describeObjective(slot, ctx), todaysSessions);
 

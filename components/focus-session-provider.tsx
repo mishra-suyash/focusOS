@@ -9,7 +9,7 @@ import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { useFocusContext } from "@/hooks/use-focus-context";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { cueEnabled, cueKeys, resolveSounds, type CueName } from "@/lib/cues";
-import { todayKey } from "@/lib/dates";
+import { dateKeyOfIso, todayKey } from "@/lib/dates";
 import { fetchCollection, incrementTaskCompletedPomodoros, savePomodoro, saveDailySchedule, updatePomodoro } from "@/lib/firestore";
 import { anyFocusOSWindowFocused, deliverCue, installFocusBeacon } from "@/lib/notify";
 import { installAudioUnlock } from "@/lib/sounds";
@@ -263,7 +263,7 @@ async function syncSlotAutoStatus(uid: string, slotId: string): Promise<string |
   // A recurring class/routine slot reuses the same id on every date it materializes on — restrict
   // coverage to today's own sessions so a session logged weeks ago against the same slot id never
   // counts toward today's block.
-  const todaySessions = sessions.filter((session) => session.completedAt.startsWith(dateKey));
+  const todaySessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === dateKey);
   if (slotAutoStatus(slot, todaySessions) !== "completed") return null;
   await saveDailySchedule(uid, {
     dateKey,

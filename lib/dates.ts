@@ -4,6 +4,15 @@ export function todayKey(date = new Date()) {
   return format(date, "yyyy-MM-dd");
 }
 
+/**
+ * The local day (the same frame as `todayKey`) an ISO timestamp like `completedAt` falls on. Its first
+ * ten characters are the UTC date instead: in IST a session finished at 00:15 would read as the day
+ * before, dropping out of today's stats, its block's coverage and the streak.
+ */
+export function dateKeyOfIso(iso: string) {
+  return todayKey(new Date(iso));
+}
+
 export function weekStartKey(date = new Date()) {
   return format(startOfWeek(date, { weekStartsOn: 1 }), "yyyy-MM-dd");
 }

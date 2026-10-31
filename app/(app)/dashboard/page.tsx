@@ -27,7 +27,7 @@ import { useNextAction } from "@/hooks/use-next-action";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { friendlyDate, todayKey } from "@/lib/dates";
+import { dateKeyOfIso, friendlyDate, todayKey } from "@/lib/dates";
 import { resolveDashboardWidgets } from "@/lib/dashboard-widgets";
 import { saveDailySchedule, saveDayFields, updateTask } from "@/lib/firestore";
 import { categoryLabels } from "@/lib/options";
@@ -76,7 +76,7 @@ function DashboardContent() {
   const dailySchedule = dailySchedules.find((item) => item.dateKey === today);
   // Focus sessions only — every use below (history, sitting coverage, the Now card) is about work,
   // and break docs logged before the timer stopped writing them must not read as work.
-  const todaysSessions = sessions.filter((session) => session.mode === "work" && session.completedAt.startsWith(today));
+  const todaysSessions = sessions.filter((session) => session.mode === "work" && dateKeyOfIso(session.completedAt) === today);
   const metrics = todayMetrics(tasks, sessions);
   const [note, setNote] = useState(day?.scratchpad ?? "");
 

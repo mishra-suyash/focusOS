@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { InfoHint } from "@/components/info-hint";
 import { useUserCollection } from "@/hooks/use-user-collection";
+import { todayKey } from "@/lib/dates";
 import { createPaperGroup, createRevisionItem, deletePaperGroup, updatePaperGroup } from "@/lib/firestore";
 import { computeRepeatedAuthors, computeSharedCitations } from "@/lib/papergroups";
 import type { Paper, PaperGroup, PaperGroupKind } from "@/types";
@@ -43,7 +44,7 @@ export function PaperGroupsPanel({ papers }: { papers: Paper[] }) {
       refId: group.id,
       title: group.name,
       ladderIndex: 0,
-      dueDate: new Date().toISOString().slice(0, 10),
+      dueDate: todayKey(),
       reps: 0,
       lapses: 0,
       suspended: false

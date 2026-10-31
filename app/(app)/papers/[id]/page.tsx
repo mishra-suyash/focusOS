@@ -20,6 +20,7 @@ import { useUserCollection } from "@/hooks/use-user-collection";
 import { callAiTask } from "@/lib/ai/client";
 import type { ReadingPlanOutput } from "@/lib/ai/schemas";
 import { subscribeDoc, updatePaper } from "@/lib/firestore";
+import { dateKeyOfIso } from "@/lib/dates";
 import { derivePaperStatus, nextReadingPass, PASS_LABELS, paperStatusLabels, totalReadingMinutes } from "@/lib/papers";
 import type { FileRef, GoalKind, Pass1Output, Pass2Output, Paper, PomodoroSession } from "@/types";
 
@@ -152,7 +153,7 @@ export default function PaperDetailPage() {
                 {paper.previousPasses.map((entry, index) => (
                   <li key={index}>
                     {PASS_LABELS[entry.passNo]}
-                    {entry.state.completedAt ? ` · finished ${entry.state.completedAt.slice(0, 10)}` : ""}
+                    {entry.state.completedAt ? ` · finished ${dateKeyOfIso(entry.state.completedAt)}` : ""}
                     {(entry.state.output as Pass2Output | undefined)?.outcome ? ` · ${(entry.state.output as Pass2Output).outcome.replace(/-/g, " ")}` : ""}
                     {(entry.state.output as Pass2Output | undefined)?.summary ? ` — “${(entry.state.output as Pass2Output).summary}”` : ""}
                   </li>

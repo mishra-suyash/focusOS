@@ -1,10 +1,10 @@
-import { lastSevenDays, todayKey } from "@/lib/dates";
+import { dateKeyOfIso, lastSevenDays, todayKey } from "@/lib/dates";
 import type { Category, Day, PomodoroSession, Task } from "@/types";
 
 export function todayMetrics(tasks: Task[], sessions: PomodoroSession[]) {
   const today = todayKey();
-  const todaysSessions = sessions.filter((session) => session.completedAt.startsWith(today));
-  const completedTasks = tasks.filter((task) => task.completedAt?.startsWith(today));
+  const todaysSessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === today);
+  const completedTasks = tasks.filter((task) => task.completedAt && dateKeyOfIso(task.completedAt) === today);
   return {
     pomodoros: todaysSessions.filter((session) => session.mode === "work").length,
     focusedMinutes: todaysSessions.reduce((sum, session) => sum + (session.mode === "work" ? session.minutes : 0), 0),
@@ -14,7 +14,7 @@ export function todayMetrics(tasks: Task[], sessions: PomodoroSession[]) {
 }
 
 export function calculateStreak(sessions: PomodoroSession[]) {
-  const activeDates = new Set(sessions.filter((s) => s.mode === "work").map((s) => s.completedAt.slice(0, 10)));
+  const activeDates = new Set(sessions.filter((s) => s.mode === "work").map((s) => dateKeyOfIso(s.completedAt)));
   let streak = 0;
   let cursor = new Date();
   while (activeDates.has(todayKey(cursor))) {
@@ -27,7 +27,7 @@ export function calculateStreak(sessions: PomodoroSession[]) {
 export function weeklyPomodoros(sessions: PomodoroSession[], days: string[] = lastSevenDays()) {
   return days.map((day) => ({
     day: day.slice(5),
-    pomodoros: sessions.filter((s) => s.mode === "work" && s.completedAt.startsWith(day)).length
+    pomodoros: sessions.filter((s) => s.mode === "work" && dateKeyOfIso(s.completedAt) === day).length
   }));
 }
 
@@ -38,7 +38,7 @@ export function focusedMinutesByCategory(sessions: PomodoroSession[], days: stri
   return categories.map((category) => ({
     category,
     minutes: sessions
-      .filter((s) => s.mode === "work" && s.category === category && dateSet.has(s.completedAt.slice(0, 10)))
+      .filter((s) => s.mode === "work" && s.category === category && dateSet.has(dateKeyOfIso(s.completedAt)))
       .reduce((sum, session) => sum + session.minutes, 0)
   }));
 }
@@ -46,7 +46,7 @@ export function focusedMinutesByCategory(sessions: PomodoroSession[], days: stri
 export function completedTasksByDay(tasks: Task[], days: string[] = lastSevenDays()) {
   return days.map((day) => ({
     day: day.slice(5),
-    completed: tasks.filter((task) => task.completedAt?.startsWith(day)).length
+    completed: tasks.filter((task) => task.completedAt && dateKeyOfIso(task.completedAt) === day).length
   }));
 }
 
@@ -58,7 +58,7 @@ export function completedTasksByDay(tasks: Task[], days: string[] = lastSevenDay
 export function completionRate(tasks: Task[], days: string[] = lastSevenDays()) {
   const dateSet = new Set(days);
   const relevant = tasks.filter(
-    (task) => (task.dueDate && dateSet.has(task.dueDate)) || (task.completedAt && dateSet.has(task.completedAt.slice(0, 10)))
+    (task) => (task.dueDate && dateSet.has(task.dueDate)) || (task.completedAt && dateSet.has(dateKeyOfIso(task.completedAt)))
   );
   if (relevant.length === 0) return 0;
   return Math.round((relevant.filter((task) => task.status === "done").length / relevant.length) * 100);
