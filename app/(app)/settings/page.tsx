@@ -312,9 +312,12 @@ function TimezoneSelect({ value, onChange }: { value: string; onChange: (value: 
   if (!zones) {
     return <input className="input w-48" value={value} onChange={(e) => onChange(e.target.value)} placeholder="e.g. Asia/Kolkata" />;
   }
+  // Chrome's list uses legacy names (Asia/Calcutta, not the DEFAULT_TIMEZONE Asia/Kolkata); a value
+  // missing from it would make the select silently show the first zone (Africa/Abidjan).
+  const options = zones.includes(value) ? zones : [value, ...zones];
   return (
     <select className="input w-48" value={value} onChange={(e) => onChange(e.target.value)}>
-      {zones.map((zone) => (
+      {options.map((zone) => (
         <option key={zone} value={zone}>
           {zone}
         </option>
