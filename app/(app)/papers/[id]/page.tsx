@@ -116,7 +116,7 @@ export default function PaperDetailPage() {
 
       <PaperStatusActions paper={paper} library={library} sessions={sessions} hasFile={Boolean(file) && isEnabled("paperTools")} className="mb-6" />
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 xl:grid-cols-[1fr_320px]">
         <div className="space-y-6">
           <section className="card p-5" id="pass-1">
             <h2 className="mb-3 flex items-center gap-1 text-lg font-semibold">

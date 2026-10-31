@@ -445,7 +445,7 @@ function SlotEditor({
           </Link>
         </div>
       ) : null}
-      <div className="grid gap-3 lg:grid-cols-[1fr_120px_120px]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-[1fr_120px_120px]">
         <input className="input" value={slot.title} disabled={isLocked} onChange={(event) => onChange({ ...slot, title: event.target.value })} />
         <input className="input" type="time" value={slot.startTime} disabled={isLocked} onChange={(event) => onChange({ ...slot, startTime: event.target.value })} />
         <input className="input" type="time" value={slot.endTime} disabled={isLocked} onChange={(event) => onChange({ ...slot, endTime: event.target.value })} />
@@ -455,7 +455,7 @@ function SlotEditor({
           <select className="input" value={slot.type} disabled={isLocked} onChange={(event) => onChange({ ...slot, type: event.target.value as ScheduleSlotType })}>
             {userSelectableSlotTypes.map((type) => <option key={type} value={type}>{slotTypeLabels[type]}</option>)}
           </select>
-          <div className="grid gap-3 lg:grid-cols-[1fr_180px]">
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-[1fr_180px]">
             <textarea className="input min-h-20" value={slot.note ?? ""} onChange={(event) => onChange({ ...slot, note: event.target.value })} placeholder="Optional note" />
             <select className="input" value={slot.status} onChange={(event) => onChange({ ...slot, status: event.target.value as ScheduleSlot["status"] })}>
               <option value="upcoming">Upcoming</option>

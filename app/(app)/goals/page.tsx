@@ -30,7 +30,7 @@ function GoalsPageContent() {
   return (
     <>
       <SectionHeader title="Goals" eyebrow="The long-horizon layer that survives term boundaries" />
-      <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 xl:grid-cols-[380px_1fr]">
         <section id="goal-new" className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">New goal</h2>
           <div id="goal-template-picker">

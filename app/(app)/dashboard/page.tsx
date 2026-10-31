@@ -288,7 +288,7 @@ function DashboardContent() {
         cards that the old fixed-height layout started silently clipping the
         bottom of the right column instead of scrolling to it).
       */}
-      <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)_340px]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 xl:grid-cols-[340px_minmax(0,1fr)_340px]">
         <div className="space-y-4">
           <PomodoroTimer sessions={todaysSessions} tasks={tasks} activeSitting={activeSitting} onStartSitting={startSitting} compact />
           <section className="card p-4">

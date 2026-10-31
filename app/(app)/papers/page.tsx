@@ -122,7 +122,7 @@ export default function PapersPage() {
           <p className="mt-1 text-xs text-ink-500">Below 50% means you&apos;re probably over-reading.</p>
         </div>
       </div>
-      <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 xl:grid-cols-[380px_1fr]">
         <section id="paper-add" className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Add a paper</h2>
           <PaperForm onCreate={async (paper) => void (await createPaper(user!.uid, paper))} courses={courses} />

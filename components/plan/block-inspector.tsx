@@ -167,7 +167,7 @@ export function BlockInspector({
         ))}
       </select>
       <MoreOptions>
-        <div className="grid gap-3 lg:grid-cols-[1fr_180px]">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-[1fr_180px]">
           <textarea
             className="input min-h-20"
             value={slot.note ?? ""}

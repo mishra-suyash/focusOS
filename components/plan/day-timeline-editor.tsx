@@ -643,7 +643,7 @@ export function DayTimelineEditor({
         {announcement.text}
       </div>
 
-      <section aria-label="Day timeline" aria-describedby="timeline-keyboard-help" className="grid gap-4 lg:grid-cols-[1fr_320px]">
+      <section aria-label="Day timeline" aria-describedby="timeline-keyboard-help" className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[1fr_320px]">
         <p id="timeline-keyboard-help" className="sr-only">
           Tab to a block to select it. Arrow keys move the selected block by 15 minutes, hold Shift for 1 hour. Alt plus
           arrow keys resizes the end, Alt and Shift together resizes the start. Press N to create a block at the focused

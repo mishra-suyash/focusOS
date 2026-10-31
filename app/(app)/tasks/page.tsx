@@ -57,7 +57,7 @@ export default function TasksPage() {
   return (
     <>
       <SectionHeader title="Tasks" eyebrow="Capture, clarify, complete" />
-      <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 xl:grid-cols-[380px_1fr]">
         <div className="space-y-6">
           <section id="task-quick-add" className="card p-5">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">

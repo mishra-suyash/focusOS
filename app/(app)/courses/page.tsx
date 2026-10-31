@@ -110,7 +110,7 @@ function CoursesPageContent() {
   return (
     <>
       <SectionHeader title="Courses" eyebrow="Coursework and class schedule" />
-      <div className="grid gap-6 xl:grid-cols-[380px_1fr]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6 xl:grid-cols-[380px_1fr]">
         <section id="course-add" className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Add a course</h2>
           <CourseForm terms={terms} onCreate={handleCreateCourse} />
