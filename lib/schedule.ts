@@ -123,7 +123,12 @@ export function isLockedSlot(slot: ScheduleSlot): boolean {
  * unconditionally because locked slots are never deletable (`isLockedSlot`) — there is no
  * deliberate removal this could ever resurrect. */
 export function mergeMissingLockedSlots(existing: ScheduleSlot[], wanted: ScheduleSlot[]): ScheduleSlot[] {
-  const missing = wanted.filter((slot) => !existing.some((item) => item.id === slot.id));
+  // A routine block yields to whatever is already on the day, as everywhere else: an edited routine
+  // gets new ids (Sleep 23:00–07:00 is `-wake`/`-bed`, 01:30–07:00 is one id), and appending it over
+  // the saved old one stacked two Sleeps — a day `validateSlots` rejects, autosaved as is.
+  const overlapsExisting = (slot: ScheduleSlot) =>
+    existing.some((item) => minutesFromTime(slot.startTime) < minutesFromTime(item.endTime) && minutesFromTime(item.startTime) < minutesFromTime(slot.endTime));
+  const missing = wanted.filter((slot) => !existing.some((item) => item.id === slot.id) && !(slot.id.startsWith("routine-") && overlapsExisting(slot)));
   return missing.length > 0 ? sortedSlots([...existing, ...missing]) : existing;
 }
 
