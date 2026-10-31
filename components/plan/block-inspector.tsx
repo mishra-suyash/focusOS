@@ -8,7 +8,7 @@ import { TypedTimeInput } from "@/components/plan/typed-time-input";
 import { describeObjective, objectiveChipText } from "@/lib/objectives";
 import { isActivePaper, nextReadingPass, PASS_LABELS, readingOrder } from "@/lib/papers";
 import { taskBucketLabels, taskBuckets } from "@/lib/options";
-import { isLockedSlot, minutesFromTime, slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
+import { isLockedSlot, minutesFromTime, REST_SLOT_TYPES, slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
 import { categoryForSlotType, rangeOverlapsSlots } from "@/lib/timeline";
 import type { Checkpoint, Course, Goal, Paper, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
 
@@ -244,20 +244,23 @@ export function BlockInspector({
           </div>
         </div>
       </MoreOptions>
-      <Link
-        href={`/dashboard?${new URLSearchParams({
-          startFocus: "1",
-          label: slot.title,
-          category: categoryForSlotType(slot.type),
-          slotId: slot.id,
-          ...(slot.courseId ? { courseId: slot.courseId } : {}),
-          ...(slot.bucket ? { bucket: slot.bucket } : {})
-        }).toString()}`}
-        className="btn-secondary w-full py-1.5 text-xs"
-      >
-        <Play className="h-3.5 w-3.5" />
-        Start focus session
-      </Link>
+      {/* Not for sleep, meals, breaks or free time — same rule as the Now card. */}
+      {!REST_SLOT_TYPES.has(slot.type) ? (
+        <Link
+          href={`/dashboard?${new URLSearchParams({
+            startFocus: "1",
+            label: slot.title,
+            category: categoryForSlotType(slot.type),
+            slotId: slot.id,
+            ...(slot.courseId ? { courseId: slot.courseId } : {}),
+            ...(slot.bucket ? { bucket: slot.bucket } : {})
+          }).toString()}`}
+          className="btn-secondary w-full py-1.5 text-xs"
+        >
+          <Play className="h-3.5 w-3.5" />
+          Start focus session
+        </Link>
+      ) : null}
       {!isLocked ? (
         <button className="btn-secondary w-full py-1.5 text-xs text-red-600" onClick={onDelete}>
           Delete block
