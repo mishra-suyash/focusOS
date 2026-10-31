@@ -1,7 +1,7 @@
 # FocusLab overnight run — log
 
-Status: RUNNING (resumed 02:58 after advisor: no stop condition hit — continue to 06:00).
-Next: templates save/browse; then finalize report + commit report/log/evidence to the QA branch; shut down ~05:45 or at stop condition.
+Status: FINISHED 03:33 Sun — all planned and follow-up checks done; no stop condition hit.
+Next: none — see final-report.md.
 
 ## Usage readings
 - 14:40 Sat (planning): 5h 16% (resets 18:40), 7d 63% (resets Sun 03:30)
@@ -16,6 +16,7 @@ Next: templates save/browse; then finalize report + commit report/log/evidence t
 - 02:04 Sun: 72% / 73%
 - 02:53 Sun: window reset (5h n/a), 7d 73%
 - 03:09 Sun: 12% / 75%
+- 03:29 Sun: 31% / 77%
 - 21:59 Sat (start): 5h 0% (resets 02:50 Sun), 7d 65% (resets 03:30 Sun)
 
 ## Checklist
@@ -26,7 +27,7 @@ Next: templates save/browse; then finalize report + commit report/log/evidence t
 - [x] P4 Sunday workday (00:40; block-close seam not testable live — see F26)
 - [x] P5 Review & analytics
 - [x] P6 Robustness (390px layout skipped)
-- [ ] P7 Final report (draft exists; finalize at end)
+- [x] P7 Final report (03:33)
 
 ## Results
 - Preflight: dev server OK (slow-FS warning, first compile 14s); signed in suyashbima@; branch qa/overnight-2026-11-01.
@@ -208,6 +209,20 @@ Next: templates save/browse; then finalize report + commit report/log/evidence t
   saved template silently becomes Default (plan/day/page.tsx:165 isDefault: templates.length === 0), and Start day
   uses the default (workday-session-provider.tsx:305) → every day's Start day now applies the Tuesday template instead
   of Research Day. Badge visible; not fixed.
+- F42 ⚠️ (med, design) Marking Wed 11-04 (committed NEXT week) a day off keeps all its work sittings (PS3 prep, Midsem prep,
+  RM revision, Reading) on the day; the day-off Replan nudge exists only for the current week (plan/week:2287), so nothing
+  re-places them until Monday — a sick day planned ahead silently loses that work. Undone afterwards.
+- R23 ✅ Self-review of the branch diff: date-helper hunks mechanical/correct; no ISO-vs-dateKey range comparisons left
+  (papers.ts:213/224/439 compare ISO with ISO). Found a regression in my own F9 fix (2ab10d6 made bucket "over"
+  impossible) → corrected to ask = max(target, taskEstimates); verified 11-09 to-place = asked, 11-02 "All placed",
+  no [weekplan] console warnings.
+- R24 ✅ Insights renders (rule-based fallback; not generated), Help links all resolve, calendar → Dec 2026 shows 7 classes
+  and none after the 12-15 term end.
+- Sibling hunt: only one first-run-ref save guard (F36, fixed). F43 ❌ (med) block inspector (new day view) offered
+  "Start focus session" on Sleep/meal blocks (F23 sibling). FIXED (see git log). Verified: Sleep → no link, ML block → link.
+- N12 ℹ️ Fake-clock peek at Monday 09:05 (Date override after load) didn't re-render — abandoned, real clock restored.
+  After End day, Workload shows "0-day streak · 9.4h catch-up" (was 3.5h): Sunday's 02:55 snapshot counts as a short day.
+- F10 sibling scan (text-join DOM scan on 12 pages): only intentional unit suffixes (45m, 5d, 8h/week) — no more bugs.
 
 ## Fixes (branch qa/overnight-2026-11-01)
 - 47ef8d6 plan-week copy spacing

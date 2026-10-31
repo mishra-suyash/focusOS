@@ -1,7 +1,7 @@
 # FocusLab overnight end-to-end run — report
 
 Run: Sat 31 Oct 21:59 → Sun 1 Nov (see "Run end").
-Account: test account suyashbima@ only. Branch: `qa/overnight-2026-11-01` (15 commits, not merged, not pushed).
+Account: test account suyashbima@ only. Branch: `qa/overnight-2026-11-01` (18 commits: 16 fixes + 2 report commits; not merged, not pushed).
 Scenario: a PhD scholar sets up a semester, plans next week, works late across midnight, reads, reviews.
 Full chronological log with every check: `run-log.md` in the same folder.
 
@@ -15,9 +15,10 @@ Full chronological log with every check: `run-log.md` in the same folder.
 | F40 | Med | Phone width: Today was 672 px wide in a 388 px viewport, Papers 581 px (layout grids had no base column). | 2ce8a87 |
 | F36 | Med (dev) | New day view wrote the day on every open (StrictMode re-run), showing its own echo as "changed in another tab". | 2c7e3f0 |
 | F12 | Med | After accepting the week, checkpoint prep was re-offered on days already holding their share, as 15–22 min sittings (below the 20-min minimum); would recur on every accept. | a74552d |
-| F9 | Med | Week header said more "to place" than "asked in all"; a course cell was blank though 75 min of its task work was waiting; that work would read as "over" once placed. | 2ab10d6 |
+| F9 | Med | Week header said more "to place" than "asked in all"; a course cell was blank though 75 min of its task work was waiting; that work would read as "over" once placed. | 2ab10d6 + follow-up |
 | F8 | Med | An unplaced sitting showed "5 min" and, given a day, was placed as a 5-minute block. | 7bd6267 |
 | F23 | Med | During Sleep, the Now card offered "Start focus · 7h" and started a 60-min focus session logged against Sleep; the idle timer and What's-next start also followed rest blocks. | 12d5e04 |
+| F43 | Med | The new day view's block inspector offered "Start focus session" on Sleep/meal blocks too (sibling of F23). | see git log |
 | F24 | Med | After abandoning a block's sitting, the next session for *any* task ran that block's length (60:00 vs 25:00 preset) and could log to it. | 2cd77d6 |
 | F34 | Med | Background-sound mixer (latest commit): loops fetched as 206 Partial Content from a stale HTTP-cache entry decoded **truncated** and were never stored in Cache Storage (refetched every play). | 8b65cd6 |
 | F30 | Low | "Committed 2026-10-31" for a commit at 01:07 on 11-01 (+ 4 other UTC date displays). | 7510334 |
@@ -82,14 +83,16 @@ Leftover artifact: Mon 11-02 has two "Prep: Problem set 3" sittings (from F12, b
 
 ## Run end
 
-Stopped at 02:58 IST by choice, not by a limit: every scenario phase (setup, week planning, midnight crossing, Sunday
-work, review/analytics, robustness) was done, and the rest of the scenario's night is the Sleep block, which ends after
-the 06:00 window. No usage limit was hit — highest readings: session 72% (02:04, then reset at 02:50), week 73%.
-No pause was needed.
+Finished at 03:33 IST, before the 06:00 window closed: every scenario phase plus a second round of checks (all 13
+verify scripts, typecheck, lint, production build, side effects of each fix, week-grid drag, the new day view, Day score,
+Deep dive, templates, assessment status, phone width, sibling-bug hunts) was done, and what remains are the design
+decisions above. Idling to 06:00 would only have spent weekly usage. No usage limit was hit: highest readings were
+session 72% (02:04; the window reset at 02:50) and week 77%. No pause was needed.
 
-Not covered: 390 px phone layout (resizing would have moved your Chrome window), AI features and Google Calendar
-(excluded by you), notifications in a genuinely hidden tab (automated tabs always report visible), hydration/break
-reminders (suppressed during the Sleep block all night).
+Not covered: AI features and Google Calendar (excluded by you), the admin panel (its settings are global to the shared
+Firebase project), notifications in a genuinely hidden tab (automated tabs always report visible), hydration/break
+reminders (suppressed by the Sleep block all night), and Monday-morning behaviour of the committed week.
 
-Left running/installed: dev server stopped; `caffeinate` expires on its own ~07:00; the usage status line and gate hook
-stay in `.claude/settings.local.json` (git-excluded) — the gate is inactive without `.claude/overnight-run.active`.
+Cleaned up: loop stopped, run flag removed, dev server stopped, `caffeinate` stopped, test tab closed. Still installed
+(git-excluded, harmless): the usage status line and the PreToolUse gate hook in `.claude/settings.local.json` — the gate
+is inactive without `.claude/overnight-run.active`; ask to remove them.
