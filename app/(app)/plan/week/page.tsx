@@ -1720,7 +1720,7 @@ function PlanWeekContent() {
         <section className="card mb-6 max-w-5xl border-l-2 border-l-moss-600 p-4 text-sm">
           <p className="font-medium">Your week is shaped differently now.</p>
           <p className="mt-1 text-ink-500">
-            Work is planned in <strong>sittings</strong> — blocks capped at {chunkOpts.maxChunkMinutes} minutes, split across the week and
+            Work is planned in <strong>sittings</strong> — blocks capped at {chunkOpts.maxChunkMinutes}{" "}minutes, split across the week and
             labelled &ldquo;2 of 7&rdquo;. A three-hour revision target used to become seven 25-minute blocks, because 25 is the focus
             timer&apos;s default, not a considered length for a block of revision; it now becomes a few longer ones. Big tasks that
             never fit anywhere are split instead of landing under &ldquo;Didn&apos;t fit&rdquo;. Change the cap in{" "}
@@ -2011,7 +2011,7 @@ function PlanWeekContent() {
           />
         </div>
         <p className="mb-2 text-xs text-ink-500">
-          Hours for the whole week, per course. Each is split into sittings of at most {chunkOpts.maxChunkMinutes} minutes, after taking off
+          Hours for the whole week, per course. Each is split into sittings of at most {chunkOpts.maxChunkMinutes}{" "}minutes, after taking off
           what&apos;s already on a day or dismissed.
         </p>
         <div className="overflow-x-auto">
