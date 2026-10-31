@@ -42,6 +42,9 @@ export function useReadingSitting() {
     minutes?: number;
     /** Default true. False when the caller is already on the page the sitting should show. */
     navigate?: boolean;
+    /** The opt-in Deep dive: started from its own section, it is never "owed" (`nextReadingPass` is
+     * null once a Read ends anything but "persevere"), so it is named here or it never begins. */
+    deepDive?: boolean;
   }): Promise<StartSittingResult> {
     const { paper } = opts;
     if (!user) return "busy";
@@ -56,7 +59,7 @@ export function useReadingSitting() {
       return "resumed";
     }
 
-    const passNo = nextReadingPass(paper);
+    const passNo = opts.deepDive ? 3 : nextReadingPass(paper);
     if (passNo === 1 && !canStartReading(paper)) return "needsGoal";
 
     if (passNo !== null) {

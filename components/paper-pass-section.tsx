@@ -102,7 +102,7 @@ export function PaperPassSection({
 
   async function begin() {
     setMessage("");
-    const result = await startSitting({ paper, library, sessions, navigate: !compact });
+    const result = await startSitting({ paper, library, sessions, navigate: !compact, deepDive: passNo === 3 });
     if (result === "busy") setMessage("Another focus session is in progress — finish it first.");
     if (result === "needsGoal") setMessage("Pick why you're reading this first.");
   }
