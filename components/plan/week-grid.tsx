@@ -458,7 +458,9 @@ export function ProposalInspector({
   /** plan/17 §7.4 — in Replan mode sittings are accepted together ("Accept replan"), not one by one. */
   hideAccept?: boolean;
 }) {
-  const duration = Math.max(5, minutesFromTime(proposal.endTime) - minutesFromTime(proposal.startTime));
+  // An unplaced sitting carries 00:00–00:00; its length is still `durationMinutes`, not the 5-minute floor.
+  const span = minutesFromTime(proposal.endTime) - minutesFromTime(proposal.startTime);
+  const duration = Math.max(5, span > 0 ? span : proposal.durationMinutes);
   const placed = proposal.fits || Boolean(proposal.startTime && proposal.startTime !== "00:00");
 
   return (
