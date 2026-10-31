@@ -14,7 +14,7 @@ import { plannableTasks } from "@/lib/courses";
 import { dateKeyOfIso, weekDates, weekStartKey } from "@/lib/dates";
 import { pickNextAction, type NextAction } from "@/lib/next-action";
 import { describeObjective, sittingStartArgs, type SittingStartArgs } from "@/lib/objectives";
-import { currentMinute, getActiveSlot, getNextSlot, sortedSlots } from "@/lib/schedule";
+import { currentMinute, getActiveSlot, getNextSlot, REST_SLOT_TYPES, sortedSlots } from "@/lib/schedule";
 import type { Course, DailySchedule, Goal, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 /** Exactly `startFocus`'s parameter shape (components/focus-session-provider.tsx). */
@@ -83,7 +83,7 @@ export function useNextAction(todayKey: string): {
   const argsFor = (slot: ScheduleSlot) => sittingStartArgs(slot, describeObjective(slot, ctx), todaysSessions);
 
   const activeSlot = getActiveSlot(slots, minute);
-  const active = activeSlot && activeSlot.type !== "class" ? { slot: activeSlot, startArgs: argsFor(activeSlot) } : null;
+  const active = activeSlot && activeSlot.type !== "class" && !REST_SLOT_TYPES.has(activeSlot.type) ? { slot: activeSlot, startArgs: argsFor(activeSlot) } : null;
 
   function startSitting(slot: ScheduleSlot, startArgs: FocusStartArgs) {
     if (slot.type === "reading") {
@@ -94,6 +94,6 @@ export function useNextAction(todayKey: string): {
   }
 
   const slot = action?.slot;
-  const startArgs = slot && slot.type !== "class" ? argsFor(slot) : null;
+  const startArgs = slot && slot.type !== "class" && !REST_SLOT_TYPES.has(slot.type) ? argsFor(slot) : null;
   return { action, startArgs, active, startSitting };
 }

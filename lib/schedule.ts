@@ -1,6 +1,10 @@
 import { Book, Briefcase, Brain, CalendarClock, Car, Coffee, Dumbbell, GraduationCap, Moon, Sparkles, Utensils, type LucideIcon } from "lucide-react";
 import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotStatus, ScheduleSlotType, Task } from "@/types";
 
+/** Blocks that are rest, not work: no focus sitting is started from them, the idle timer doesn't follow
+ * them, and no start/end prompt is shown for them. */
+export const REST_SLOT_TYPES = new Set<string>(["break", "meal", "sleep", "free"]);
+
 export const slotTypes: ScheduleSlotType[] = [
   "deep_work",
   "reading",

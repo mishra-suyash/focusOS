@@ -18,6 +18,7 @@ import {
   getActiveSlot,
   getNextSlot,
   minutesFromTime,
+  REST_SLOT_TYPES,
   slotProgressPercent,
   slotTypeLabels,
   slotTypeStyles,
@@ -113,6 +114,8 @@ export function NowCard({
         </Link>
       );
     }
+    // Sleep, meals and breaks are not sittings: "Start focus" there armed a session logged against them.
+    if (REST_SLOT_TYPES.has(active.type)) return null;
     // A break is not focus — starting a sitting simply ends it. Only a focus session in progress
     // (running *or* paused) blocks, because starting another would replace it.
     if (focusInProgress) {

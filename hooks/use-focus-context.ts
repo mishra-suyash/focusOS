@@ -5,7 +5,7 @@ import { useAuth } from "@/components/auth-provider";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { todayKey } from "@/lib/dates";
 import { subscribeDoc } from "@/lib/firestore";
-import { getActiveSlot, sortedSlots } from "@/lib/schedule";
+import { getActiveSlot, REST_SLOT_TYPES, sortedSlots } from "@/lib/schedule";
 import { categoryForSlotType } from "@/lib/timeline";
 import type { Category, DailySchedule, TaskBucket } from "@/types";
 
@@ -42,7 +42,8 @@ export function useFocusContext(): FocusContext | null {
 
   if (!schedule) return null;
   const active = getActiveSlot(sortedSlots(schedule.slots), minute);
-  if (!active) return null;
+  // The idle timer follows work blocks only; following Sleep would log a late-night session against it.
+  if (!active || REST_SLOT_TYPES.has(active.type)) return null;
 
   const linkedTaskIds = active.assignedTaskIds ?? [];
   return {

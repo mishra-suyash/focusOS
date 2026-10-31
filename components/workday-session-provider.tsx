@@ -25,7 +25,7 @@ import {
   undoEndWorkdaySession
 } from "@/lib/firestore";
 import { buildLoadIndexSnapshot } from "@/lib/loadindex";
-import { currentMinute, getActiveSlot, minutesFromTime, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
+import { currentMinute, getActiveSlot, minutesFromTime, REST_SLOT_TYPES, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePackWorkdayTemplate } from "@/lib/templates/builtin";
 import { isBreakMode } from "@/lib/terms";
 import { computeDayScore, isScoredSitting } from "@/lib/gamify";
@@ -37,7 +37,6 @@ function slotsOverlap(a: ScheduleSlot, b: ScheduleSlot) {
   return minutesFromTime(a.startTime) < minutesFromTime(b.endTime) && minutesFromTime(b.startTime) < minutesFromTime(a.endTime);
 }
 
-const NO_PROMPT_SLOT_TYPES = new Set(["break", "meal", "sleep", "free"]);
 
 export interface ReminderEvent {
   kind: "hydration" | "break";
@@ -165,7 +164,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
           currentActive &&
           currentActive.id !== lastActiveSlotIdRef.current &&
           blockStartNotificationsOn(cueSettingsRef.current.settings) &&
-          !NO_PROMPT_SLOT_TYPES.has(currentActive.type)
+          !REST_SLOT_TYPES.has(currentActive.type)
         ) {
           const key = cueKeys.blockStart(cueSettingsRef.current.today, currentActive.id);
           void deliverCue({ key, notification: { body: `${currentActive.title} starting.`, tag: key } });
@@ -177,7 +176,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         fireReminder("hydration", "Time for a water break. Stay hydrated.");
         return;
       }
-      const inRestSlot = schedule ? NO_PROMPT_SLOT_TYPES.has(getActiveSlot(sortedSlots(schedule.slots))?.type ?? "") : false;
+      const inRestSlot = schedule ? REST_SLOT_TYPES.has(getActiveSlot(sortedSlots(schedule.slots))?.type ?? "") : false;
       if (inRestSlot) {
         lastBreakRef.current = now;
         return;
