@@ -628,8 +628,9 @@ function PlanWeekContent() {
     );
     row.sittings = offeredSince(start);
     // Task estimates can exceed the bucket's hours target (or a 0h target); that work is still asked
-    // for, not "to place" beyond the ask now nor "over" once it's placed.
-    row.ask = Math.max(target, row.placed + row.dismissed + toPlaceOf(row));
+    // for, not "to place" beyond the ask now nor "over" once it's placed. Generic sittings placed past
+    // the target still read as over.
+    row.ask = Math.max(target, taskEstimates);
     bucketLedger.set(family, row);
     if (row.ask > 0 || row.placed > 0 || row.sittings.length > 0) ledger.push(row);
   }
