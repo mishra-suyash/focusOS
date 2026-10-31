@@ -210,7 +210,9 @@ export function DayTimelineEditor({
       return;
     }
     onSlotsChange(slots);
-    if (action !== "reset") scheduleSave(slots);
+    // "init" too: under StrictMode the effect re-runs on mount with the ref already set, and saved
+    // the untouched seed — writing the day on every open and flagging that echo as "another tab".
+    if (action !== "reset" && action !== "init") scheduleSave(slots);
   }, [slots, action]);
 
   // Runs after React has committed the render whose `slots` no longer contains the deleted block,
