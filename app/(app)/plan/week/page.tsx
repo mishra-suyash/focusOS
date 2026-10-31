@@ -645,12 +645,22 @@ function PlanWeekContent() {
     // Spread over the lead days still ahead — including any beyond this week, so this week takes its
     // share rather than all of it, and excluding days already behind you, so a share that fell on
     // one isn't silently lost.
+    // A lead day that already holds a prep sitting has taken its share: what's outstanding belongs to
+    // the other lead days. Without this, accepting the week re-offered the shares of days beyond it
+    // here again, in ever-smaller sittings, each time.
+    const sharedDays = new Set(
+      planningSchedules
+        .filter((s) => weekDateKeys.includes(s.dateKey) && s.slots.some((slot) => slot.objectiveRef?.kind === "checkpoint" && slot.objectiveRef.id === cp.id))
+        .map((s) => s.dateKey)
+    );
     let leadDaysLeft = 0;
     for (let back = 1; back <= cp.prepLeadDays; back += 1) {
       const d = addDaysToKey(cp.dueAt, -back);
-      if (d >= todayK && !offDateKeys.has(d)) leadDaysLeft += 1;
+      if (d >= todayK && !offDateKeys.has(d) && !sharedDays.has(d)) leadDaysLeft += 1;
     }
-    const windowDays = weekDateKeys.filter((d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt && liveDateKeys.includes(d));
+    const windowDays = weekDateKeys.filter(
+      (d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt && liveDateKeys.includes(d) && !sharedDays.has(d)
+    );
     if (prepOutstanding <= 0 || windowDays.length === 0) continue;
     const perDay = Math.max(15, Math.ceil(prepOutstanding / Math.max(1, leadDaysLeft)));
     const start = candidates.length;
