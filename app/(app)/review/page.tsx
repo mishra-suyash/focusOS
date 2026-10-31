@@ -21,7 +21,7 @@ import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { startAiJob } from "@/lib/ai/client";
 import type { GroupSynthesisOutput } from "@/lib/ai/schemas";
-import { todayKey } from "@/lib/dates";
+import { dateKeyOfIso, todayKey } from "@/lib/dates";
 import { subscribeAiJob, subscribeDueRevisionItems, updatePaperGroup, updateRevisionItem } from "@/lib/firestore";
 import {
   DEFAULT_MAX_REVISIONS_PER_DAY,
@@ -207,7 +207,7 @@ function ReviewPageContent() {
                 <h2 className="mt-4 text-2xl font-semibold">{current.title}</h2>
                 <p className="mt-2 text-sm text-ink-500">
                   Reviewed {current.reps}× · {current.lapses} lapse{current.lapses === 1 ? "" : "s"}
-                  {current.lastReviewedAt ? ` · last on ${current.lastReviewedAt.slice(0, 10)}` : ""}
+                  {current.lastReviewedAt ? ` · last on ${dateKeyOfIso(current.lastReviewedAt)}` : ""}
                 </p>
                 <div className="mt-6 grid grid-cols-4 gap-2">
                   {GRADE_BUTTONS.map((button) => (

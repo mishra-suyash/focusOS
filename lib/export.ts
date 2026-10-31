@@ -102,7 +102,7 @@ function downloadBlob(content: string, filename: string, type: string) {
 
 export async function downloadFullExportJson(uid: string) {
   const data = await buildFullExport(uid);
-  downloadBlob(JSON.stringify(data, null, 2), `focusos-export-${data.exportedAt.slice(0, 10)}.json`, "application/json");
+  downloadBlob(JSON.stringify(data, null, 2), `focusos-export-${todayKey()}.json`, "application/json");
 }
 
 export async function downloadPomodoroCsv(uid: string) {

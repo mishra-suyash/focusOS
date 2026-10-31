@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { InfoHint } from "@/components/info-hint";
 import { useUserCollection } from "@/hooks/use-user-collection";
-import { todayKey } from "@/lib/dates";
+import { dateKeyOfIso, todayKey } from "@/lib/dates";
 import { createPaperGroup, createRevisionItem, deletePaperGroup, updatePaperGroup } from "@/lib/firestore";
 import { computeRepeatedAuthors, computeSharedCitations } from "@/lib/papergroups";
 import type { Paper, PaperGroup, PaperGroupKind } from "@/types";
@@ -145,7 +145,7 @@ function GroupRow({
         <div className="mt-3 space-y-2 text-sm">
           {group.lastSynthesis ? (
             <p className="rounded-md bg-moss-600/5 p-2 text-xs">
-              What connects these papers ({group.lastSynthesis.at.slice(0, 10)}): {group.lastSynthesis.text}
+              What connects these papers ({dateKeyOfIso(group.lastSynthesis.at)}): {group.lastSynthesis.text}
             </p>
           ) : null}
           {sharedCitations.length > 0 ? (

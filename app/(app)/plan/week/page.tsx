@@ -1655,7 +1655,7 @@ function PlanWeekContent() {
   const priorMoved = { read: 0, shelved: 0, dropped: 0 };
   for (const paper of papers) {
     const status = derivePaperStatus(paper);
-    if ((status === "read" || status === "shelved" || status === "dropped") && priorWeekDateKeys.includes(lastStatusChangeAt(paper).slice(0, 10))) priorMoved[status] += 1;
+    if ((status === "read" || status === "shelved" || status === "dropped") && priorWeekDateKeys.includes(dateKeyOfIso(lastStatusChangeAt(paper)))) priorMoved[status] += 1;
   }
   const priorReplans = priorReview?.plan?.revisions?.length ?? 0;
 
@@ -2510,7 +2510,7 @@ function PlanWeekContent() {
         <h2 className="mb-2 text-base font-semibold">5. Commit</h2>
         <p className="mb-3 text-sm text-ink-500">
           {committed
-            ? `Committed ${existingReview!.plan!.completedAt!.slice(0, 10)}.`
+            ? `Committed ${dateKeyOfIso(existingReview!.plan!.completedAt!)}.`
             : "Writes the targets, capacity, and accepted blocks onto this week's plan."}
         </p>
         <button className="btn-primary" onClick={commitWeek} disabled={committing}>
