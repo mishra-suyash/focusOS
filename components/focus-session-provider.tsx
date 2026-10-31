@@ -428,7 +428,12 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
     setCtx((current) => ({ ...current, category: next, label: current.contextTouched ? current.label : next, contextTouched: true }));
   }
   function setTaskId(next: string) {
-    setCtx((current) => ({ ...current, taskId: next, contextTouched: true }));
+    setCtx((current) =>
+      next === current.taskId
+        ? { ...current, contextTouched: true }
+        : // Another task is no longer the armed block's sitting.
+          { ...current, taskId: next, slotId: undefined, armedMinutes: undefined, paperId: undefined, passNo: undefined, findPaper: undefined, contextTouched: true }
+    );
   }
   function setSlotId(next: string | undefined) {
     setCtx((current) => ({ ...current, slotId: next, contextTouched: true }));
@@ -627,6 +632,9 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   /** Back to a fresh, idle countdown in the same mode. Discards the time on it, by request. */
   function reset() {
     setCore({ ...core, phase: "idle", targetEndTime: null, phaseChangedAt: Date.now() });
+    // The discarded sitting's block, armed length and reading pass go with it: kept, the next Start
+    // (even for another task) ran that block's length and logged against that block.
+    setCtx((current) => ({ ...current, slotId: undefined, armedMinutes: undefined, paperId: undefined, passNo: undefined, findPaper: undefined }));
   }
 
   function skipBreak() {
