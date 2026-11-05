@@ -1,9 +1,29 @@
-import { fetchCollection, saveDailySchedule } from "@/lib/firestore";
+import { fetchCollection, fetchCourseCheckpoints, saveDailySchedule } from "@/lib/firestore";
 import { resyncRoutineOnDay, routineSlotsForDate } from "@/lib/routine";
 import { minutesFromTime, sortedSlots } from "@/lib/schedule";
 import { rangeOverlapsSlots } from "@/lib/timeline";
-import { weeklyPlanningSlotForDate, type ReleaseClock, type ReleasedSlot } from "@/lib/weekplan";
-import type { DailySchedule, RoutineBlock, ScheduleSlot, UserSettings } from "@/types";
+import { isTiedToFinishedWork, weeklyPlanningSlotForDate, type ReleaseClock, type ReleasedSlot } from "@/lib/weekplan";
+import type { Course, DailySchedule, Goal, RoutineBlock, ScheduleSlot, Task, UserSettings } from "@/types";
+
+/** A template's blocks minus any tied to work that's over, read fresh so the answer is as of now. `skipped` is their titles. */
+export async function withoutFinishedWork(uid: string, slots: ScheduleSlot[]): Promise<{ slots: ScheduleSlot[]; skipped: string[] }> {
+  const [tasks, courses, goals] = await Promise.all([
+    fetchCollection<Task>(uid, "tasks"),
+    fetchCollection<Course>(uid, "courses"),
+    fetchCollection<Goal>(uid, "goals")
+  ]);
+  const checkpoints = (await Promise.all(courses.map((course) => fetchCourseCheckpoints(uid, course.id)))).flat();
+  const work = { tasks, courses, goals, checkpoints };
+  return {
+    slots: slots.filter((slot) => !isTiedToFinishedWork(slot, work)),
+    skipped: slots.filter((slot) => isTiedToFinishedWork(slot, work)).map((slot) => slot.title)
+  };
+}
+
+/** The sentence every template path shows for what `withoutFinishedWork` left out. */
+export function finishedWorkNotice(skipped: string[]): string {
+  return `Left out ${skipped.length} block${skipped.length === 1 ? "" : "s"} for finished work: ${skipped.map((title) => `“${title}”`).join(", ")}.`;
+}
 
 /** Takes released sittings off their days. Every day is re-read first, so a tab holding a stale copy can't overwrite a newer edit. */
 export async function removeSittings(uid: string, released: ReleasedSlot[]) {

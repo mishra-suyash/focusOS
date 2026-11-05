@@ -3,7 +3,7 @@
  * Unit-test stand-in for lib/weekplan.ts (plan/14 §5.3/§5.4/§5.6, §12) — same pattern as
  * scripts/verify-tracking.ts, since this repo has no test runner.
  */
-import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, isPlannerMade, keyedAfterRemoval, placeInWindow, placeProposals, sittingsOfFinishedWork, type FinishedWork, releasableSlots, replanDiff, resolvePlacement, slotFamily, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposal, type WeekProposalCandidate } from "../lib/weekplan";
+import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, isPlannerMade, isTiedToFinishedWork, keyedAfterRemoval, placeInWindow, placeProposals, sittingsOfFinishedWork, type FinishedWork, releasableSlots, replanDiff, resolvePlacement, slotFamily, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposal, type WeekProposalCandidate } from "../lib/weekplan";
 import { minutesFromTime } from "../lib/schedule";
 import type { ScheduleSlot } from "../types";
 
@@ -327,6 +327,29 @@ const SAT = WEEK[5];
   check("work that's new this replan is 'new'", diff.added.map((p) => p.key).join() === "paper:x:0");
   check("a released sitting no longer owed is 'removed'", diff.dropped.map((d) => d.slot.id).join() === "planned-task");
   check("no room → 'didn't fit'", diff.unplaced.map((p) => p.key).join() === "revision:c:1");
+}
+
+// ---- QA decisions 2026-11-05: a template can't hand back work that's over ----
+{
+  const block = (patch: Partial<ScheduleSlot>): ScheduleSlot => ({ id: "b", title: "b", type: "deep_work", startTime: "10:00", endTime: "11:00", status: "upcoming", ...patch });
+  const work = {
+    tasks: [{ id: "open", status: "todo" }, { id: "done", status: "done" }],
+    courses: [{ id: "live", status: "active" }, { id: "gone", status: "dropped" }],
+    checkpoints: [{ id: "due", status: "upcoming" }, { id: "in", status: "submitted" }],
+    goals: [{ id: "g", status: "active", milestones: [{ id: "m1", done: false }, { id: "m2", done: true }] }, { id: "p", status: "paused", milestones: [] }]
+  };
+  check("a plain block is kept", !isTiedToFinishedWork(block({}), work));
+  check("a reading habit block is kept", !isTiedToFinishedWork(block({ objectiveRef: { kind: "readingHabit" } }), work));
+  check("live work is kept", !isTiedToFinishedWork(block({ objectiveRef: { kind: "checkpoint", id: "due" }, courseId: "live", assignedTaskIds: ["open"] }), work));
+  check("a submitted assessment's prep goes", isTiedToFinishedWork(block({ objectiveRef: { kind: "checkpoint", id: "in" } }), work));
+  check("a deleted assessment's prep goes", isTiedToFinishedWork(block({ objectiveRef: { kind: "checkpoint", id: "x" } }), work));
+  check("a done task's block goes", isTiedToFinishedWork(block({ assignedTaskIds: ["done"] }), work));
+  check("a done task's chunk goes", isTiedToFinishedWork(block({ chunk: { index: 1, total: 2, groupId: "task:done:2026-11-02" } }), work));
+  check("a generic revision chunk isn't read as a task", !isTiedToFinishedWork(block({ chunk: { index: 1, total: 2, groupId: "live:revision:2026-11-02" }, courseId: "live" }), work));
+  check("a dropped course's block goes", isTiedToFinishedWork(block({ courseId: "gone" }), work));
+  check("a paused goal's block goes", isTiedToFinishedWork(block({ objectiveRef: { kind: "goal", id: "p" } }), work));
+  check("a done milestone's block goes", isTiedToFinishedWork(block({ objectiveRef: { kind: "goal", id: "g", milestoneId: "m2" } }), work));
+  check("an open milestone's block is kept", !isTiedToFinishedWork(block({ objectiveRef: { kind: "goal", id: "g", milestoneId: "m1" } }), work));
 }
 
 // ---- QA decisions 2026-11-05: finished work gives back its future sittings ----

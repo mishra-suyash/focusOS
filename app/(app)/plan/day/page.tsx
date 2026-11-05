@@ -13,6 +13,7 @@ import { MoreOptions } from "@/components/more-options";
 import { SectionHeader } from "@/components/section-header";
 import { TemplateGalleryDialog } from "@/components/template-gallery";
 import { useAuth } from "@/components/auth-provider";
+import { useToast } from "@/components/toast-host";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useDay } from "@/hooks/use-day";
 import { useFeatures } from "@/hooks/use-features";
@@ -43,6 +44,7 @@ import {
   userSelectableSlotTypes,
   validateSlots
 } from "@/lib/schedule";
+import { finishedWorkNotice, withoutFinishedWork } from "@/lib/plan-release";
 import { commitmentSlotsForDate, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { isBreakMode } from "@/lib/terms";
@@ -64,6 +66,7 @@ export default function DayPlannerPage() {
 
 function DayPlannerContent() {
   const { user } = useAuth();
+  const toast = useToast();
   const { isEnabled } = useFeatures();
   const timelineEditorEnabled = isEnabled("planDayTimeline");
   const searchParams = useSearchParams();
@@ -140,9 +143,11 @@ function DayPlannerContent() {
     if (!user) return;
     if (slots.length > 0 && !window.confirm(`${friendlyDate(dateKey)} already has a plan. Replace it with "${template.name}"?`)) return;
     const fromTemplate = scheduleFromTemplate(template, dateKey);
-    const nextSchedule = { ...fromTemplate, slots: splitLongBlocks(fromTemplate.slots, sittingBounds(settings)) };
+    const { slots: liveSlots, skipped } = await withoutFinishedWork(user.uid, fromTemplate.slots);
+    const nextSchedule = { ...fromTemplate, slots: splitLongBlocks(liveSlots, sittingBounds(settings)) };
     setSlots(nextSchedule.slots);
     await saveDailySchedule(user.uid, nextSchedule);
+    if (skipped.length > 0) toast({ message: finishedWorkNotice(skipped) });
   }
 
   /** An org-sourced copy (`sourceTemplateId: "org:<id>"`) with a newer version published in the catalog — "Update available" (plan §7.4). Publishing/editing never touches the copy on its own; this is the explicit opt-in. */

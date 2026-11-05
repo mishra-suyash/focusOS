@@ -32,6 +32,7 @@ import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePack
 import { isBreakMode } from "@/lib/terms";
 import { computeDayScore, isScoredSitting } from "@/lib/gamify";
 import { slotAutoStatus } from "@/lib/tracking";
+import { finishedWorkNotice, withoutFinishedWork } from "@/lib/plan-release";
 import { sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import { isPlannerMade, weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term, WeeklyReview } from "@/types";
@@ -324,7 +325,8 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
           baseSlots = materializeBuiltinDayTemplate(builtin).slots.map((slot) => ({ ...slot, id: crypto.randomUUID() }));
           usedFallbackName = builtin.name;
         }
-        baseSlots = splitLongBlocks(baseSlots, sittingBounds(settings));
+        const { slots: liveSlots, skipped: finishedTitles } = await withoutFinishedWork(user.uid, baseSlots);
+        baseSlots = splitLongBlocks(liveSlots, sittingBounds(settings));
 
         const classSlots = onBreak || !isModuleEnabled(settings, "courses") ? [] : courseSlotsForDate(courses, today);
         // Routine-Blocks-and-AI-Templates spec §2.4 — routine blocks (Sleep, meals, Gym, or a
@@ -350,6 +352,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
 
         const notices: string[] = [];
         if (usedFallbackName) notices.push(`Used the ${usedFallbackName} template. Change it in Plan → Templates.`);
+        if (finishedTitles.length > 0) notices.push(finishedWorkNotice(finishedTitles));
         if (skippedTitles.length > 0) notices.push(`Skipped ${skippedTitles.length} template block${skippedTitles.length > 1 ? "s" : ""} that overlapped a class or routine block: ${skippedTitles.map((title) => `“${title}”`).join(", ")}.`);
 
         // plan/14 §7.3 S5 — "No plan for today" is honest about *why* today fell back to a

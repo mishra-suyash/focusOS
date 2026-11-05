@@ -747,6 +747,44 @@ export function sittingsOfFinishedWork(params: ReleaseClock & { schedules: { dat
   );
 }
 
+/** The state of the work a block can be tied to. */
+export interface WorkState {
+  tasks: { id: string; status: string }[];
+  courses: { id: string; status?: string }[];
+  checkpoints: { id: string; status: string }[];
+  goals: { id: string; status: string; milestones: { id: string; done: boolean }[] }[];
+}
+
+/**
+ * True when a block is tied to work that's over, or that no longer exists. A template saved from a real
+ * day keeps its blocks' ties, so without this it would hand back sittings the work has already released.
+ */
+export function isTiedToFinishedWork(slot: ScheduleSlot, work: WorkState): boolean {
+  const ref = slot.objectiveRef;
+  if (ref?.kind === "checkpoint") {
+    const checkpoint = work.checkpoints.find((item) => item.id === ref.id);
+    if (!checkpoint || ["submitted", "done", "missed"].includes(checkpoint.status)) return true;
+  }
+  if (ref?.kind === "goal") {
+    const goal = work.goals.find((item) => item.id === ref.id);
+    if (!goal || goal.status !== "active") return true;
+    if (ref.milestoneId) {
+      const milestone = goal.milestones.find((item) => item.id === ref.milestoneId);
+      if (!milestone || milestone.done) return true;
+    }
+  }
+  const taskId = slot.assignedTaskIds?.length === 1 ? slot.assignedTaskIds[0] : slot.chunk?.groupId.match(/^task:([^:]+):/)?.[1];
+  if (taskId) {
+    const task = work.tasks.find((item) => item.id === taskId);
+    if (!task || task.status === "done") return true;
+  }
+  if (slot.courseId) {
+    const course = work.courses.find((item) => item.id === slot.courseId);
+    if (!course || course.status === "dropped" || course.status === "completed") return true;
+  }
+  return false;
+}
+
 export interface ReplanDiff {
   /** A released sitting and where its family's work lands now. */
   moved: { from: ReleasedSlot; to: WeekProposal }[];

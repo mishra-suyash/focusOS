@@ -8,6 +8,8 @@ import { InfoHint } from "@/components/info-hint";
 import { createDayTemplate, saveDailySchedule, setDefaultTemplate } from "@/lib/firestore";
 import { friendlyDate } from "@/lib/dates";
 import { useUserSettings } from "@/hooks/use-user-settings";
+import { useToast } from "@/components/toast-host";
+import { finishedWorkNotice, withoutFinishedWork } from "@/lib/plan-release";
 import { sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import { formatMinutes, materializeSlots, scheduleFromTemplate, shiftTemplateSlots, slotDuration, slotTypeLabels, slotTypeStyles, sortedSlots } from "@/lib/schedule";
 import { BUILTIN_DAY_TEMPLATES, materializeBuiltinDayTemplate, type BuiltinDayTemplate } from "@/lib/templates/builtin";
@@ -38,6 +40,7 @@ export function TemplateGalleryDialog({
   onClose: () => void;
 }) {
   const { settings } = useUserSettings();
+  const toast = useToast();
   const [dayStart, setDayStart] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
@@ -47,10 +50,12 @@ export function TemplateGalleryDialog({
 
   async function applySlots(templateSlots: ScheduleSlot[], templateId?: string) {
     if (hasExistingPlan && !window.confirm(`${friendlyDate(dateKey)} already has a plan. Replace it with this template?`)) return;
-    const slots = sortedSlots(splitLongBlocks(templateSlots, sittingBounds(settings)));
+    const { slots: liveSlots, skipped } = await withoutFinishedWork(uid, templateSlots);
+    const slots = sortedSlots(splitLongBlocks(liveSlots, sittingBounds(settings)));
     const schedule: Omit<DailySchedule, "id" | "createdAt" | "updatedAt"> = { dateKey, templateId, slots };
     await saveDailySchedule(uid, schedule);
     onApplied(slots);
+    if (skipped.length > 0) toast({ message: finishedWorkNotice(skipped) });
     onClose();
   }
 

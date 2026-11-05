@@ -31,6 +31,7 @@ import {
   userSelectableSlotTypes
 } from "@/lib/schedule";
 import { addDaysToKey, scheduleDayKey, sessionSlotDayKey } from "@/lib/dates";
+import { finishedWorkNotice, withoutFinishedWork } from "@/lib/plan-release";
 import { DEFAULT_MAX_CHUNK_MINUTES, MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay, sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import type { Checkpoint, Course, DailySchedule, DayTemplate, Goal, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
@@ -379,15 +380,16 @@ export function DayTimelineEditor({
   }
 
   /** plan/13 A18 — the timeline editor's own "pull a template onto the day" action, mirroring the classic editor's `applyTemplate`. Re-merges `wantedLockedSlots` afterward so a class/routine block never gets clobbered by the template's own slots. */
-  function handleApplyTemplate() {
+  async function handleApplyTemplate() {
     const template = templates.find((item) => item.id === applyTemplateId);
     if (!template) return;
     if (slots.length > 0 && !window.confirm(`Replace today's plan with "${template.name}"?`)) return;
-    const templateSlots = splitLongBlocks(scheduleFromTemplate(template, dateKey).slots, sittingBounds(settings));
+    const { slots: liveSlots, skipped } = await withoutFinishedWork(uid, scheduleFromTemplate(template, dateKey).slots);
+    const templateSlots = splitLongBlocks(liveSlots, sittingBounds(settings));
     commitSlots(mergeMissingLockedSlots(templateSlots, wantedLockedSlots ?? []));
     setApplyTemplateOpen(false);
     setApplyTemplateId("");
-    announce(`Applied template "${template.name}".`);
+    announce(`Applied template "${template.name}".${skipped.length > 0 ? ` ${finishedWorkNotice(skipped)}` : ""}`);
   }
 
   /** S1 "Running late? Shift rest of day" — the only place `Shift`-drag's ripple math is reachable without a pointer, and today-only (it anchors at `nowMinute`, which has no meaning on another date). */

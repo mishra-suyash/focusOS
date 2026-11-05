@@ -14,6 +14,7 @@ import { plannableTasks } from "@/lib/courses";
 import { isFixedCommitmentOccurrence } from "@/lib/recurring-tasks";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 import { createDayTemplate } from "@/lib/firestore";
+import { finishedWorkNotice, withoutFinishedWork } from "@/lib/plan-release";
 import { createSlot, materializeSlots, minutesFromTime, minutesToTime, shiftTemplateSlots, slotTypeStyles, sortedSlots, validateSlots } from "@/lib/schedule";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import {
@@ -292,21 +293,23 @@ export function PlanTray({
   // (see its own doc comment), so it's the *only* apply mode now — a template can only add into
   // genuinely free time. "Clear all" (`DayTimelineEditor`'s header) is the explicit, separate way
   // to start a day over, and it too always keeps class blocks.
-  function confirmFillGaps() {
-    if (!templateDrop) return;
+  async function confirmFillGaps() {
+    if (!templateDrop || !user) return;
     // Click, drag and AI all end here, and "Add & save as template" saves the template's own blocks first.
-    const blocks = splitLongBlocks(templateDrop.slots, sittingBounds(settings));
+    const { slots: liveSlots, skipped: finished } = await withoutFinishedWork(user.uid, templateDrop.slots);
+    const finishedNote = finished.length > 0 ? ` ${finishedWorkNotice(finished)}` : "";
+    const blocks = splitLongBlocks(liveSlots, sittingBounds(settings));
     const merged = fillGaps(slots, blocks);
     const added = merged.length - slots.length;
     if (added === 0) {
       // Nothing fit anywhere free — every template block conflicted with something already on the
       // day (a class block or otherwise). Say so instead of silently no-opping, and skip the
       // commit: an identical array on the undo stack would just be a wasted Undo step.
-      announce?.(`Every block in "${templateDrop.name}" overlapped something already on the day — nothing added.`);
+      announce?.(`Every block in "${templateDrop.name}" overlapped something already on the day — nothing added.${finishedNote}`);
     } else {
       onCommit(merged);
       const skipped = blocks.length - added;
-      announce?.(`Added ${added} block${added === 1 ? "" : "s"} from "${templateDrop.name}"${skipped > 0 ? `, skipped ${skipped} that overlapped` : ""}.`);
+      announce?.(`Added ${added} block${added === 1 ? "" : "s"} from "${templateDrop.name}"${skipped > 0 ? `, skipped ${skipped} that overlapped` : ""}.${finishedNote}`);
     }
     setTemplateDrop(null);
   }
@@ -361,7 +364,7 @@ export function PlanTray({
     setSavingTemplate(true);
     try {
       await createDayTemplate(user.uid, { name: templateDrop.name, slots: sortedSlots(templateDrop.slots) });
-      confirmFillGaps();
+      await confirmFillGaps();
     } finally {
       setSavingTemplate(false);
     }
