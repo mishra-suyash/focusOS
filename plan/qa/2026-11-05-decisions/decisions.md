@@ -39,6 +39,10 @@ the clock. A block at 01:00 Thursday lives on Thursday's document even if the lo
   setting a boundary re-files nothing.
 - **`todayKey(date)` with an argument stays a plain calendar format.** All 12 such call sites convert a real date.
 - **Server:** `lib/admin-dailyloop.ts` takes the user's `settings.timezone` and boundary. See F33.
+- **A day still open past midnight is over for its blocks.** Reading its schedule against the clock would show a pace and hide
+  late blocks from the wrap-up, so a date the clock has passed reads as finished.
+- **Day off follows the same split.** Sitting cues, the Now card and next action read the clock day's flag. Hydration and break
+  reminders stay on the logical day.
 - **Boundary value lives in `lib/dates.ts`,** set from settings and cached in localStorage so the first render after a
   reload is right.
 - Default midnight must be a strict no-op: every `verify:*` script must pass unchanged.
