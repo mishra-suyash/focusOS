@@ -143,8 +143,9 @@ export default function RoutineSettingsPage() {
                     key={day}
                     type="button"
                     disabled={!block.enabled}
+                    aria-pressed={active}
                     className={`rounded px-2 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-40 ${
-                      active ? "bg-moss-600/15 text-moss-700 dark:text-moss-400" : "bg-ink-100 text-ink-400 dark:bg-ink-800"
+                      active ? "bg-moss-600 text-white" : "bg-ink-100 text-ink-500 dark:bg-ink-800 dark:text-ink-400"
                     }`}
                     onClick={() => toggleDay(block, day)}
                   >
