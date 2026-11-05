@@ -8,6 +8,7 @@ import { ModuleGate } from "@/components/module-gate";
 import { MoreOptions } from "@/components/more-options";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
+import { useReleaseSittings } from "@/hooks/use-release-sittings";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { addDaysToKey, todayKey } from "@/lib/dates";
 import { createGoal, deleteGoal, updateGoal } from "@/lib/firestore";
@@ -21,6 +22,7 @@ const CADENCES: ReviewCadence[] = ["weekly", "monthly"];
 function GoalsPageContent() {
   const { user } = useAuth();
   const today = todayKey();
+  const releaseSittings = useReleaseSittings();
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: terms } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
@@ -55,8 +57,18 @@ function GoalsPageContent() {
                 terms={terms}
                 courses={courses}
                 today={today}
-                onUpdate={(patch) => updateGoal(user.uid, goal.id, patch)}
-                onDelete={() => deleteGoal(user.uid, goal.id)}
+                onUpdate={async (patch) => {
+                  await updateGoal(user.uid, goal.id, patch);
+                  if (patch.status && patch.status !== "active") await releaseSittings({ kind: "goal", id: goal.id }, goal.title);
+                  for (const milestone of patch.milestones ? goal.milestones : []) {
+                    const kept = patch.milestones!.find((item) => item.id === milestone.id);
+                    if (!milestone.done && (!kept || kept.done)) await releaseSittings({ kind: "goal", id: goal.id, milestoneId: milestone.id }, milestone.title);
+                  }
+                }}
+                onDelete={async () => {
+                  await deleteGoal(user.uid, goal.id);
+                  await releaseSittings({ kind: "goal", id: goal.id }, goal.title);
+                }}
               />
             ))
           )}

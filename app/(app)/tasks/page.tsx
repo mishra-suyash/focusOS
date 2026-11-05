@@ -14,6 +14,7 @@ import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { categories, priorities, statuses } from "@/lib/options";
 import { createRecurringTaskTemplate, createTask, deleteTask, updateTask } from "@/lib/firestore";
+import { useReleaseSittings } from "@/hooks/use-release-sittings";
 import { computeStatusPatch } from "@/lib/tasks";
 import { todayKey, weekDates, weekStartKey } from "@/lib/dates";
 import type { Category, Course, PomodoroSession, Priority, RecurringTaskTemplate, Task, TaskStatus } from "@/types";
@@ -34,6 +35,7 @@ export default function TasksPage() {
   const [courseId, setCourseId] = useState("all");
   const [packDialogOpen, setPackDialogOpen] = useState(false);
   const today = todayKey();
+  const releaseSittings = useReleaseSittings();
   const week = weekStartKey();
   const weekEnd = weekDates(week)[6];
 
@@ -114,8 +116,14 @@ export default function TasksPage() {
               courses={courses}
               sessions={sessions}
               workMinutes={settings.workMinutes ?? 25}
-              onStatus={(task, next) => updateTask(user!.uid, task.id, computeStatusPatch(task, next))}
-              onDelete={(task) => deleteTask(user!.uid, task.id)}
+              onStatus={async (task, next) => {
+                await updateTask(user!.uid, task.id, computeStatusPatch(task, next));
+                if (next === "done") await releaseSittings({ kind: "task", id: task.id }, task.title);
+              }}
+              onDelete={async (task) => {
+                await deleteTask(user!.uid, task.id);
+                await releaseSittings({ kind: "task", id: task.id }, task.title);
+              }}
             />
           )}
         </section>

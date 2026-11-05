@@ -31,6 +31,7 @@ import { dateKeyOfIso, friendlyDate, todayKey } from "@/lib/dates";
 import { resolveDashboardWidgets } from "@/lib/dashboard-widgets";
 import { saveDailySchedule, saveDayFields, updateTask } from "@/lib/firestore";
 import { categoryLabels } from "@/lib/options";
+import { useReleaseSittings } from "@/hooks/use-release-sittings";
 import { computeStatusPatch } from "@/lib/tasks";
 import { todayMetrics } from "@/lib/analytics";
 import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak, loadIndexScope } from "@/lib/loadindex";
@@ -59,6 +60,7 @@ function DashboardContent() {
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [showAllTasks, setShowAllTasks] = useState(false);
   const today = todayKey();
+  const releaseSittings = useReleaseSittings();
   const { day } = useDay(today);
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
@@ -307,7 +309,11 @@ function DashboardContent() {
                       className="mt-1"
                       type="checkbox"
                       checked={task.status === "done"}
-                      onChange={(event) => updateTask(user!.uid, task.id, computeStatusPatch(task, event.target.checked ? "done" : "todo"))}
+                      onChange={async (event) => {
+                        const done = event.target.checked;
+                        await updateTask(user!.uid, task.id, computeStatusPatch(task, done ? "done" : "todo"));
+                        if (done) await releaseSittings({ kind: "task", id: task.id }, task.title);
+                      }}
                     />
                     <div className="min-w-0 flex-1">
                       <span className={clsx(task.status === "done" && "text-ink-400 line-through")}>{task.title}</span>

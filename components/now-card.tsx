@@ -11,6 +11,7 @@ import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { clearDayOff, updateTask } from "@/lib/firestore";
 import { describeObjective, objectiveChipText, sittingStartArgs } from "@/lib/objectives";
 import { sittingRemainingMinutes, slotCoverageMinutes } from "@/lib/tracking";
+import { useReleaseSittings } from "@/hooks/use-release-sittings";
 import { computeStatusPatch } from "@/lib/tasks";
 import {
   computeSlotStatus,
@@ -59,6 +60,7 @@ export function NowCard({
   goals?: Goal[];
 }) {
   const { user } = useAuth();
+  const releaseSittings = useReleaseSittings();
   const { startFocus, focusInProgress, focusRunning } = useFocusSession();
   const { startReadingSlot } = useReadingPicker();
   const [showAll, setShowAll] = useState(false);
@@ -191,7 +193,12 @@ export function NowCard({
                   <input
                     type="checkbox"
                     checked={task.status === "done"}
-                    onChange={(e) => user && updateTask(user.uid, task.id, computeStatusPatch(task, e.target.checked ? "done" : "todo"))}
+                    onChange={async (e) => {
+                      if (!user) return;
+                      const done = e.target.checked;
+                      await updateTask(user.uid, task.id, computeStatusPatch(task, done ? "done" : "todo"));
+                      if (done) await releaseSittings({ kind: "task", id: task.id }, task.title);
+                    }}
                   />
                   <span className={clsx(task.status === "done" && "text-ink-400 line-through")}>{task.title}</span>
                 </label>

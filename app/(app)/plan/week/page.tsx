@@ -391,7 +391,7 @@ function PlanWeekContent() {
 
   // ---- What the week's ask is built from, besides the Step 3 hours: prep owed, the review queue, goal hours ----
   const prepCheckpoints = allCheckpoints.filter(
-    (cp) => cp.requiresPrep && cp.status !== "done" && cp.status !== "missed" && weekDateKeys.some((d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt)
+    (cp) => cp.requiresPrep && cp.status !== "done" && cp.status !== "missed" && cp.status !== "submitted" && weekDateKeys.some((d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt)
   );
 
   const dueRevisionCount = isEnabled("revise") ? revisionItems.filter((item) => !item.suspended && item.dueDate <= todayK).length : 0;
@@ -992,7 +992,7 @@ function PlanWeekContent() {
   }
   for (const cp of allCheckpoints) {
     if (!cp.dueAt || cp.dueAt < todayK || cp.dueAt > horizonEnd || !cp.requiresPrep || cp.prepEstimateMin <= 0) continue;
-    if (cp.status === "done" || cp.status === "missed") continue;
+    if (cp.status === "done" || cp.status === "missed" || cp.status === "submitted") continue;
     upcomingNotes.push({
       id: `checkpoint:${cp.id}`,
       title: `Prep: ${cp.title}`,
@@ -1740,9 +1740,9 @@ function PlanWeekContent() {
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {committed && weekIsCurrent && !replan ? (
-            <button className="btn-secondary" onClick={() => startReplan("manual")} title="Lay out the rest of this week again from now">
-              Replan from today
+          {committed && !replan ? (
+            <button className="btn-secondary" onClick={() => startReplan("manual")} title={weekIsCurrent ? "Lay out the rest of this week again from now" : "Lay out this week again"}>
+              {weekIsCurrent ? "Replan from today" : "Replan this week"}
             </button>
           ) : null}
           {replan ? (
@@ -1866,7 +1866,7 @@ function PlanWeekContent() {
                       void setDayOff(user.uid, d);
                       // plan/17 §7.1 — a day off that held accepted sittings: offer to replan them.
                       const held = (schedules.find((schedule) => schedule.dateKey === d)?.slots ?? []).some((slot) => isPlannerMade(slot, weekStart) && slot.status === "upcoming");
-                      if (committed && weekIsCurrent && d >= todayK && held) setDayOffNudge(d);
+                      if (committed && d >= todayK && held) setDayOffNudge(d);
                     }}
                   >
                     {dayOff ? "Undo" : "Day off"}
@@ -2312,16 +2312,16 @@ function PlanWeekContent() {
         {acceptError ? <p className="mb-2 text-sm text-red-600">{acceptError}</p> : null}
         {/* Only when there's something to recover: missed time already re-placed (an Accept after it
             was missed) makes the nudge noise. */}
-        {!replan && committed && weekIsCurrent && ((missedSittings > 0 && totals.toPlace > 0) || dayOffNudge) ? (
+        {!replan && committed && ((missedSittings > 0 && totals.toPlace > 0) || dayOffNudge) ? (
           <div className="mb-3 flex flex-wrap items-center gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
             <span className="flex-1">
               {dayOffNudge
                 ? `${DAY_LABELS[weekDateKeys.indexOf(dayOffNudge)]} is now a day off, and it held sittings you'd accepted.`
                 : `${missedSittings} sitting${missedSittings === 1 ? "" : "s"} behind you this week got less than 60% of its time.`}{" "}
-              Replanning lays the rest of the week out again from now.
+              {weekIsCurrent ? "Replanning lays the rest of the week out again from now." : "Replanning lays that week out again."}
             </span>
             <button className="btn-primary py-1.5 text-xs" onClick={() => startReplan(dayOffNudge ? "dayOff" : "missed")}>
-              Replan from today
+              {weekIsCurrent ? "Replan from today" : "Replan this week"}
             </button>
             {dayOffNudge ? (
               <button className="text-xs text-ink-500 underline" onClick={() => setDayOffNudge(null)}>

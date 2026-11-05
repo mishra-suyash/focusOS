@@ -3,7 +3,7 @@
  * Unit-test stand-in for lib/weekplan.ts (plan/14 §5.3/§5.4/§5.6, §12) — same pattern as
  * scripts/verify-tracking.ts, since this repo has no test runner.
  */
-import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, isPlannerMade, keyedAfterRemoval, placeInWindow, placeProposals, releasableSlots, replanDiff, resolvePlacement, slotFamily, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposal, type WeekProposalCandidate } from "../lib/weekplan";
+import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, isPlannerMade, keyedAfterRemoval, placeInWindow, placeProposals, sittingsOfFinishedWork, type FinishedWork, releasableSlots, replanDiff, resolvePlacement, slotFamily, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposal, type WeekProposalCandidate } from "../lib/weekplan";
 import { minutesFromTime } from "../lib/schedule";
 import type { ScheduleSlot } from "../types";
 
@@ -327,6 +327,46 @@ const SAT = WEEK[5];
   check("work that's new this replan is 'new'", diff.added.map((p) => p.key).join() === "paper:x:0");
   check("a released sitting no longer owed is 'removed'", diff.dropped.map((d) => d.slot.id).join() === "planned-task");
   check("no room → 'didn't fit'", diff.unplaced.map((p) => p.key).join() === "revision:c:1");
+}
+
+// ---- QA decisions 2026-11-05: finished work gives back its future sittings ----
+{
+  const at = (id: string, patch: Partial<ScheduleSlot> = {}): ScheduleSlot => ({ id, title: id, type: "deep_work", startTime: "10:00", endTime: "11:00", status: "upcoming", ...patch });
+  const clock = { todayKey: "2026-11-05", nowMinutes: 12 * 60, sessions: [] as { slotId?: string; mode: string; minutes: number; completedAt: string }[] };
+  const ids = (schedules: { dateKey: string; slots: ScheduleSlot[] }[], work: FinishedWork, c = clock) => sittingsOfFinishedWork({ schedules, work, ...c }).map((r) => `${r.dateKey}:${r.slot.id}`).join();
+  const task = { assignedTaskIds: ["t"] };
+  check(
+    "a finished task's future sittings go, its past and started ones stay",
+    ids(
+      [
+        { dateKey: "2026-11-04", slots: [at("past", task)] },
+        { dateKey: "2026-11-05", slots: [at("morning", task), at("afternoon", { ...task, startTime: "14:00", endTime: "15:00" })] },
+        { dateKey: "2026-11-06", slots: [at("lone", task), at("other", { assignedTaskIds: ["u"] }), at("worked", { ...task, status: "completed" })] }
+      ],
+      { kind: "task", id: "t" }
+    ) === "2026-11-05:afternoon,2026-11-06:lone"
+  );
+  const worked = { ...clock, sessions: [{ slotId: "lone", mode: "work", minutes: 5, completedAt: "2026-11-06T05:00:00.000Z" }] };
+  check("a block with logged minutes stays", ids([{ dateKey: "2026-11-06", slots: [at("lone", task)] }], { kind: "task", id: "t" }, worked) === "");
+  const cls = (id: string) => at(id, { type: "class", courseId: "c" });
+  check(
+    "a dropped course takes its future classes and sittings, today's class stays",
+    ids(
+      [
+        { dateKey: "2026-11-05", slots: [cls("today-class")] },
+        { dateKey: "2026-11-06", slots: [cls("course-c-1"), at("bucket", { courseId: "c", bucket: "revision", startTime: "12:00", endTime: "13:00" })] }
+      ],
+      { kind: "course", id: "c" }
+    ) === "2026-11-06:course-c-1,2026-11-06:bucket"
+  );
+  check("a finished task never takes a class", ids([{ dateKey: "2026-11-06", slots: [cls("course-c-1")] }], { kind: "course", id: "x" }) === "");
+  check("routine and commitments are never released", ids([{ dateKey: "2026-11-06", slots: [at("routine-a", { ...task, locked: true }), at("commitment-a", task)] }], { kind: "task", id: "t" }) === "");
+  const prep = at("prep", { objectiveRef: { kind: "checkpoint", id: "cp" } });
+  check("a submitted checkpoint's prep goes", ids([{ dateKey: "2026-11-06", slots: [prep] }], { kind: "checkpoint", id: "cp" }) === "2026-11-06:prep");
+  const m1 = at("m1", { objectiveRef: { kind: "goal", id: "g", milestoneId: "a" } });
+  const m2 = at("m2", { objectiveRef: { kind: "goal", id: "g", milestoneId: "b" }, startTime: "12:00", endTime: "13:00" });
+  check("a done milestone takes only its own sittings", ids([{ dateKey: "2026-11-06", slots: [m1, m2] }], { kind: "goal", id: "g", milestoneId: "a" }) === "2026-11-06:m1");
+  check("a stopped goal takes all of its sittings", ids([{ dateKey: "2026-11-06", slots: [m1, m2] }], { kind: "goal", id: "g" }) === "2026-11-06:m1,2026-11-06:m2");
 }
 
 if (failures.length > 0) {

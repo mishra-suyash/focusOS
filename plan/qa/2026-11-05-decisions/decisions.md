@@ -71,9 +71,13 @@ or a sitting after a fixed overlap escapes detection. Rendering (time grid, week
 
 ### F16, F29, F37 release of finished work
 - One function on top of `releasableSlots`' rules, all future days rather than one week, filtered by what finished.
-- Triggers: task done, task deleted, course dropped or completed, checkpoint submitted/done/missed, milestone done, goal
-  dropped, paused or achieved, paper dropped/shelved/read for its paper sittings.
-- Never touched: past days, today's blocks already started, worked or running blocks, hand-added blocks, the locked layer.
+- Triggers: task done or deleted, course dropped or completed, checkpoint submitted/done/missed, milestone done or deleted,
+  goal dropped, paused, achieved or deleted.
+- Papers are not a trigger: a stopped paper's sitting already becomes open reading time (plan/17 L2), and that's kept.
+- Filtered by what finished, so a block tied to that work goes whoever placed it, including a lone sitting with no chunk
+  marker (which `isPlannerMade` can't tell from a hand-placed one).
+- Never touched: past days, today's blocks already started, worked or running blocks, blocks tied to other work, the locked
+  layer.
 - Dropping a course also removes its future class blocks (`course-<id>-*`, via the existing resync path); today's stays.
 - Undo restores the exact slots, and only on a day whose slots haven't changed since, so a later edit is never overwritten.
   Reopening the work later doesn't resurrect anything: the planner proposes it again.

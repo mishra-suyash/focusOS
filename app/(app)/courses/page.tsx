@@ -13,6 +13,7 @@ import { InfoHint } from "@/components/info-hint";
 import { ModuleGate } from "@/components/module-gate";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
+import { useReleaseSittings } from "@/hooks/use-release-sittings";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useUserSettings } from "@/hooks/use-user-settings";
@@ -225,6 +226,8 @@ function CourseCard({
     return subscribeCourseTopics(user.uid, course.id, setTopics);
   }, [user, course.id]);
 
+  const releaseSittings = useReleaseSittings();
+
   async function saveSessions(sessions: CourseSession[]) {
     if (!user) return;
     await updateCourse(user.uid, course.id, { sessions });
@@ -244,6 +247,7 @@ function CourseCard({
     await Promise.all(
       recurringTemplates.filter((template) => template.active).map((template) => updateRecurringTaskTemplate(user.uid, template.id, { active: false }))
     );
+    await releaseSittings({ kind: "course", id: course.id }, course.name);
   }
 
   return (
@@ -543,6 +547,7 @@ function CheckpointRow({ courseId, checkpoint, topics }: { courseId: string; che
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
   const showResult = checkpoint.status === "done";
+  const releaseSittings = useReleaseSittings();
 
   async function generatePrepPlan() {
     if (!user) return;
@@ -580,7 +585,12 @@ function CheckpointRow({ courseId, checkpoint, topics }: { courseId: string; che
           <select
             className="input py-1 text-xs"
             value={checkpoint.status}
-            onChange={(e) => user && updateCheckpoint(user.uid, courseId, checkpoint.id, { status: e.target.value as CheckpointStatus })}
+            onChange={async (e) => {
+              if (!user) return;
+              const status = e.target.value as CheckpointStatus;
+              await updateCheckpoint(user.uid, courseId, checkpoint.id, { status });
+              if (status === "submitted" || status === "done" || status === "missed") await releaseSittings({ kind: "checkpoint", id: checkpoint.id }, checkpoint.title);
+            }}
           >
             {CHECKPOINT_STATUSES.map((status) => (
               <option key={status} value={status}>

@@ -687,19 +687,64 @@ export function releasableSlots(params: {
   const released: ReleasedSlot[] = [];
   for (const schedule of schedules) {
     const dateKey = schedule.dateKey;
-    if (!weekDateKeys.includes(dateKey) || dateKey < todayKey) continue;
+    if (!weekDateKeys.includes(dateKey)) continue;
     for (const slot of schedule.slots) {
-      if (dateKey === todayKey && minutesFromTime(slot.startTime) < nowMinutes) continue;
-      if (slot.locked || slot.type === "class" || slot.type === "external" || slot.sourceGoogleEventId) continue;
-      if (slot.id.startsWith("commitment-") || slot.id === "weekly-planning") continue;
-      if (slot.status !== "upcoming") continue;
+      if (!isUnstartedFutureSitting(slot, dateKey, { todayKey, nowMinutes, sessions })) continue;
       if (!isPlannerMade(slot, weekStart)) continue;
-      const worked = sessions.some((session) => session.mode === "work" && session.slotId === slot.id && dateKeyOfIso(session.completedAt) === dateKey && session.minutes > 0);
-      if (worked) continue;
       released.push({ dateKey, slot, family: slotFamily(slot, dateKey) });
     }
   }
   return released;
+}
+
+/** The moment a release is measured from, and the sessions that mark a block as worked. */
+export interface ReleaseClock {
+  todayKey: string;
+  nowMinutes: number;
+  sessions: { slotId?: string; mode: string; minutes: number; completedAt: string }[];
+}
+
+/** Still ahead, and nobody has started it. The locked layer, classes, commitments and imported events are never sittings. */
+export function isUnstartedFutureSitting(slot: ScheduleSlot, dateKey: string, clock: ReleaseClock): boolean {
+  if (dateKey < clock.todayKey) return false;
+  if (dateKey === clock.todayKey && minutesFromTime(slot.startTime) < clock.nowMinutes) return false;
+  if (slot.locked || slot.type === "class" || slot.type === "external" || slot.sourceGoogleEventId) return false;
+  if (slot.id.startsWith("commitment-") || slot.id === "weekly-planning") return false;
+  if (slot.status !== "upcoming") return false;
+  return !clock.sessions.some((session) => session.mode === "work" && session.slotId === slot.id && dateKeyOfIso(session.completedAt) === dateKey && session.minutes > 0);
+}
+
+/** Work that has just finished or stopped, and so no longer wants the time planned for it. */
+export type FinishedWork =
+  | { kind: "task"; id: string }
+  | { kind: "course"; id: string }
+  | { kind: "checkpoint"; id: string }
+  | { kind: "goal"; id: string; milestoneId?: string };
+
+function sittingBelongsTo(slot: ScheduleSlot, work: FinishedWork): boolean {
+  const ref = slot.objectiveRef;
+  if (work.kind === "task") return slot.assignedTaskIds?.length === 1 && slot.assignedTaskIds[0] === work.id;
+  if (work.kind === "course") return slot.courseId === work.id;
+  if (work.kind === "checkpoint") return ref?.kind === "checkpoint" && ref.id === work.id;
+  return ref?.kind === "goal" && ref.id === work.id && (!work.milestoneId || ref.milestoneId === work.milestoneId);
+}
+
+/**
+ * Every unstarted future block tied to `work`, on any week. Unlike `releasableSlots`, this doesn't ask
+ * whether the planner made the block: it's tied to work that's over, whoever put it there. A dropped
+ * course also takes its future class blocks, though today's stays: the class may well have happened.
+ */
+export function sittingsOfFinishedWork(params: ReleaseClock & { schedules: { dateKey: string; slots: ScheduleSlot[] }[]; work: FinishedWork }): ReleasedSlot[] {
+  const { schedules, work, ...clock } = params;
+  return schedules.flatMap((schedule) =>
+    schedule.slots
+      .filter((slot) => {
+        if (!sittingBelongsTo(slot, work)) return false;
+        if (slot.type === "class") return work.kind === "course" && schedule.dateKey > clock.todayKey;
+        return isUnstartedFutureSitting(slot, schedule.dateKey, clock);
+      })
+      .map((slot) => ({ dateKey: schedule.dateKey, slot, family: slotFamily(slot, schedule.dateKey) }))
+  );
 }
 
 export interface ReplanDiff {

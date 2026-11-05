@@ -51,7 +51,7 @@ function daysBetween(laterKey: string, earlierKey: string): number {
 /** prepEstimateMin spread evenly over the checkpoint's prep lead window, summed across every checkpoint whose window covers today. */
 export function checkpointPrepOwedMinutes(checkpoints: Checkpoint[], todayKey: string): number {
   return checkpoints.reduce((sum, checkpoint) => {
-    if (!checkpoint.requiresPrep || checkpoint.status === "done" || checkpoint.status === "missed") return sum;
+    if (!checkpoint.requiresPrep || checkpoint.status === "done" || checkpoint.status === "missed" || checkpoint.status === "submitted") return sum;
     const daysUntilDue = daysBetween(checkpoint.dueAt, todayKey);
     if (daysUntilDue < 0 || daysUntilDue > checkpoint.prepLeadDays || checkpoint.prepLeadDays <= 0) return sum;
     return sum + checkpoint.prepEstimateMin / checkpoint.prepLeadDays;
