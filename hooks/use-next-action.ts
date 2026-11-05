@@ -56,10 +56,10 @@ export function useNextAction(todayKey: string): {
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { allCheckpoints } = useCourseCheckpoints(courses);
   const { dueCount } = useRevisionCounts(todayKey);
-  const { day } = useDay(todayKey);
   const loadIndex = useLiveLoadIndex(todayKey);
 
   const clockDay = scheduleDayKey();
+  const { day: clockDayRecord } = useDay(clockDay);
   const slots = sortedSlots(dailySchedules.find((item) => item.dateKey === clockDay)?.slots ?? []);
   const minute = currentMinute();
   const action = pickNextAction({
@@ -76,7 +76,7 @@ export function useNextAction(todayKey: string): {
     activeSlot: getActiveSlot(slots, minute),
     nextSlot: getNextSlot(slots, minute),
     minute,
-    isDayOff: Boolean(day?.dayOff)
+    isDayOff: Boolean(clockDayRecord?.dayOff)
   });
 
   const todaysSessions = sessions.filter((session) => sessionSlotDayKey(session) === clockDay);

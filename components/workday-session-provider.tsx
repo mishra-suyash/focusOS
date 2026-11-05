@@ -79,6 +79,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
   // Reminders follow the blocks on the clock, which past midnight may be a day ahead of `today`.
   const clockDay = scheduleDayKey();
   const { day } = useDay(today);
+  const { day: clockDayRecord } = useDay(clockDay);
   const { settings, loaded: settingsLoaded, update: updateSettings } = useUserSettings();
   useEffect(() => {
     if (settingsLoaded) setDayEnd(settings.dayEndsAt);
@@ -123,13 +124,13 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
   // Read by the interval callbacks below, so a settings or day change doesn't restart their 30-second
   // clocks — a restart on every render could postpone a reminder indefinitely.
   const reminderRef = useRef<ReminderEvent | null>(null);
-  const cueSettingsRef = useRef({ settings, today, dayOff: Boolean(day?.dayOff) });
+  const cueSettingsRef = useRef({ settings, today, clockDay, dayOff: Boolean(day?.dayOff) });
   useEffect(() => {
     reminderRef.current = reminder;
   }, [reminder]);
   useEffect(() => {
-    cueSettingsRef.current = { settings, today, dayOff: Boolean(day?.dayOff) };
-  }, [settings, today, day?.dayOff]);
+    cueSettingsRef.current = { settings, today, clockDay, dayOff: Boolean(day?.dayOff) };
+  }, [settings, today, clockDay, day?.dayOff]);
 
   const fireReminder = useCallback((kind: ReminderEvent["kind"], message: string) => {
     // plan/18 F1 — once per reminder. The interval below keeps qualifying every 30 seconds until the
@@ -174,7 +175,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
           blockStartNotificationsOn(cueSettingsRef.current.settings) &&
           !REST_SLOT_TYPES.has(currentActive.type)
         ) {
-          const key = cueKeys.blockStart(cueSettingsRef.current.today, currentActive.id);
+          const key = cueKeys.blockStart(cueSettingsRef.current.clockDay, currentActive.id);
           void deliverCue({ key, notification: { body: `${currentActive.title} starting.`, tag: key } });
         }
         lastActiveSlotIdRef.current = currentActive?.id ?? null;
@@ -221,15 +222,15 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
   const notifiedSittingsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     notifiedSittingsRef.current = new Set();
-  }, [today]);
+  }, [clockDay]);
 
   const sittingNotifications = settings.sittingNotifications;
   // plan/18 S3 — the heads-up sound rides on the lead notification's trigger, so it needs the same
   // opt-in; it plays even where the browser blocks notifications.
   const sounds = resolveSounds(settings.sounds);
-  const headsUpVolume = cueEnabled(sounds, "headsUp", { dayOff: Boolean(day?.dayOff) }) ? sounds.volume : 0;
+  const headsUpVolume = cueEnabled(sounds, "headsUp", { dayOff: Boolean(clockDayRecord?.dayOff) }) ? sounds.volume : 0;
   useEffect(() => {
-    if (!sittingNotifications?.enabled || day?.dayOff) return;
+    if (!sittingNotifications?.enabled || clockDayRecord?.dayOff) return;
 
     function check() {
       // Re-read the live permission every tick rather than trusting the stored `granted` flag:
@@ -242,8 +243,8 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         if (!isScoredSitting(slot)) continue;
         const start = minutesFromTime(slot.startTime);
         const end = minutesFromTime(slot.endTime);
-        const leadKey = cueKeys.sittingLead(today, slot.id);
-        const endKey = cueKeys.sittingEnd(today, slot.id);
+        const leadKey = cueKeys.sittingLead(clockDay, slot.id);
+        const endKey = cueKeys.sittingEnd(clockDay, slot.id);
         if (minute >= start - leadMinutes && minute < start && !notifiedSittingsRef.current.has(leadKey)) {
           notifiedSittingsRef.current.add(leadKey);
           // plan/18 F2 — `deliverCue` claims the key across tabs, so a sound plays once, not once per tab.
@@ -278,7 +279,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
     check();
     const id = window.setInterval(check, 30_000);
     return () => window.clearInterval(id);
-  }, [sittingNotifications?.enabled, sittingNotifications?.leadMinutes, schedule, today, day?.dayOff, sittingNotifications, headsUpVolume]);
+  }, [sittingNotifications?.enabled, sittingNotifications?.leadMinutes, schedule, clockDay, clockDayRecord?.dayOff, sittingNotifications, headsUpVolume]);
 
   const start = useCallback(async () => {
     if (!user || starting) return;

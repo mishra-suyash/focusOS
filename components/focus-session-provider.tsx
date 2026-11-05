@@ -750,8 +750,9 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       // §6.5 — this session may have just pushed its block past the auto-complete threshold.
       async () => {
         if (!record.slotId) return;
-        const closedTitle = await syncSlotAutoStatus(uid, record.slotId, sessionSlotDayKey(record));
-        if (closedTitle) announceBlockClosed(closedTitle, record.slotId);
+        const slotDay = sessionSlotDayKey(record);
+        const closedTitle = await syncSlotAutoStatus(uid, record.slotId, slotDay);
+        if (closedTitle) announceBlockClosed(closedTitle, record.slotId, slotDay);
       }
     ];
     for (let step = from; step < steps.length; step++) {
@@ -771,11 +772,11 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
   }
 
   /** plan/18 I3/S5 — a block just crossed the 60% rule (`slotAutoStatus`) and closed. */
-  function announceBlockClosed(title: string, slotId: string) {
+  function announceBlockClosed(title: string, slotId: string, slotDay: string) {
     toast({ message: `${title} — closed.`, broadcast: true });
     const sounds = resolveSounds(settings.sounds);
     if (cueEnabled(sounds, "blockClosed")) {
-      void deliverCue({ key: cueKeys.blockClosed(todayKey(), slotId), sound: { cue: "blockClosed", volume: sounds.volume } });
+      void deliverCue({ key: cueKeys.blockClosed(slotDay, slotId), sound: { cue: "blockClosed", volume: sounds.volume } });
     }
   }
 

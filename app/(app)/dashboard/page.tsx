@@ -27,7 +27,7 @@ import { useNextAction } from "@/hooks/use-next-action";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { friendlyDate, scheduleDayKey, sessionDayKey, todayKey } from "@/lib/dates";
+import { friendlyDate, scheduleDayKey, sessionDayKey, sessionSlotDayKey, todayKey } from "@/lib/dates";
 import { resolveDashboardWidgets } from "@/lib/dashboard-widgets";
 import { saveDailySchedule, saveDayFields, updateTask } from "@/lib/firestore";
 import { categoryLabels } from "@/lib/options";
@@ -76,9 +76,16 @@ function DashboardContent() {
   const { allCheckpoints } = useCourseCheckpoints(courses);
   const { dueCount, reviewedTodayCount } = useRevisionCounts(today);
   const dailySchedule = dailySchedules.find((item) => item.dateKey === today);
+  // The Now card, starting a block and placing one "now" all read the clock, so they go by the date
+  // the clock is on: past midnight that's a day ahead of `today` until the day ends.
+  const clockDay = scheduleDayKey();
+  const clockSchedule = dailySchedules.find((item) => item.dateKey === clockDay);
+  const { day: clockDayRecord } = useDay(clockDay);
   // Focus sessions only — every use below (history, sitting coverage, the Now card) is about work,
   // and break docs logged before the timer stopped writing them must not read as work.
   const todaysSessions = sessions.filter((session) => session.mode === "work" && sessionDayKey(session) === today);
+  // Recurring slots reuse one id on every date, so a block's coverage comes from sessions on its own date.
+  const clockSessions = sessions.filter((session) => session.mode === "work" && sessionSlotDayKey(session) === clockDay);
   const metrics = todayMetrics(tasks, sessions);
   const [note, setNote] = useState(day?.scratchpad ?? "");
 
@@ -124,21 +131,21 @@ function DashboardContent() {
     const slotId = searchParams.get("slotId") ?? undefined;
     // A block linked to exactly one task should credit that task's focus-session count — a block
     // with zero or several linked tasks is ambiguous, so it's left uncredited as before.
-    const linkedTaskIds = slotId ? dailySchedule?.slots.find((slot) => slot.id === slotId)?.assignedTaskIds ?? [] : [];
+    const linkedTaskIds = slotId ? clockSchedule?.slots.find((slot) => slot.id === slotId)?.assignedTaskIds ?? [] : [];
     const courseId = searchParams.get("courseId") ?? undefined;
     const bucket = (searchParams.get("bucket") as Task["bucket"] | null) ?? undefined;
     // plan/16 §5.5 — the sitting's own length and its paper context are read off the real slot we
     // just looked up, not passed through the URL: the slot is already in hand here, and a link
     // carrying a duration would go stale the moment the block was resized.
-    const linkedSlot = slotId ? dailySchedule?.slots.find((slot) => slot.id === slotId) : undefined;
+    const linkedSlot = slotId ? clockSchedule?.slots.find((slot) => slot.id === slotId) : undefined;
     const objective = linkedSlot ? describeObjective(linkedSlot, { courses, papers, checkpoints: allCheckpoints, tasks, goals }) : null;
-    const sittingLeft = linkedSlot ? sittingRemainingMinutes(linkedSlot, todaysSessions) : 0;
+    const sittingLeft = linkedSlot ? sittingRemainingMinutes(linkedSlot, clockSessions) : 0;
     // plan/17 §5.4 — a reading block from /plan/day starts reading the way the Now card does.
     if (linkedSlot?.type === "reading") {
       // Wait for the papers too: a pinned sitting starts its paper, which has to be loaded to be found.
       if (papersLoading) return;
       router.replace("/dashboard", { scroll: false });
-      void startReadingSlot(linkedSlot, { papers, sessions: todaysSessions, minutes: sittingLeft > 0 ? sittingLeft : undefined });
+      void startReadingSlot(linkedSlot, { papers, sessions: clockSessions, minutes: sittingLeft > 0 ? sittingLeft : undefined });
       return;
     }
     startFocus({
@@ -153,14 +160,11 @@ function DashboardContent() {
       minutes: sittingLeft > 0 ? sittingLeft : undefined
     });
     router.replace("/dashboard", { scroll: false });
-  }, [searchParams, dailySchedule, dailySchedulesLoading, papersLoading]);
+  }, [searchParams, clockSchedule, dailySchedulesLoading, papersLoading]);
 
   /** S5 "Schedule it" on the Up next card — places it in the next free gap after now and opens Plan — Day. */
   async function scheduleAction() {
     if (!user || !nextAction || nextAction.kind === "rest") return;
-    // Placed against the clock, so it goes on the date the clock is on.
-    const clockDay = scheduleDayKey();
-    const clockSchedule = dailySchedules.find((item) => item.dateKey === clockDay);
     const currentSlots = clockSchedule?.slots ?? [];
     const workMinutes = settings.workMinutes ?? 25;
     let block;
@@ -371,12 +375,12 @@ function DashboardContent() {
 
         <div className="space-y-4">
           <NowCard
-            date={today}
-            schedule={dailySchedule}
+            date={clockDay}
+            schedule={clockSchedule}
             tasks={tasks}
             courses={courses}
-            dayOff={day?.dayOff}
-            sessions={todaysSessions}
+            dayOff={clockDayRecord?.dayOff}
+            sessions={clockSessions}
             papers={papers}
             checkpoints={allCheckpoints}
             goals={goals}
