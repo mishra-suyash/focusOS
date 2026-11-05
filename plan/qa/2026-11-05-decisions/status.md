@@ -3,7 +3,7 @@
 Branch `qa/decisions-2026-11-05`, on top of `qa/overnight-2026-11-01`. Nothing is pushed or merged.
 
 "App" means the flow was run in Chrome on the test account. "Scripts" means only typecheck, lint, build and `verify:*`,
-which never touch Firestore or render a page. The last full gate passed on 2026-11-05 at `b1a0548`: `tsc`, eslint,
+which never touch Firestore or render a page. The last full gate passed on 2026-11-05 at `064c193`: `tsc`, eslint,
 `next build` and all 13 `verify:*`.
 
 | Item | Commit | Checked |
@@ -22,7 +22,7 @@ which never touch Firestore or render a page. The last full gate passed on 2026-
 | F7 milestones | 8622722 | App (two milestones of an 8h goal offer 4 × 60m each) |
 | F21 template split | 8622722, 9dda9cd | App (tray Apply and a real drag) |
 | F19, F22 Workload | dcb9b15 | App (Thursday made non-working: Workload and the brief drop from 376 to the 187 planned) |
-| F32 modules | dcb9b15, f633945, b1a0548 | App (Courses, Revise, Goals, Workload off, each with an on control). The rollup's proposals and the daily-insight gate weren't run |
+| F32 modules | dcb9b15, f633945, b1a0548, 16c61a0 | App (Courses, Revise, Goals, Workload off, each with an on control). The rollup's proposals and the daily-insight gate weren't run |
 | F11 fixed clash | fa5bb75 | App |
 | F16, F29, F37, F42 release | 4851c06 | App, including Undo |
 | F25, F26 routine | bc7fdb2 | App, including Undo |
@@ -46,16 +46,19 @@ which never touch Firestore or render a page. The last full gate passed on 2026-
 - Insights off still spent AI on the daily cron, and Workload off still showed in the floating widget. Fixed in b1a0548. Alerts keep running.
 - A submitted assessment still asked for prep in Next action, the morning overview, Revise's order and the AI prompts. Fixed in 2f68d44. `verify:next-action` covers Next action; the others share the same one-line filter and weren't run.
 - Close-day could skip a day outside IST. Fixed in 4fd2631, below.
+- With Workload off, the morning overview still showed its target and pointed at a Workload widget that wasn't there. Fixed in 16c61a0.
+- A template saved from a real day handed back sittings of finished work, against the F16, F29, F37 decision: "Tuesday class day" brought "Prep: Problem set 3" back after it was submitted. Fixed in 064c193, by leaving out blocks tied to finished, dropped or deleted work on apply, with a notice naming them. The template itself isn't changed. Run in the app through Start day and the plan tray. The timeline editor's Apply template, the classic editor and the gallery share the same call and weren't run.
 
 ## Choices to review
 
 - **Close-day catch-up (4fd2631):** taken as the recommended option while the owner was away. A day's final record now stores `closedAt`, and each run closes the last two days without one, oldest first. On the first production run the day before yesterday has no `closedAt`, so its stored record is recomputed once with the current rules.
 - **Insights off skips the daily cron (b1a0548):** taken under "off means fully off". Turning Insights back on brings the next day's insight back.
+- **Submitted counts as finished everywhere (2f68d44):** the status filters that missed it now match the release rule.
+- **Templates filter on apply, not on save (064c193):** so existing templates are covered and stay as saved. A paused goal's blocks are left out too, matching the release rule.
 
 ## Observed, not changed
 
 - Start day on a template saved from a real day lists its Sleep, meals and class as "skipped" because the same blocks are already there. It's accurate but reads like a problem.
-- Saved templates keep planner sittings, so "Tuesday class day" brought "Prep: Problem set 3" back after that assessment was submitted.
 - There is no control for working days. `workingWindow.daysOfWeek` stays at its Monday to Saturday default unless written directly.
 
 ## Hydration reminder
@@ -78,4 +81,4 @@ Checked live with a 1-minute interval: one notification and banner, no repeat on
 - `closeFinishedDay` wrote a stored record for 11-04.
 - `closeFinishedDays` rewrote the records for 11-03 and 11-04 and set `closedAt` on both.
 - One test Read sitting on the Offline RL paper, logged as 20 minutes on 11-05 by a fast completion, with its check-in answered "Not yet".
-- Backed up and restored by a one-off Admin SDK script scoped to this account: settings, 11-05's schedule and day record, and the day templates. The temporary schedule, templates and milestones are gone. 11-04's day record had a temporary session, since removed.
+- Backed up and restored by a one-off Admin SDK script scoped to this account: settings, 11-05's schedule and day record, and the day templates. The temporary schedules, templates and milestones are gone. 11-04's day record had a temporary session, since removed, and its 13 blocks weren't changed.
