@@ -32,6 +32,7 @@ import {
 } from "@/lib/firestore";
 import {
   createSlot,
+  fixedClashes,
   isLockedSlot,
   materializeSlots,
   minutesFromTime,
@@ -317,6 +318,11 @@ function DayPlannerContent() {
               ) : null}
             </div>
           </div>
+          {fixedClashes(slots).map(([a, b]) => (
+            <p key={`${a.id}:${b.id}`} className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              {a.title} ({a.startTime}–{a.endTime}) overlaps {b.title} ({b.startTime}–{b.endTime}). Both stay on the plan until you change one.
+            </p>
+          ))}
           {!timelineEditorEnabled && errors.length > 0 ? (
             <div className="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
               {errors.map((error) => <p key={error}>{error}</p>)}

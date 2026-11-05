@@ -4,7 +4,7 @@
  * criterion "timeline tests green") — same pattern as scripts/verify-templates.ts, since this
  * repo has no test runner.
  */
-import { minutesFromTime, scheduleFromTemplate, validateSlots } from "../lib/schedule";
+import { fixedClashes, minutesFromTime, scheduleFromTemplate, validateSlots } from "../lib/schedule";
 import {
   categoryForSlotType,
   clampToDay,
@@ -317,6 +317,20 @@ check("categoryForSlotType: meal -> personal", categoryForSlotType("meal") === "
   const result = shiftRestOfDay(slots, minutesFromTime("10:00"), -30);
   const byId = new Map((result ?? []).map((s) => [s.id, s]));
   check("shiftRestOfDay: a clean negative shift also applies in full", byId.get("a")?.startTime === "09:30" && byId.get("b")?.startTime === "11:30");
+}
+
+// ---- QA decisions 2026-11-05: two fixed items may clash, nothing else may ----
+{
+  const at = (id: string, type: ScheduleSlot["type"], startTime: string, endTime: string): ScheduleSlot => ({ id, title: id, type, startTime, endTime, status: "upcoming" });
+  const lecture = at("course-a-0", "class", "14:00", "16:00");
+  const meeting = at("commitment-b", "custom", "14:00", "15:00");
+  check("a class and a commitment may overlap", validateSlots([lecture, meeting]).length === 0);
+  check("the clash is reported", fixedClashes([lecture, meeting]).length === 1);
+  check("no clash, nothing reported", fixedClashes([lecture, at("commitment-c", "custom", "16:00", "17:00")]).length === 0);
+  check("a sitting on top of the longer fixed item is still refused", validateSlots([lecture, meeting, at("x", "deep_work", "15:00", "15:30")]).length === 1);
+  check("a sitting on top of a class is still refused", validateSlots([lecture, at("x", "deep_work", "15:00", "15:30")]).length === 1);
+  check("a routine block on a class is still refused", validateSlots([lecture, { ...at("routine-a", "gym", "15:00", "17:00"), locked: true }]).length === 1);
+  check("two sittings are still refused", validateSlots([at("x", "deep_work", "09:00", "10:00"), at("y", "deep_work", "09:30", "10:30")]).length === 1);
 }
 
 if (failures.length > 0) {

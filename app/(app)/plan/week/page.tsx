@@ -52,7 +52,7 @@ import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, es
 import { commitmentSlotsForDate, isFixedCommitment, isFixedCommitmentOccurrence, isTemplateDueOn, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { describeObjective, objectiveChipText } from "@/lib/objectives";
-import { minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
+import { fixedClashes, minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
 import { isBreakMode } from "@/lib/terms";
 import { loggedMinutesForTask, sittingOutcome } from "@/lib/tracking";
 import {
@@ -327,6 +327,9 @@ function PlanWeekContent() {
   }
   const claimedSlotsByDate: Record<string, ScheduleSlot[]> = {};
   for (const d of weekDateKeys) claimedSlotsByDate[d] = claimedSlotsForDate(d);
+  const fixedClashNotes = weekDateKeys.flatMap((d, index) =>
+    fixedClashes(claimedSlotsByDate[d]).map(([a, b]) => `${DAY_LABELS[index]}: ${a.title} (${a.startTime}–${a.endTime}) overlaps ${b.title} (${b.startTime}–${b.endTime}).`)
+  );
 
   // ---- Step 3: hours table (local drafts, seeded from live course fields) ----
   const [hoursDraft, setHoursDraft] = useState<Record<string, Partial<Record<TaskBucket, number>>>>({});
@@ -2298,6 +2301,14 @@ function PlanWeekContent() {
           Drag a sitting to a different day or time, or use the list below — both do the same thing. Nothing is written to a day
           until you accept it.
         </p>
+        {fixedClashNotes.length > 0 ? (
+          <div className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            <p className="font-medium">Fixed items clash this week. Both stay on the plan until you change one.</p>
+            {fixedClashNotes.map((note) => (
+              <p key={note}>{note}</p>
+            ))}
+          </div>
+        ) : null}
         {acceptError ? <p className="mb-2 text-sm text-red-600">{acceptError}</p> : null}
         {/* Only when there's something to recover: missed time already re-placed (an Accept after it
             was missed) makes the nudge noise. */}

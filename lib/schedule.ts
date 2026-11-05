@@ -132,18 +132,38 @@ export function mergeMissingLockedSlots(existing: ScheduleSlot[], wanted: Schedu
   return missing.length > 0 ? sortedSlots([...existing, ...missing]) : existing;
 }
 
+/** A class, an imported calendar event or a recurring commitment: time the app doesn't get to move. */
+export function isFixedSlot(slot: Pick<ScheduleSlot, "id" | "type">): boolean {
+  return slot.type === "class" || slot.type === "external" || slot.id.startsWith("commitment-");
+}
+
+/**
+ * Pairs of fixed items on a day that overlap. Neither can be moved from here, so a clash is reported
+ * (`/plan/week`, `/plan/day`) rather than refused: it's a fact about the week, and refusing it used to
+ * throw away everything else being saved alongside it.
+ */
+export function fixedClashes(slots: ScheduleSlot[]): [ScheduleSlot, ScheduleSlot][] {
+  const fixed = sortedSlots(slots).filter(isFixedSlot);
+  return fixed.flatMap((slot, index) =>
+    fixed.slice(index + 1).filter((other) => minutesFromTime(other.startTime) < minutesFromTime(slot.endTime)).map((other): [ScheduleSlot, ScheduleSlot] => [slot, other])
+  );
+}
+
 export function validateSlots(slots: ScheduleSlot[]) {
   const errors: string[] = [];
   const ordered = sortedSlots(slots);
+  // Against the furthest-reaching slot so far, not just the previous one: with two fixed items allowed
+  // to overlap, the previous slot can end long before the one still running.
+  let reaching: ScheduleSlot | undefined;
   ordered.forEach((slot, index) => {
     const start = minutesFromTime(slot.startTime);
     const end = minutesFromTime(slot.endTime);
     if (!slot.title.trim()) errors.push(`Slot ${index + 1} needs a title.`);
     if (end <= start) errors.push(`${slot.title || `Slot ${index + 1}`} must end after it starts.`);
-    const previous = ordered[index - 1];
-    if (previous && start < minutesFromTime(previous.endTime)) {
-      errors.push(`${slot.title || `Slot ${index + 1}`} overlaps with ${previous.title}.`);
+    if (reaching && start < minutesFromTime(reaching.endTime) && !(isFixedSlot(slot) && isFixedSlot(reaching))) {
+      errors.push(`${slot.title || `Slot ${index + 1}`} overlaps with ${reaching.title}.`);
     }
+    if (!reaching || end > minutesFromTime(reaching.endTime)) reaching = slot;
   });
   return errors;
 }
