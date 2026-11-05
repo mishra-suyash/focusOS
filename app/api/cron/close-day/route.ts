@@ -4,7 +4,11 @@ import { getAdminSettings } from "@/lib/admin-settings";
 import { recordCronRun } from "@/lib/admin-cron-log";
 import { getActiveUids } from "@/lib/admin-users";
 
-/** ~05:10 IST, after the latest `dayEndsAt` (05:00): finalises the stored record of the day that just ended. */
+/**
+ * ~06:30 IST: finalises the stored record of the day that just ended. Hobby crons fire anywhere within
+ * their hour, so this sits an hour clear of the latest `dayEndsAt` (05:00); running before it would
+ * close the wrong day and leave the one still running unclosed.
+ */
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
   const authHeader = request.headers.get("authorization");
