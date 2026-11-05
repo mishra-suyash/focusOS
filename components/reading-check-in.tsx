@@ -84,9 +84,9 @@ export function ReadingCheckIn({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="reading-check-in-title">
       <div className="card w-full max-w-sm p-5">
-        <h2 className="text-lg font-semibold">End of sitting</h2>
+        <h2 id="reading-check-in-title" className="text-lg font-semibold">End of sitting</h2>
         <p className="mt-0.5 truncate text-xs text-ink-500">{label}</p>
 
         {passOpen ? (

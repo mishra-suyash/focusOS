@@ -20,9 +20,9 @@ export function PomodoroSurveyModal({
   const [comment, setComment] = useState("");
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-labelledby="session-survey-title">
       <div className="card w-full max-w-sm p-5">
-        <h2 className="text-lg font-semibold">How did &ldquo;{label}&rdquo; go?</h2>
+        <h2 id="session-survey-title" className="text-lg font-semibold">How did &ldquo;{label}&rdquo; go?</h2>
         <div className="mt-4 grid grid-cols-5 gap-2">
           {RATINGS.map((value) => (
             <button
