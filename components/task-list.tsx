@@ -2,6 +2,7 @@
 
 import { Check, Circle, Clock, Repeat, Trash2 } from "lucide-react";
 import { InfoHint } from "@/components/info-hint";
+import { todayKey } from "@/lib/dates";
 import { categoryLabels } from "@/lib/options";
 import { DEFAULT_MAX_CHUNK_MINUTES, taskBlockMinutes } from "@/lib/timeline";
 import { loggedMinutesForTask } from "@/lib/tracking";
@@ -28,6 +29,7 @@ export function TaskList({
   sessions?: PomodoroSession[];
   workMinutes?: number;
 }) {
+  const today = todayKey();
   if (tasks.length === 0) {
     return <div className="rounded-md border border-dashed border-ink-300 p-5 text-sm text-ink-500 dark:border-ink-700">{empty}</div>;
   }
@@ -96,6 +98,9 @@ export function TaskList({
                 {task.description ? <p className="mt-1 text-sm text-ink-600 dark:text-ink-300">{task.description}</p> : null}
                 <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-ink-500">
                   {task.dueDate ? <span>Due {task.dueDate}</span> : null}
+                  {task.dueDate && task.status !== "done" && task.dueDate < today ? (
+                    <span className="rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-red-700 dark:bg-red-950 dark:text-red-200">Overdue</span>
+                  ) : null}
                   {task.estimatedPomodoros ? (
                     <span className="inline-flex items-center gap-1">
                       <Clock className="h-3 w-3" />
