@@ -3,6 +3,7 @@
 import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { useFeatures } from "@/hooks/use-features";
 import { slotTypeLabels, sortedSlots } from "@/lib/schedule";
 import type { DailySchedule, MorningBrief } from "@/types";
 
@@ -17,6 +18,8 @@ import type { DailySchedule, MorningBrief } from "@/types";
  */
 export function MorningBriefCard({ brief, schedule }: { brief?: MorningBrief; schedule?: DailySchedule }) {
   const { user } = useAuth();
+  const { isEnabled } = useFeatures();
+  const workloadOn = isEnabled("workload");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [generated, setGenerated] = useState<MorningBrief | undefined>(brief);
@@ -61,8 +64,12 @@ export function MorningBriefCard({ brief, schedule }: { brief?: MorningBrief; sc
       ) : (
         <div className="space-y-2 text-sm">
           <p className="text-ink-600 dark:text-ink-300">
-            {current.requiredMinutesTarget} min target today
-            {current.unresolvedCriticalAlerts > 0 ? ` · ${current.unresolvedCriticalAlerts} urgent heads-up${current.unresolvedCriticalAlerts === 1 ? "" : "s"}` : ""}
+            {[
+              workloadOn ? `${current.requiredMinutesTarget} min target today` : null,
+              current.unresolvedCriticalAlerts > 0 ? `${current.unresolvedCriticalAlerts} urgent heads-up${current.unresolvedCriticalAlerts === 1 ? "" : "s"}` : null
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </p>
           {slots.length === 0 ? (
             <p className="text-xs text-ink-500">No blocks planned yet — Start day, or open Plan to add some.</p>
@@ -113,7 +120,8 @@ export function MorningBriefCard({ brief, schedule }: { brief?: MorningBrief; sc
             ) : null;
           })()}
           <p className="text-xs text-ink-400">
-            Snapshot from {new Date(current.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} — the Workload widget above recalculates the target live as your day changes.
+            Snapshot from {new Date(current.generatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+            {workloadOn ? " — the Workload widget above recalculates the target live as your day changes." : "."}
           </p>
         </div>
       )}
