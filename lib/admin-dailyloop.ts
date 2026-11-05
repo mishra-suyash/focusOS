@@ -11,6 +11,9 @@ import type { ReviewEodOutput } from "@/lib/ai/schemas";
 import { scheduleSummary } from "@/lib/schedule";
 import type { DailySchedule, Day, EveningRollup, MorningBrief, PomodoroSession, Task, UserSettings } from "@/types";
 
+/** How far back close-day looks: the day that just ended, and one a run landing early left open. */
+const CLOSE_LOOKBACK_DAYS = 2;
+
 async function fetchSettings(uid: string): Promise<Partial<UserSettings>> {
   const doc = await adminDb().collection("users").doc(uid).collection("meta").doc("settings").get();
   return (doc.data() ?? {}) as Partial<UserSettings>;
@@ -90,7 +93,7 @@ function dayMetrics(tasks: Task[], sessions: PomodoroSession[], dateKey: string,
  * The stored record of a day: its Load Index and score, computed from what the day actually held and
  * written once, so a later edit can't change what that day was (plan/16 §5.6). Returns the Load Index.
  */
-async function writeDaySnapshot(uid: string, dateKey: string, settings: Partial<UserSettings>): Promise<number> {
+async function writeDaySnapshot(uid: string, dateKey: string, settings: Partial<UserSettings>, closing = false): Promise<number> {
   const frame = dayFrame(settings);
   const [{ checkpoints, tasks, sessions, courses, goals, terms }, dueRevisionCount, revisionsCompletedCount, dayDoc, schedule] = await Promise.all([
     fetchInsightData(uid),
@@ -123,27 +126,38 @@ async function writeDaySnapshot(uid: string, dateKey: string, settings: Partial<
     loadIndex: snapshot,
     isDayOff: Boolean(dayData?.dayOff)
   });
+  const now = new Date().toISOString();
   await adminDb()
     .collection("users")
     .doc(uid)
     .collection("days")
     .doc(dateKey)
-    .set({ loadIndex: snapshot, game: { ...game, computedAt: new Date().toISOString() }, date: dateKey, updatedAt: new Date().toISOString() }, { merge: true });
+    .set({ loadIndex: snapshot, game: { ...game, computedAt: now }, date: dateKey, updatedAt: now, ...(closing ? { closedAt: now } : {}) }, { merge: true });
   return snapshot.value;
 }
 
 /**
- * The record of the day that just ended. The evening rollup runs at 22:00 so its suggestions arrive that
+ * The record of the days that have ended. The evening rollup runs at 22:00 so its suggestions arrive that
  * evening, which means its snapshot can't see anything worked afterwards. This runs after every possible
- * end of day and has the last word, unless the person closed the day themselves with End day. No AI call,
- * so it costs nothing to run for everyone.
+ * end of day in IST and has the last word, unless the person closed the day themselves with End day. No AI
+ * call, so it costs nothing to run for everyone.
+ *
+ * Elsewhere a run can land before a late day end, so the night's day isn't over yet, and the next run can
+ * land after one, so it's two days on. Each run closes every recent day not yet closed, oldest first.
  */
-export async function closeFinishedDay(uid: string): Promise<string> {
+export async function closeFinishedDays(uid: string): Promise<string[]> {
   const settings = await fetchSettings(uid);
-  const finished = addDaysToKey(dayFrame(settings).today, -1);
-  const dayDoc = await adminDb().collection("users").doc(uid).collection("days").doc(finished).get();
-  if (!(dayDoc.data() as Day | undefined)?.session?.endedAt) await writeDaySnapshot(uid, finished, settings);
-  return finished;
+  const today = dayFrame(settings).today;
+  const closed: string[] = [];
+  for (let daysAgo = CLOSE_LOOKBACK_DAYS; daysAgo >= 1; daysAgo -= 1) {
+    const dateKey = addDaysToKey(today, -daysAgo);
+    const dayDoc = await adminDb().collection("users").doc(uid).collection("days").doc(dateKey).get();
+    const day = dayDoc.data() as Day | undefined;
+    if (day?.session?.endedAt || day?.closedAt) continue;
+    await writeDaySnapshot(uid, dateKey, settings, true);
+    closed.push(dateKey);
+  }
+  return closed;
 }
 
 /** Deterministic, no AI call — see lib/dailyloop.ts. Writes to days/{today}.brief. */

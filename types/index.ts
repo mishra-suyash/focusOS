@@ -917,6 +917,8 @@ export interface Day {
      *  back's "Days off" stat) — both work identically everywhere else. */
     markedAt: string;
   };
+  /** Set by close-day when it writes the day's final record, so a later run leaves that record alone. */
+  closedAt?: string;
   /** plan/16 §5.6 — the day's score snapshot, written at the same points `loadIndex` already is
    *  (End day, the evening rollup cron) and for the same reason: a historical record that must not
    *  silently change when a later edit changes what "today" would compute to. Every field is
