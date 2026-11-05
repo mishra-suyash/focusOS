@@ -49,7 +49,7 @@ export interface MorningBriefInputs {
 
 export function buildMorningBrief(inputs: MorningBriefInputs): MorningBrief {
   const checkpointsInWindow = inputs.checkpoints
-    .filter((c) => c.requiresPrep && c.status !== "done" && c.status !== "missed")
+    .filter((c) => c.requiresPrep && c.status !== "done" && c.status !== "missed" && c.status !== "submitted")
     .filter((c) => {
       const daysUntil = daysBetween(c.dueAt, inputs.todayKey);
       return daysUntil >= 0 && daysUntil <= c.prepLeadDays;

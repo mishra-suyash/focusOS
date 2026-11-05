@@ -16,7 +16,7 @@ export function buildInsightPrompt({ tasks, sessions, days, papers, checkpoints 
     .join("\n");
 
   const upcomingCheckpoints = checkpoints
-    .filter((checkpoint) => checkpoint.status !== "done" && checkpoint.status !== "missed")
+    .filter((checkpoint) => checkpoint.status !== "done" && checkpoint.status !== "missed" && checkpoint.status !== "submitted")
     .sort((a, b) => (a.dueAt < b.dueAt ? -1 : 1))
     .slice(0, 10)
     .map((checkpoint) => `- [${checkpoint.type}] ${checkpoint.title} (due ${checkpoint.dueAt})`)
@@ -67,7 +67,7 @@ export function buildInsightFallback({ tasks, sessions, checkpoints, papers }: I
   const suggestions: string[] = [];
 
   const urgentCheckpoint = checkpoints
-    .filter((c) => c.status !== "done" && c.status !== "missed")
+    .filter((c) => c.status !== "done" && c.status !== "missed" && c.status !== "submitted")
     .sort((a, b) => (a.dueAt < b.dueAt ? -1 : 1))[0];
   if (urgentCheckpoint) suggestions.push(`Next checkpoint: ${urgentCheckpoint.title} (due ${urgentCheckpoint.dueAt})`);
 

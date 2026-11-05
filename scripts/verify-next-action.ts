@@ -6,7 +6,7 @@
  * it still runs unchanged when there's no active/imminent block.
  */
 import { pickNextAction } from "../lib/next-action";
-import type { ScheduleSlot } from "../types";
+import type { Checkpoint, ScheduleSlot } from "../types";
 
 const failures: string[] = [];
 
@@ -58,6 +58,12 @@ const base = { checkpoints: [], dueRevisionCount: 0, tasks: [], loadIndexValue: 
 {
   const action = pickNextAction({ ...base });
   check("nothing active, nothing due, nothing urgent: null (unchanged behavior)", action === null);
+}
+
+{
+  const checkpoint = { title: "Problem set", requiresPrep: true, dueAt: "2026-09-25", prepLeadDays: 3, status: "prepping" } as Checkpoint;
+  check("an assessment in its prep window is the next action", pickNextAction({ ...base, checkpoints: [checkpoint] })?.kind === "checkpoint-prep");
+  check("a submitted assessment asks for no more prep", pickNextAction({ ...base, checkpoints: [{ ...checkpoint, status: "submitted" }] }) === null);
 }
 
 if (failures.length > 0) {

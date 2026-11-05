@@ -96,7 +96,7 @@ export function pickNextAction({
   const urgent =
     enabled("courses") &&
     checkpoints
-      .filter((checkpoint) => checkpoint.requiresPrep && checkpoint.status !== "done" && checkpoint.status !== "missed")
+      .filter((checkpoint) => checkpoint.requiresPrep && checkpoint.status !== "done" && checkpoint.status !== "missed" && checkpoint.status !== "submitted")
       .map((checkpoint) => ({ checkpoint, daysUntil: daysBetween(checkpoint.dueAt, todayKey) }))
       .filter(({ checkpoint, daysUntil }) => daysUntil >= 0 && daysUntil <= checkpoint.prepLeadDays)
       .sort((a, b) => a.daysUntil - b.daysUntil)[0];

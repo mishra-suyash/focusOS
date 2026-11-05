@@ -73,7 +73,7 @@ export function buildReviewQueue(dueItems: RevisionItem[], checkpoints: Checkpoi
 
   const boosted = new Set<string>();
   for (const checkpoint of checkpoints) {
-    if (!checkpoint.requiresPrep || checkpoint.status === "done" || checkpoint.status === "missed") continue;
+    if (!checkpoint.requiresPrep || checkpoint.status === "done" || checkpoint.status === "missed" || checkpoint.status === "submitted") continue;
     const daysUntilDue = daysBetween(checkpoint.dueAt, todayKey);
     if (daysUntilDue < 0 || daysUntilDue > checkpoint.prepLeadDays) continue;
     const scoped = checkpoint.topicIds.length > 0 ? new Set(checkpoint.topicIds) : null;
