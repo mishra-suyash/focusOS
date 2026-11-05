@@ -1,9 +1,10 @@
-import { dateKeyOfIso, lastSevenDays, todayKey } from "@/lib/dates";
+import { parseISO, subDays } from "date-fns";
+import { dateKeyOfIso, lastSevenDays, sessionDayKey, todayKey } from "@/lib/dates";
 import type { Category, Day, PomodoroSession, Task } from "@/types";
 
 export function todayMetrics(tasks: Task[], sessions: PomodoroSession[]) {
   const today = todayKey();
-  const todaysSessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === today);
+  const todaysSessions = sessions.filter((session) => sessionDayKey(session) === today);
   const completedTasks = tasks.filter((task) => task.completedAt && dateKeyOfIso(task.completedAt) === today);
   return {
     pomodoros: todaysSessions.filter((session) => session.mode === "work").length,
@@ -14,12 +15,14 @@ export function todayMetrics(tasks: Task[], sessions: PomodoroSession[]) {
 }
 
 export function calculateStreak(sessions: PomodoroSession[]) {
-  const activeDates = new Set(sessions.filter((s) => s.mode === "work").map((s) => dateKeyOfIso(s.completedAt)));
+  const activeDates = new Set(sessions.filter((s) => s.mode === "work").map(sessionDayKey));
+  let cursor = parseISO(todayKey());
+  // Today isn't over, so nothing logged yet doesn't break the run: it only counts once it's done.
+  if (!activeDates.has(todayKey(cursor))) cursor = subDays(cursor, 1);
   let streak = 0;
-  let cursor = new Date();
   while (activeDates.has(todayKey(cursor))) {
     streak += 1;
-    cursor = new Date(cursor.getTime() - 24 * 60 * 60 * 1000);
+    cursor = subDays(cursor, 1);
   }
   return streak;
 }
@@ -27,7 +30,7 @@ export function calculateStreak(sessions: PomodoroSession[]) {
 export function weeklyPomodoros(sessions: PomodoroSession[], days: string[] = lastSevenDays()) {
   return days.map((day) => ({
     day: day.slice(5),
-    pomodoros: sessions.filter((s) => s.mode === "work" && dateKeyOfIso(s.completedAt) === day).length
+    pomodoros: sessions.filter((s) => s.mode === "work" && sessionDayKey(s) === day).length
   }));
 }
 
@@ -38,7 +41,7 @@ export function focusedMinutesByCategory(sessions: PomodoroSession[], days: stri
   return categories.map((category) => ({
     category,
     minutes: sessions
-      .filter((s) => s.mode === "work" && s.category === category && dateSet.has(dateKeyOfIso(s.completedAt)))
+      .filter((s) => s.mode === "work" && s.category === category && dateSet.has(sessionDayKey(s)))
       .reduce((sum, session) => sum + session.minutes, 0)
   }));
 }

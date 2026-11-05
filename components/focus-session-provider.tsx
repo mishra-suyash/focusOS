@@ -9,7 +9,7 @@ import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { useFocusContext } from "@/hooks/use-focus-context";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { cueEnabled, cueKeys, resolveSounds, type CueName } from "@/lib/cues";
-import { dateKeyOfIso, todayKey } from "@/lib/dates";
+import { dateKeyOfIso, scheduleDayKey, sessionSlotDayKey, todayKey } from "@/lib/dates";
 import { fetchCollection, incrementTaskCompletedPomodoros, savePomodoro, saveDailySchedule, updatePomodoro } from "@/lib/firestore";
 import { anyFocusOSWindowFocused, deliverCue, installFocusBeacon } from "@/lib/notify";
 import { installAudioUnlock } from "@/lib/sounds";
@@ -251,8 +251,7 @@ async function claimRun(runId: string): Promise<boolean> {
  * started against a class block via the normal path, and even if it were, attendance is logged
  * separately, not inferred from a timer running.
  */
-async function syncSlotAutoStatus(uid: string, slotId: string): Promise<string | null> {
-  const dateKey = todayKey();
+async function syncSlotAutoStatus(uid: string, slotId: string, dateKey: string): Promise<string | null> {
   const [schedules, sessions] = await Promise.all([
     fetchCollection<DailySchedule>(uid, "dailySchedules"),
     fetchCollection<PomodoroSession>(uid, "pomodoroSessions")
@@ -263,7 +262,7 @@ async function syncSlotAutoStatus(uid: string, slotId: string): Promise<string |
   // A recurring class/routine slot reuses the same id on every date it materializes on — restrict
   // coverage to today's own sessions so a session logged weeks ago against the same slot id never
   // counts toward today's block.
-  const todaySessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === dateKey);
+  const todaySessions = sessions.filter((session) => sessionSlotDayKey(session) === dateKey);
   if (slotAutoStatus(slot, todaySessions) !== "completed") return null;
   await saveDailySchedule(uid, {
     dateKey,
@@ -691,6 +690,9 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
         mode: "work",
         minutes: opts.minutes,
         completedAt: new Date(opts.endedAt).toISOString(),
+        dayKey: dateKeyOfIso(new Date(opts.endedAt).toISOString()),
+        // Where its block is: a sitting that runs past midnight belongs to the date it started on.
+        ...(ctx.slotId ? { slotDateKey: scheduleDayKey(new Date(opts.endedAt - opts.minutes * 60_000)) } : {}),
         cycle,
         taskId: ctx.taskId || undefined,
         slotId: ctx.slotId,
@@ -748,7 +750,7 @@ export function FocusSessionProvider({ children }: { children: React.ReactNode }
       // §6.5 — this session may have just pushed its block past the auto-complete threshold.
       async () => {
         if (!record.slotId) return;
-        const closedTitle = await syncSlotAutoStatus(uid, record.slotId);
+        const closedTitle = await syncSlotAutoStatus(uid, record.slotId, sessionSlotDayKey(record));
         if (closedTitle) announceBlockClosed(closedTitle, record.slotId);
       }
     ];

@@ -22,7 +22,7 @@ import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { isModuleEnabled } from "@/lib/features";
 import { courseSlotsForDate } from "@/lib/courses";
-import { todayKey } from "@/lib/dates";
+import { scheduleDayKey } from "@/lib/dates";
 import { isBreakMode } from "@/lib/terms";
 import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { Course, DailySchedule, Task, Term } from "@/types";
@@ -41,7 +41,7 @@ export default function CalendarPage() {
     end: endOfWeek(endOfMonth(month), { weekStartsOn: 1 })
   });
 
-  const today = todayKey();
+  const today = scheduleDayKey();
   const needsTerm = courses.length > 0 && isBreakMode(terms, today);
 
   return (

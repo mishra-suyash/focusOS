@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { useToast } from "@/components/toast-host";
-import { todayKey } from "@/lib/dates";
+import { scheduleDayKey } from "@/lib/dates";
 import { fetchCollection, saveUserSettings } from "@/lib/firestore";
 import { resyncRoutineDays, undoRoutineDays } from "@/lib/plan-release";
 import { currentMinute } from "@/lib/schedule";
@@ -32,7 +32,7 @@ export function useRoutineResync() {
     if (!edit || !user) return;
     const uid = user.uid;
     const sessions = await fetchCollection<PomodoroSession>(uid, "pomodoroSessions");
-    const changes = await resyncRoutineDays(uid, edit.latest.routineBlocks, edit.latest.weeklyPlanning, { todayKey: todayKey(), nowMinutes: currentMinute(), sessions });
+    const changes = await resyncRoutineDays(uid, edit.latest.routineBlocks, edit.latest.weeklyPlanning, { todayKey: scheduleDayKey(), nowMinutes: currentMinute(), sessions });
     if (changes.length === 0) return;
     const released = changes.reduce((sum, change) => sum + change.released, 0);
     const steppedAside = changes.flatMap((change) => change.steppedAside);

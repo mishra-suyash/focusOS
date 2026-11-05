@@ -26,6 +26,15 @@ import { DEFAULT_MAX_CHUNK_MINUTES, DEFAULT_MIN_CHUNK_MINUTES } from "@/lib/time
 import { useUserTier } from "@/lib/tiers";
 import type { DayTemplate, UserSettings } from "@/types";
 
+const DAY_END_OPTIONS = [
+  { value: "00:00", label: "Midnight" },
+  { value: "01:00", label: "1:00 am" },
+  { value: "02:00", label: "2:00 am" },
+  { value: "03:00", label: "3:00 am" },
+  { value: "04:00", label: "4:00 am" },
+  { value: "05:00", label: "5:00 am" }
+];
+
 export default function SettingsPage() {
   const { user, isDemoMode } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -99,6 +108,19 @@ export default function SettingsPage() {
               <TimezoneSelect value={settings.timezone ?? DEFAULT_TIMEZONE} onChange={(timezone) => updateSettings({ timezone })} />
             </label>
             <p className="text-xs text-ink-500">Used for anything with a real clock time, including Google Calendar sync.</p>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              <span>My day ends at</span>
+              <select className="input w-40" value={settings.dayEndsAt ?? "00:00"} onChange={(event) => updateSettings({ dayEndsAt: event.target.value })}>
+                {DAY_END_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="text-xs text-ink-500">
+              Work and wrap-ups before this time count for the day before. Blocks stay on their own date. Sessions already logged don&apos;t move.
+            </p>
           </div>
         </section>
         <GoogleCalendarSettings />

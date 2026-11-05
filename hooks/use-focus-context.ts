@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
-import { todayKey } from "@/lib/dates";
+import { scheduleDayKey } from "@/lib/dates";
 import { subscribeDoc } from "@/lib/firestore";
 import { getActiveSlot, REST_SLOT_TYPES, sortedSlots } from "@/lib/schedule";
 import { categoryForSlotType } from "@/lib/timeline";
@@ -28,7 +28,7 @@ export interface FocusContext {
  */
 export function useFocusContext(): FocusContext | null {
   const { user } = useAuth();
-  const today = todayKey();
+  const today = scheduleDayKey();
   const [schedule, setSchedule] = useState<DailySchedule | null>(null);
   const minute = useCurrentMinute();
 

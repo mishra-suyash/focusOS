@@ -7,7 +7,7 @@ import { useAuth } from "@/components/auth-provider";
 import { useDay } from "@/hooks/use-day";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { blockStartNotificationsOn, cueEnabled, cueKeys, reminderClaimWindowMs, resolveSounds } from "@/lib/cues";
-import { dateKeyOfIso, todayKey, weekStartKey } from "@/lib/dates";
+import { scheduleDayKey, sessionDayKey, sessionSlotDayKey, setDayEnd, todayKey, weekStartKey } from "@/lib/dates";
 import { courseSlotsForDate } from "@/lib/courses";
 import { deliverCue, notificationsAllowed } from "@/lib/notify";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
@@ -76,8 +76,13 @@ const WorkdaySessionContext = createContext<WorkdaySessionContextValue | null>(n
 export function WorkdaySessionProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const today = todayKey();
+  // Reminders follow the blocks on the clock, which past midnight may be a day ahead of `today`.
+  const clockDay = scheduleDayKey();
   const { day } = useDay(today);
-  const { settings, update: updateSettings } = useUserSettings();
+  const { settings, loaded: settingsLoaded, update: updateSettings } = useUserSettings();
+  useEffect(() => {
+    if (settingsLoaded) setDayEnd(settings.dayEndsAt);
+  }, [settingsLoaded, settings.dayEndsAt]);
   const [starting, setStarting] = useState(false);
   const [schedule, setSchedule] = useState<DailySchedule | null>(null);
   const [reminder, setReminder] = useState<ReminderEvent | null>(null);
@@ -94,8 +99,8 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       setSchedule(null);
       return;
     }
-    return subscribeDoc<DailySchedule>(user.uid, "dailySchedules", today, setSchedule);
-  }, [user, today]);
+    return subscribeDoc<DailySchedule>(user.uid, "dailySchedules", clockDay, setSchedule);
+  }, [user, clockDay]);
 
   useEffect(() => {
     if (!session?.startedAt) return;
@@ -414,7 +419,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         // (`course-${courseId}-${sessionId}`, `routineSlotsForDate`'s own ids) — coverage must only
         // ever look at today's own sessions, or a session logged against last Thursday's identical
         // slot id would silently count toward today's.
-        const todaySessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === today);
+        const todaySessions = sessions.filter((session) => sessionSlotDayKey(session) === today);
         let changed = false;
         todaySlots = todaySchedule.slots.map((slot) => {
           if (slot.status === "completed") return slot;
@@ -429,7 +434,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       }
 
       const focusedMinutes = sessions
-        .filter((item) => item.mode === "work" && dateKeyOfIso(item.completedAt) === today)
+        .filter((item) => item.mode === "work" && sessionDayKey(item) === today)
         .reduce((sum, item) => sum + item.minutes, 0);
       const snapshot = buildLoadIndexSnapshot({
         scheduledDeepWorkMinutes: scheduleSummary(todaySlots).plannedDeepWork,
@@ -448,7 +453,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
       // reason as the Load Index one: a historical record that must not silently change when a later
       // edit changes what "today" would compute to. Every field is derived from data already stored
       // elsewhere, so a missing snapshot is simply recomputed for display.
-      const todaySessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === today);
+      const todaySessions = sessions.filter((session) => sessionSlotDayKey(session) === today);
       const game = computeDayScore({
         slots: todaySlots,
         sessions: todaySessions,

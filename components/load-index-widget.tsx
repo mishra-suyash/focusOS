@@ -46,7 +46,7 @@ export function LoadIndexWidget({
         <div className="mt-3 flex gap-4 border-t border-ink-100 pt-2 text-xs text-ink-500 dark:border-ink-800">
           {streak !== undefined ? (
             <span className="inline-flex items-center gap-1">
-              {streak}-day streak
+              {streak}-day on-track streak
               <InfoHint term="onTrackStreak" />
             </span>
           ) : null}

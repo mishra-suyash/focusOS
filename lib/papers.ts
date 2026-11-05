@@ -1,4 +1,4 @@
-import { dateKeyOfIso } from "@/lib/dates";
+import { sessionDayKey } from "@/lib/dates";
 import type { Pass2Output, Paper, PaperStatus, Pass1Output, PomodoroSession, Priority, ReadingHabit } from "@/types";
 
 export const PASS_SEED_MINUTES: Record<1 | 2 | 3, number> = { 1: 7, 2: 60, 3: 90 };
@@ -475,7 +475,7 @@ export function readingHabitProgress(
   let minutes = 0;
   for (const session of sessions) {
     if (!isReadingSession(session)) continue;
-    const dateKey = dateKeyOfIso(session.completedAt);
+    const dateKey = sessionDayKey(session);
     if (!inWeek.has(dateKey)) continue;
     minutes += Math.max(0, session.minutes);
     const key = session.slotId ? `${dateKey}|${session.slotId}` : session.id;

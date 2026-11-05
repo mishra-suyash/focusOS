@@ -11,7 +11,7 @@ import { useLiveLoadIndex } from "@/hooks/use-live-load-index";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { plannableTasks } from "@/lib/courses";
-import { dateKeyOfIso, weekDates, weekStartKey } from "@/lib/dates";
+import { scheduleDayKey, sessionSlotDayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { pickNextAction, type NextAction } from "@/lib/next-action";
 import { describeObjective, sittingStartArgs, type SittingStartArgs } from "@/lib/objectives";
 import { currentMinute, getActiveSlot, getNextSlot, REST_SLOT_TYPES, sortedSlots } from "@/lib/schedule";
@@ -59,7 +59,8 @@ export function useNextAction(todayKey: string): {
   const { day } = useDay(todayKey);
   const loadIndex = useLiveLoadIndex(todayKey);
 
-  const slots = sortedSlots(dailySchedules.find((item) => item.dateKey === todayKey)?.slots ?? []);
+  const clockDay = scheduleDayKey();
+  const slots = sortedSlots(dailySchedules.find((item) => item.dateKey === clockDay)?.slots ?? []);
   const minute = currentMinute();
   const action = pickNextAction({
     checkpoints: allCheckpoints,
@@ -78,7 +79,7 @@ export function useNextAction(todayKey: string): {
     isDayOff: Boolean(day?.dayOff)
   });
 
-  const todaysSessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === todayKey);
+  const todaysSessions = sessions.filter((session) => sessionSlotDayKey(session) === clockDay);
   const ctx = { courses, papers, checkpoints: allCheckpoints, tasks, goals };
   const argsFor = (slot: ScheduleSlot) => sittingStartArgs(slot, describeObjective(slot, ctx), todaysSessions);
 

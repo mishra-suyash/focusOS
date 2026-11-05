@@ -1,5 +1,5 @@
 import { getDay, parseISO } from "date-fns";
-import { dateKeyOfIso } from "@/lib/dates";
+import { sessionSlotDayKey } from "@/lib/dates";
 import { minutesFromTime, minutesToTime } from "@/lib/schedule";
 import type { ReadingHabit, ScheduleSlot, ScheduleSlotType, SlotObjectiveRef, TaskBucket, UserSettings } from "@/types";
 
@@ -701,7 +701,7 @@ export function releasableSlots(params: {
 export interface ReleaseClock {
   todayKey: string;
   nowMinutes: number;
-  sessions: { slotId?: string; mode: string; minutes: number; completedAt: string }[];
+  sessions: { slotId?: string; slotDateKey?: string; mode: string; minutes: number; completedAt: string }[];
 }
 
 /** Still ahead, and nobody has started it. The locked layer, classes, commitments and imported events are never sittings. */
@@ -711,7 +711,7 @@ export function isUnstartedFutureSitting(slot: ScheduleSlot, dateKey: string, cl
   if (slot.locked || slot.type === "class" || slot.type === "external" || slot.sourceGoogleEventId) return false;
   if (slot.id.startsWith("commitment-") || slot.id === "weekly-planning") return false;
   if (slot.status !== "upcoming") return false;
-  return !clock.sessions.some((session) => session.mode === "work" && session.slotId === slot.id && dateKeyOfIso(session.completedAt) === dateKey && session.minutes > 0);
+  return !clock.sessions.some((session) => session.mode === "work" && session.slotId === slot.id && sessionSlotDayKey(session) === dateKey && session.minutes > 0);
 }
 
 /** Work that has just finished or stopped, and so no longer wants the time planned for it. */

@@ -20,6 +20,8 @@ import { isFromDroppedCourse, plannableTasks } from "../lib/courses";
 import { nextPassEstimateMinutes, nextReadingPass, pastPassMinutes, readingCandidates, PASS_SEED_MINUTES } from "../lib/papers";
 import { milestoneMinuteShares, placeProposals, resolvePlacement, DEFAULT_WORKING_WINDOW, type WeekProposalCandidate } from "../lib/weekplan";
 import { minutesFromTime } from "../lib/schedule";
+import { calculateStreak } from "../lib/analytics";
+import { addDaysToKey, dayEndMinutes, scheduleDayKey, sessionDayKey, sessionSlotDayKey, todayKey, zonedDayKey } from "../lib/dates";
 import { buildLoadIndexSnapshot, computeRequiredMinutes, loadIndexScope } from "../lib/loadindex";
 import { MINUTES_PER_REVISION } from "../lib/revision";
 import type { Course, DailySchedule, Paper, PomodoroSession, ScheduleSlot, Task } from "../types";
@@ -752,6 +754,27 @@ const donePass = (minutes: number, output?: unknown) => ({ status: "done" as con
   const on = loadIndexScope({ enabledModules: ["goals", "courses", "revise"] });
   check("no saved working window means the planner's default, not all seven days", on.workingDaysOfWeek.length === DEFAULT_WORKING_WINDOW.daysOfWeek.length && DEFAULT_WORKING_WINDOW.daysOfWeek.length < 7);
   check("modules on are left alone", !("goals" in on) && !("courses" in on) && !("revisionDueCount" in on));
+}
+
+// ---- QA decisions 2026-11-05: when a day ends ----
+{
+  const iso = (localDate: string, time: string) => new Date(`${localDate}T${time}:00`).toISOString();
+  const yesterday = addDaysToKey(todayKey(), -1);
+  const work = (completedAt: string, patch: Partial<PomodoroSession> = {}) => session({ mode: "work", minutes: 25, completedAt, ...patch });
+  const inDay = (dateKey: string) => work(iso(dateKey, "12:00"));
+  check("a streak holds until the day is over", calculateStreak([inDay(yesterday), inDay(addDaysToKey(yesterday, -1))]) === 2);
+  check("today counts once it has a session", calculateStreak([inDay(todayKey()), inDay(yesterday)]) === 2);
+  check("a missed day ends a streak", calculateStreak([inDay(addDaysToKey(yesterday, -1))]) === 0);
+
+  check("midnight by default: both keys agree", todayKey() === scheduleDayKey());
+  const lateWork = work("2026-11-05T19:30:00.000Z");
+  check("an old session stays on its calendar day", sessionDayKey(lateWork) === scheduleDayKey(new Date(lateWork.completedAt)));
+  check("a stored day wins", sessionDayKey({ ...lateWork, dayKey: "2026-11-01" }) === "2026-11-01");
+  check("a stored block date wins for coverage", sessionSlotDayKey({ ...lateWork, slotDateKey: "2026-11-01" }) === "2026-11-01");
+  check("out-of-range day ends read as midnight", dayEndMinutes("09:00") === 0 && dayEndMinutes(undefined) === 0 && dayEndMinutes("04:00") === 240);
+  check("the server's day is the user's, not UTC's", zonedDayKey(new Date("2026-11-05T19:30:00.000Z"), "Asia/Kolkata") === "2026-11-06");
+  check("and honours when their day ends", zonedDayKey(new Date("2026-11-05T19:30:00.000Z"), "Asia/Kolkata", "04:00") === "2026-11-05");
+  check("after the day end, it's the new day", zonedDayKey(new Date("2026-11-05T23:00:00.000Z"), "Asia/Kolkata", "04:00") === "2026-11-06");
 }
 
 if (failures.length > 0) {

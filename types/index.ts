@@ -210,6 +210,10 @@ export interface PomodoroSession {
   mode: TimerMode;
   minutes: number;
   completedAt: string;
+  /** The day it counts for, fixed when it's logged (`sessionDayKey`). Absent on older sessions. */
+  dayKey?: string;
+  /** The date of `slotId`'s schedule document (`sessionSlotDayKey`). Absent on older sessions. */
+  slotDateKey?: string;
   cycle: number;
   taskId?: string;
   slotId?: string;
@@ -1035,6 +1039,8 @@ export interface UserSettings {
    * schedules) an explicit, overridable setting, since every timed Google Calendar event needs a
    * real IANA timezone (plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.1). */
   timezone?: string;
+  /** "HH:mm" up to 05:00: work before this counts for the day before. Absent = midnight. */
+  dayEndsAt?: string;
   /** plan/14 §5.6/§4 — when the weekly planning session happens. Absent = the feature is off and
    *  `weeklyPlanningSlotForDate` (lib/weekplan.ts) materializes nothing, the same "absent means the
    *  default" convention `routineBlocks` already uses. */

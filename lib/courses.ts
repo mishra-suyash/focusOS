@@ -1,5 +1,5 @@
 import { getDay, parseISO } from "date-fns";
-import { dateKeyOfIso, weekDates, weekStartKey } from "@/lib/dates";
+import { sessionDayKey, sessionSlotDayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { fetchCollection, saveDailySchedule, setRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/firestore";
 import { planRevisionTemplateSync } from "@/lib/recurring-tasks";
 import { minutesFromTime, sortedSlots } from "@/lib/schedule";
@@ -229,7 +229,7 @@ export function accountedSlotMinutes(slot: Pick<ScheduleSlot, "id" | "startTime"
   if (!cutoff) return length;
   const behind = dateKey < cutoff.todayKey || (dateKey === cutoff.todayKey && minutesFromTime(slot.endTime) <= cutoff.nowMinutes);
   if (!behind) return length;
-  const sameDay = cutoff.sessions.filter((session) => dateKeyOfIso(session.completedAt) === dateKey);
+  const sameDay = cutoff.sessions.filter((session) => sessionSlotDayKey(session) === dateKey);
   return Math.min(slotCoverageMinutes(slot, sameDay), length);
 }
 
@@ -299,7 +299,7 @@ export function completedMinutesThisWeek(
   const taskById = new Map(tasks.map((task) => [task.id, task] as const));
   return sessions.reduce((sum, session) => {
     if (session.mode !== "work") return sum;
-    const dateKey = dateKeyOfIso(session.completedAt);
+    const dateKey = sessionDayKey(session);
     if (!weekDateKeys.includes(dateKey)) return sum;
     const linkedTask = session.taskId ? taskById.get(session.taskId) : undefined;
     const sessionCourseId = session.courseId ?? linkedTask?.courseId;

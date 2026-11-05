@@ -6,7 +6,7 @@ import { useDay } from "@/hooks/use-day";
 import { useLiveLoadIndex } from "@/hooks/use-live-load-index";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { computeDayReadout, type DayReadout } from "@/lib/gamify";
-import { dateKeyOfIso } from "@/lib/dates";
+import { sessionSlotDayKey } from "@/lib/dates";
 import { currentMinute } from "@/lib/schedule";
 import type { DailySchedule, PomodoroSession } from "@/types";
 
@@ -32,7 +32,7 @@ export function useDayReadout(dateKey: string, options: { isToday?: boolean } = 
   // A recurring class or routine slot reuses the same id on every date it materializes on, so
   // coverage has to be measured against that date's own sessions — an unfiltered list would let a
   // session logged against last Thursday's identical slot id count toward this one.
-  const daySessions = sessions.filter((session) => dateKeyOfIso(session.completedAt) === dateKey);
+  const daySessions = sessions.filter((session) => sessionSlotDayKey(session) === dateKey);
 
   return computeDayReadout({
     slots,

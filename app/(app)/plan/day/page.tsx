@@ -47,7 +47,7 @@ import { commitmentSlotsForDate, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { isBreakMode } from "@/lib/terms";
 import { DEFAULT_MAX_CHUNK_MINUTES, nearestFreeGap, rangeOverlapsSlots, sittingBounds, splitLongBlocks } from "@/lib/timeline";
-import { friendlyDate, todayKey } from "@/lib/dates";
+import { friendlyDate, scheduleDayKey } from "@/lib/dates";
 import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
 import type { Course, DailySchedule, DayTemplate, Goal, Paper, RecurringTaskTemplate, ScheduleSlot, ScheduleSlotType, Task, Term } from "@/types";
@@ -67,7 +67,7 @@ function DayPlannerContent() {
   const { isEnabled } = useFeatures();
   const timelineEditorEnabled = isEnabled("planDayTimeline");
   const searchParams = useSearchParams();
-  const [dateKey, setDateKey] = useState(todayKey());
+  const [dateKey, setDateKey] = useState(scheduleDayKey());
   const { items: schedules, loading: schedulesLoading } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
   const { items: templates } = useUserCollection<DayTemplate>("dayTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
@@ -124,7 +124,7 @@ function DayPlannerContent() {
   const [templateUpdateMessage, setTemplateUpdateMessage] = useState<{ text: string; isError: boolean } | null>(null);
 
   useEffect(() => {
-    setDateKey(searchParams.get("date") ?? todayKey());
+    setDateKey(searchParams.get("date") ?? scheduleDayKey());
   }, [searchParams]);
 
   useEffect(() => {

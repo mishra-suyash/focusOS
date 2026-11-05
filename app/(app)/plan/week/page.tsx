@@ -29,7 +29,7 @@ import {
   syncRevisionTemplate,
   type PlanningCutoff
 } from "@/lib/courses";
-import { addDaysToKey, dateKeyOfIso, todayKey, weekDates, weekStartKey } from "@/lib/dates";
+import { addDaysToKey, dateKeyOfIso, scheduleDayKey, sessionSlotDayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { clearDayOff, fetchCourseClassLogs, saveDailySchedule, saveWeeklyReviewFields, setDayOff, updateCourse, updateGoal, updatePaper, updateTask } from "@/lib/firestore";
 import { isGoalActiveForDate } from "@/lib/goals";
 import { computeDebtHours, computeLoadIndexStreak, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
@@ -191,7 +191,7 @@ function PlanWeekContent() {
   // plan/13 C1 already had to fix once for Workload.
   const { isEnabled } = useFeatures();
   const dayScoreOn = isEnabled("dayScore");
-  const todayK = todayKey();
+  const todayK = scheduleDayKey();
 
   // Memoized end to end (weekStart -> priorWeekStart -> the where-clause constraints below) so
   // each link has a provably stable identity across renders — otherwise every keystroke in this
@@ -1444,7 +1444,7 @@ function PlanWeekContent() {
             (slot) =>
               isPlannerMade(slot, weekStart) &&
               (schedule.dateKey < todayK || minutesFromTime(slot.endTime) <= now.minutes) &&
-              sittingOutcome(slot, sessions.filter((session) => dateKeyOfIso(session.completedAt) === schedule.dateKey)) !== "closed"
+              sittingOutcome(slot, sessions.filter((session) => sessionSlotDayKey(session) === schedule.dateKey)) !== "closed"
           )
         ).length
     : 0;

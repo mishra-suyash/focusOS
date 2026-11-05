@@ -27,7 +27,7 @@ import { useNextAction } from "@/hooks/use-next-action";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { dateKeyOfIso, friendlyDate, todayKey } from "@/lib/dates";
+import { friendlyDate, scheduleDayKey, sessionDayKey, todayKey } from "@/lib/dates";
 import { resolveDashboardWidgets } from "@/lib/dashboard-widgets";
 import { saveDailySchedule, saveDayFields, updateTask } from "@/lib/firestore";
 import { categoryLabels } from "@/lib/options";
@@ -78,7 +78,7 @@ function DashboardContent() {
   const dailySchedule = dailySchedules.find((item) => item.dateKey === today);
   // Focus sessions only — every use below (history, sitting coverage, the Now card) is about work,
   // and break docs logged before the timer stopped writing them must not read as work.
-  const todaysSessions = sessions.filter((session) => session.mode === "work" && dateKeyOfIso(session.completedAt) === today);
+  const todaysSessions = sessions.filter((session) => session.mode === "work" && sessionDayKey(session) === today);
   const metrics = todayMetrics(tasks, sessions);
   const [note, setNote] = useState(day?.scratchpad ?? "");
 
@@ -158,7 +158,10 @@ function DashboardContent() {
   /** S5 "Schedule it" on the Up next card — places it in the next free gap after now and opens Plan — Day. */
   async function scheduleAction() {
     if (!user || !nextAction || nextAction.kind === "rest") return;
-    const currentSlots = dailySchedule?.slots ?? [];
+    // Placed against the clock, so it goes on the date the clock is on.
+    const clockDay = scheduleDayKey();
+    const clockSchedule = dailySchedules.find((item) => item.dateKey === clockDay);
+    const currentSlots = clockSchedule?.slots ?? [];
     const workMinutes = settings.workMinutes ?? 25;
     let block;
     if (nextAction.kind === "task" && nextAction.taskId) {
@@ -182,8 +185,8 @@ function DashboardContent() {
       if (gapStart === null) return;
       block = createSlot({ title: nextAction.title, type, startTime: minutesToTime(gapStart), endTime: minutesToTime(gapStart + duration) });
     }
-    await saveDailySchedule(user.uid, { dateKey: today, templateId: dailySchedule?.templateId, slots: sortedSlots([...currentSlots, block]) });
-    router.push(`/plan/day?date=${today}`);
+    await saveDailySchedule(user.uid, { dateKey: clockDay, templateId: clockSchedule?.templateId, slots: sortedSlots([...currentSlots, block]) });
+    router.push(`/plan/day?date=${clockDay}`);
   }
 
   const pinnedIds = day?.pinnedTaskIds ?? [];

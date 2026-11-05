@@ -5,8 +5,8 @@ import { useAuth } from "@/components/auth-provider";
 import { useToast } from "@/components/toast-host";
 import { fetchCollection } from "@/lib/firestore";
 import { removeSittings, restoreSittings } from "@/lib/plan-release";
+import { scheduleDayKey } from "@/lib/dates";
 import { currentMinute } from "@/lib/schedule";
-import { todayKey } from "@/lib/dates";
 import { sittingsOfFinishedWork, type FinishedWork } from "@/lib/weekplan";
 import type { DailySchedule, PomodoroSession } from "@/types";
 
@@ -27,7 +27,7 @@ export function useReleaseSittings() {
         fetchCollection<DailySchedule>(uid, "dailySchedules"),
         fetchCollection<PomodoroSession>(uid, "pomodoroSessions")
       ]);
-      const released = sittingsOfFinishedWork({ schedules, work, todayKey: todayKey(), nowMinutes: currentMinute(), sessions });
+      const released = sittingsOfFinishedWork({ schedules, work, todayKey: scheduleDayKey(), nowMinutes: currentMinute(), sessions });
       if (released.length === 0) return;
       await removeSittings(uid, released);
       toast({
