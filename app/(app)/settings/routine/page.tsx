@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { SectionHeader } from "@/components/section-header";
 import { TypedTimeInput } from "@/components/plan/typed-time-input";
+import { useRoutineResync } from "@/hooks/use-routine-resync";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { DEFAULT_ROUTINE_BLOCKS } from "@/lib/routine";
 import { slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
@@ -25,9 +26,18 @@ const ROUTINE_SLOT_TYPES = userSelectableSlotTypes.filter((type) => type !== "cl
 const DEFAULT_WEEKLY_PLANNING: NonNullable<UserSettings["weeklyPlanning"]> = { enabled: false, dayOfWeek: 0, startTime: "18:00", endTime: "18:30" };
 
 export default function RoutineSettingsPage() {
-  const { settings, update } = useUserSettings();
+  const { settings, update: saveSettings } = useUserSettings();
+  const queueResync = useRoutineResync();
   const blocks = settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS;
   const weeklyPlanning = settings.weeklyPlanning ?? DEFAULT_WEEKLY_PLANNING;
+
+  function update(patchSettings: { routineBlocks?: RoutineBlock[]; weeklyPlanning?: NonNullable<UserSettings["weeklyPlanning"]> }) {
+    saveSettings(patchSettings);
+    queueResync(
+      { routineBlocks: blocks, weeklyPlanning: settings.weeklyPlanning },
+      { routineBlocks: patchSettings.routineBlocks ?? blocks, weeklyPlanning: patchSettings.weeklyPlanning ?? settings.weeklyPlanning }
+    );
+  }
 
   function patchWeeklyPlanning(changes: Partial<NonNullable<UserSettings["weeklyPlanning"]>>) {
     update({ weeklyPlanning: { ...weeklyPlanning, ...changes } });
@@ -62,7 +72,8 @@ export default function RoutineSettingsPage() {
       </SectionHeader>
       <p className="mb-4 text-sm text-ink-500">
         Sleep, meals, gym, or anything else recurring. Whichever are on appear locked on every matching day in Plan — Day — a
-        template applied on top never displaces them.
+        template applied on top never displaces them. Changes here also reach today and your saved days ahead; past days stay as
+        they were.
       </p>
       <div className="card mb-4 space-y-2 p-4">
         <p className="label">Weekly planning</p>

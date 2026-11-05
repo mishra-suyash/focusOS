@@ -1,6 +1,8 @@
 import { getDay, parseISO } from "date-fns";
-import { minutesFromTime, sortedSlots } from "@/lib/schedule";
+import { weekStartKey } from "@/lib/dates";
+import { isFixedSlot, minutesFromTime, sortedSlots } from "@/lib/schedule";
 import { rangeOverlapsSlots } from "@/lib/timeline";
+import { isPlannerMade, isUnstartedFutureSitting, type ReleaseClock } from "@/lib/weekplan";
 import type { RoutineBlock, ScheduleSlot } from "@/types";
 
 /**
@@ -65,4 +67,45 @@ export function routineSlotsForDate(blocks: RoutineBlock[], dateKey: string): Sc
   }
 
   return sortedSlots(accepted);
+}
+
+const isRoutineLayer = (slot: ScheduleSlot) => slot.id.startsWith("routine-") || slot.id === "weekly-planning";
+
+/**
+ * A saved day after a routine edit, or `null` if the edit doesn't change it. `wanted` is the new routine
+ * for that date. A routine block that has already ended today stays as what happened; one still running
+ * is replaced, or moving Sleep at 00:30 couldn't free the night it was moved to free.
+ *
+ * Where a new block lands on something: fixed items win, as they do everywhere; an unstarted planner
+ * sitting is released back to "to place"; anything else (a block you placed, or one already worked) stays,
+ * and the routine block steps aside that day, as it does in `mergeMissingLockedSlots`. Nothing you did by
+ * hand is destroyed to make room for a block that can't be deleted afterwards.
+ */
+export function resyncRoutineOnDay(params: { dateKey: string; slots: ScheduleSlot[]; wanted: ScheduleSlot[]; clock: ReleaseClock }) {
+  const { dateKey, slots, wanted, clock } = params;
+  const hasEnded = (slot: ScheduleSlot) => dateKey === clock.todayKey && minutesFromTime(slot.endTime) <= clock.nowMinutes;
+  const kept = slots.filter((slot) => !isRoutineLayer(slot) || hasEnded(slot));
+  const unmovable = kept.filter((slot) => isFixedSlot(slot) || isRoutineLayer(slot));
+  const weekStart = weekStartKey(parseISO(dateKey));
+  const released: ScheduleSlot[] = [];
+  const accepted: ScheduleSlot[] = [];
+  const steppedAside: string[] = [];
+
+  for (const block of wanted) {
+    const start = minutesFromTime(block.startTime);
+    const end = minutesFromTime(block.endTime);
+    if (rangeOverlapsSlots(start, end, unmovable)) continue;
+    const beneath = kept.filter((slot) => !unmovable.includes(slot) && !released.includes(slot) && rangeOverlapsSlots(start, end, [slot]));
+    if (beneath.some((slot) => !isUnstartedFutureSitting(slot, dateKey, clock) || !isPlannerMade(slot, weekStart))) {
+      steppedAside.push(block.title);
+      continue;
+    }
+    released.push(...beneath);
+    accepted.push(slots.find((slot) => slot.id === block.id && slot.startTime === block.startTime && slot.endTime === block.endTime && slot.title === block.title) ?? block);
+  }
+
+  const next = sortedSlots([...kept.filter((slot) => !released.includes(slot)), ...accepted]);
+  const before = sortedSlots(slots);
+  const same = next.length === before.length && next.every((slot, index) => slot === before[index]);
+  return same ? null : { slots: next, released, steppedAside };
 }
