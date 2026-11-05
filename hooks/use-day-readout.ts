@@ -6,7 +6,7 @@ import { useDay } from "@/hooks/use-day";
 import { useLiveLoadIndex } from "@/hooks/use-live-load-index";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { computeDayReadout, type DayReadout } from "@/lib/gamify";
-import { sessionSlotDayKey } from "@/lib/dates";
+import { scheduleDayKey, sessionSlotDayKey } from "@/lib/dates";
 import { currentMinute } from "@/lib/schedule";
 import type { DailySchedule, PomodoroSession } from "@/types";
 
@@ -39,7 +39,8 @@ export function useDayReadout(dateKey: string, options: { isToday?: boolean } = 
     sessions: daySessions,
     loadIndex,
     isDayOff: Boolean(day?.dayOff),
-    nowMinute: (options.isToday ?? true) ? currentMinute() : undefined,
+    // Past midnight a day that hasn't ended has no blocks still to come, so the clock says nothing about it.
+    nowMinute: (options.isToday ?? true) && dateKey === scheduleDayKey() ? currentMinute() : undefined,
     snapshot: day?.game
   });
 }

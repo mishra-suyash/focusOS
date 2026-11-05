@@ -33,7 +33,7 @@ import {
   syncRevisionTemplate
 } from "@/lib/courses";
 import { classMinutesForWeek } from "@/lib/tracking";
-import { todayKey } from "@/lib/dates";
+import { scheduleDayKey, todayKey } from "@/lib/dates";
 import { computeCourseCoverage, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import { taskBucketLabels, taskBuckets } from "@/lib/options";
 import { isBreakMode } from "@/lib/terms";
@@ -197,7 +197,7 @@ function CourseCard({
   // today on, so a missed revision sitting reads as still to do here too.
   const nowClock = new Date();
   const plannedRevisionMinutes = plannedMinutesThisWeek(schedules, course.id, "revision", currentWeekDateKeys(), {
-    todayKey: today,
+    todayKey: scheduleDayKey(nowClock),
     nowMinutes: nowClock.getHours() * 60 + nowClock.getMinutes(),
     sessions
   });
@@ -231,7 +231,7 @@ function CourseCard({
   async function saveSessions(sessions: CourseSession[]) {
     if (!user) return;
     await updateCourse(user.uid, course.id, { sessions });
-    await resyncFutureClassSlots(user.uid, { ...course, sessions }, today);
+    await resyncFutureClassSlots(user.uid, { ...course, sessions }, scheduleDayKey());
     setEditingSessions(false);
   }
 

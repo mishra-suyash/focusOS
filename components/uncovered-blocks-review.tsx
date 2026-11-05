@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { useDay } from "@/hooks/use-day";
+import { scheduleDayKey } from "@/lib/dates";
 import { saveDailySchedule, subscribeDoc } from "@/lib/firestore";
 import { currentMinute, isLockedSlot, minutesFromTime, sortedSlots } from "@/lib/schedule";
+import { MINUTES_PER_DAY } from "@/lib/timeline";
 import type { DailySchedule, ScheduleSlot } from "@/types";
 
 /**
@@ -51,7 +53,8 @@ export function UncoveredBlocksReview({
   // to work it, so there's nothing to ask about.
   if (day?.dayOff) return null;
 
-  const minute = currentMinute();
+  // A date the clock has passed is over, however early it is now: a wrap-up at 00:38 still reviews all of it.
+  const minute = date < scheduleDayKey() ? MINUTES_PER_DAY : currentMinute();
   const uncovered = sortedSlots(schedule.slots).filter(
     (slot) => slot.status !== "completed" && slot.status !== "skipped" && !isLockedSlot(slot) && minutesFromTime(slot.endTime) <= minute
   );
