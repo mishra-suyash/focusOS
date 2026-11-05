@@ -21,7 +21,7 @@ import { callAiTask } from "@/lib/ai/client";
 import type { ReadingPlanOutput } from "@/lib/ai/schemas";
 import { subscribeDoc, updatePaper } from "@/lib/firestore";
 import { dateKeyOfIso } from "@/lib/dates";
-import { derivePaperStatus, nextReadingPass, PASS_LABELS, paperStatusLabels, totalReadingMinutes } from "@/lib/papers";
+import { derivePaperStatus, nextReadingPass, PASS_LABELS, paperStatusLabels, runningPass, totalReadingMinutes } from "@/lib/papers";
 import type { FileRef, GoalKind, Pass1Output, Pass2Output, Paper, PomodoroSession } from "@/types";
 
 export default function PaperDetailPage() {
@@ -89,7 +89,7 @@ export default function PaperDetailPage() {
           <p className="label">Status</p>
           <p className="mt-1 text-lg font-semibold">
             {paperStatusLabels[status]}
-            {owed && status !== "inbox" ? <span className="ml-2 text-xs font-normal text-ink-500">{PASS_LABELS[owed]} next</span> : null}
+            {owed && status !== "inbox" ? <span className="ml-2 text-xs font-normal text-ink-500">{PASS_LABELS[owed]} {runningPass(paper) ? "in progress" : "next"}</span> : null}
           </p>
           {readingMinutes > 0 ? <p className="text-xs text-ink-500">{readingMinutes}m read in all</p> : null}
         </div>
