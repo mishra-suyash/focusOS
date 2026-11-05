@@ -95,15 +95,17 @@ export function TaskForm({
                 <option key={item}>{item}</option>
               ))}
             </select>
-            <input
-              className="input"
-              type="number"
-              min={1}
-              max={12}
-              value={estimatedPomodoros}
-              onChange={(e) => setEstimatedPomodoros(Number(e.target.value))}
-              aria-label="Estimated focus sessions"
-            />
+            <label className="flex items-center gap-2 text-xs text-ink-500 dark:text-ink-400">
+              <span className="shrink-0">Focus sessions</span>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={12}
+                value={estimatedPomodoros}
+                onChange={(e) => setEstimatedPomodoros(Number(e.target.value))}
+              />
+            </label>
           </div>
           <label className="flex items-center gap-2 text-xs text-ink-500 dark:text-ink-400">
             <input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} />
