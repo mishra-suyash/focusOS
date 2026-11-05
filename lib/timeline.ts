@@ -1,5 +1,5 @@
 import { createSlot, minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
-import type { Category, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
+import type { Category, ScheduleSlot, ScheduleSlotType, Task, UserSettings } from "@/types";
 
 /**
  * Pure geometry/parsing helpers for the Plan — Day drag-and-drop timeline
@@ -493,6 +493,43 @@ export function fillGaps(existing: ScheduleSlot[], templateSlots: ScheduleSlot[]
     }
   }
   return sortedSlots([...existing, ...accepted]);
+}
+
+/** The sitting bounds from settings, with the same defaults the planner and the timer use. */
+export function sittingBounds(settings: Pick<UserSettings, "maxChunkMinutes" | "minChunkMinutes">) {
+  return {
+    maxChunkMinutes: settings.maxChunkMinutes ?? DEFAULT_MAX_CHUNK_MINUTES,
+    minChunkMinutes: settings.minChunkMinutes ?? DEFAULT_MIN_CHUNK_MINUTES
+  };
+}
+
+const SITTING_SLOT_TYPES = new Set<ScheduleSlot["type"]>(["deep_work", "reading", "admin"]);
+
+/**
+ * A day template's blocks as sittings: the timer clamps to `maxChunkMinutes`, so a 120-minute block
+ * under a 60-minute cap becomes two back-to-back blocks, each closing on one sitting. Runs when a
+ * template is applied; the template itself keeps its own blocks, because the cap is a setting and can
+ * change. Rest, gym and locked blocks aren't sittings and stay whole.
+ */
+export function splitLongBlocks(slots: ScheduleSlot[], bounds: { maxChunkMinutes: number; minChunkMinutes: number }): ScheduleSlot[] {
+  return slots.flatMap((slot) => {
+    if (slot.locked || !SITTING_SLOT_TYPES.has(slot.type)) return [slot];
+    const pieces = splitIntoChunks(minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime), bounds);
+    if (pieces.length < 2) return [slot];
+    const groupId = crypto.randomUUID();
+    let start = minutesFromTime(slot.startTime);
+    return pieces.map((minutes, index) => {
+      const piece: ScheduleSlot = {
+        ...slot,
+        id: crypto.randomUUID(),
+        startTime: minutesToTime(start),
+        endTime: minutesToTime(start + minutes),
+        chunk: { groupId, index: index + 1, total: pieces.length }
+      };
+      start += minutes;
+      return piece;
+    });
+  });
 }
 
 /** A template's slots, re-issued with fresh ids at drag/apply time — matches `scheduleFromTemplate`'s own `{ ...slot, id: crypto.randomUUID(), status: "upcoming" }`, so a tray-driven apply and the old editor's template apply produce identical slot content modulo ids (DP3 exit criterion: "Template apply equals old behaviour in Replace mode"). */

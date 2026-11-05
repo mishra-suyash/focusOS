@@ -31,7 +31,7 @@ import {
   userSelectableSlotTypes
 } from "@/lib/schedule";
 import { addDaysToKey, dateKeyOfIso, todayKey } from "@/lib/dates";
-import { DEFAULT_MAX_CHUNK_MINUTES, MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay } from "@/lib/timeline";
+import { DEFAULT_MAX_CHUNK_MINUTES, MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay, sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import type { Checkpoint, Course, DailySchedule, DayTemplate, Goal, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 const DEFAULT_SCROLL_MINUTE = 8 * 60;
@@ -383,7 +383,7 @@ export function DayTimelineEditor({
     const template = templates.find((item) => item.id === applyTemplateId);
     if (!template) return;
     if (slots.length > 0 && !window.confirm(`Replace today's plan with "${template.name}"?`)) return;
-    const templateSlots = scheduleFromTemplate(template, dateKey).slots;
+    const templateSlots = splitLongBlocks(scheduleFromTemplate(template, dateKey).slots, sittingBounds(settings));
     commitSlots(mergeMissingLockedSlots(templateSlots, wantedLockedSlots ?? []));
     setApplyTemplateOpen(false);
     setApplyTemplateId("");

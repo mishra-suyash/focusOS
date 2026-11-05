@@ -31,6 +31,7 @@ import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePack
 import { isBreakMode } from "@/lib/terms";
 import { computeDayScore, isScoredSitting } from "@/lib/gamify";
 import { slotAutoStatus } from "@/lib/tracking";
+import { sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import { isPlannerMade, weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term, WeeklyReview } from "@/types";
 
@@ -305,19 +306,18 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
           ? templates.find((template) => template.id === settings.breakTemplateId) ?? templates.find((template) => template.isDefault)
           : templates.find((template) => template.isDefault);
 
-        // F1: with zero templates at all, fall back to the pack's built-in default in memory
+        // F1: with no default template, fall back to the pack's built-in default in memory
         // instead of leaving Start day producing nothing (plan §6.1).
         let baseSlots: ScheduleSlot[];
         let usedFallbackName: string | null = null;
         if (chosenTemplate) {
           baseSlots = scheduleFromTemplate(chosenTemplate, today).slots;
-        } else if (templates.length === 0) {
+        } else {
           const builtin = (onBreak && resolvePackBreakDayTemplate(settings.packId)) || resolvePackWorkdayTemplate(settings.packId);
           baseSlots = materializeBuiltinDayTemplate(builtin).slots.map((slot) => ({ ...slot, id: crypto.randomUUID() }));
           usedFallbackName = builtin.name;
-        } else {
-          baseSlots = [];
         }
+        baseSlots = splitLongBlocks(baseSlots, sittingBounds(settings));
 
         const classSlots = onBreak ? [] : courseSlotsForDate(courses, today);
         // Routine-Blocks-and-AI-Templates spec §2.4 — routine blocks (Sleep, meals, Gym, or a

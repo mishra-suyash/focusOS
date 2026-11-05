@@ -7,6 +7,8 @@ import { DayStrip } from "@/components/plan/day-strip";
 import { InfoHint } from "@/components/info-hint";
 import { createDayTemplate, saveDailySchedule, setDefaultTemplate } from "@/lib/firestore";
 import { friendlyDate } from "@/lib/dates";
+import { useUserSettings } from "@/hooks/use-user-settings";
+import { sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import { formatMinutes, materializeSlots, scheduleFromTemplate, shiftTemplateSlots, slotDuration, slotTypeLabels, slotTypeStyles, sortedSlots } from "@/lib/schedule";
 import { BUILTIN_DAY_TEMPLATES, materializeBuiltinDayTemplate, type BuiltinDayTemplate } from "@/lib/templates/builtin";
 import { useTemplateCatalog } from "@/hooks/use-template-catalog";
@@ -35,6 +37,7 @@ export function TemplateGalleryDialog({
   onApplied: (slots: ScheduleSlot[]) => void;
   onClose: () => void;
 }) {
+  const { settings } = useUserSettings();
   const [dayStart, setDayStart] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
@@ -42,11 +45,12 @@ export function TemplateGalleryDialog({
   const orgDayTemplates = (catalog?.templates.filter((t) => t.kind === "day") ?? []) as CatalogDayTemplate[];
   const visibleBuiltins = BUILTIN_DAY_TEMPLATES.filter((builtin) => !catalog?.hiddenBuiltInIds.includes(builtin.id));
 
-  async function applySlots(slots: ScheduleSlot[], templateId?: string) {
+  async function applySlots(templateSlots: ScheduleSlot[], templateId?: string) {
     if (hasExistingPlan && !window.confirm(`${friendlyDate(dateKey)} already has a plan. Replace it with this template?`)) return;
-    const schedule: Omit<DailySchedule, "id" | "createdAt" | "updatedAt"> = { dateKey, templateId, slots: sortedSlots(slots) };
+    const slots = sortedSlots(splitLongBlocks(templateSlots, sittingBounds(settings)));
+    const schedule: Omit<DailySchedule, "id" | "createdAt" | "updatedAt"> = { dateKey, templateId, slots };
     await saveDailySchedule(uid, schedule);
-    onApplied(sortedSlots(slots));
+    onApplied(slots);
     onClose();
   }
 

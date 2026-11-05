@@ -20,6 +20,8 @@ import {
   createTaskBlock,
   fillGaps,
   freshTemplateSlots,
+  sittingBounds,
+  splitLongBlocks,
   MINUTES_PER_DAY,
   nearestFreeGap,
   QUICK_BLOCK_PRESETS,
@@ -280,7 +282,7 @@ export function PlanTray({
   }
 
   function applyTemplateHere(template: TemplateSource) {
-    setTemplateDrop({ templateId: template.id, name: template.name, slots: freshTemplateSlots(template.slots) });
+    setTemplateDrop({ templateId: template.id, name: template.name, slots: splitLongBlocks(freshTemplateSlots(template.slots), sittingBounds(settings)) });
   }
 
   // Template apply never overwrites anything — courses or otherwise. There used to be a "Replace

@@ -56,11 +56,10 @@ import { minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/li
 import { isBreakMode } from "@/lib/terms";
 import { loggedMinutesForTask, sittingOutcome } from "@/lib/tracking";
 import {
-  DEFAULT_MAX_CHUNK_MINUTES,
-  DEFAULT_MIN_CHUNK_MINUTES,
   rangeOverlapsSlots,
   renumberSittings,
   sittingTitle,
+  sittingBounds,
   splitIntoChunks,
   taskBlockMinutes,
   taskChunkMinutes,
@@ -70,6 +69,7 @@ import {
   DEFAULT_WORKING_WINDOW,
   keyedAfterRemoval,
   placeInWindow,
+  milestoneMinuteShares,
   placeProposals,
   isPlannerMade,
   readingHabitPlan,
@@ -129,6 +129,8 @@ type UpcomingRow = {
   planned: number;
   type: WeekProposalCandidate["type"];
   preferredDateKeys: string[];
+  /** Its due date: no sitting of it lands later. */
+  dueDateKey: string;
   courseId?: string;
   bucket?: TaskBucket;
   taskId?: string;
@@ -203,10 +205,7 @@ function PlanWeekContent() {
   // plan/16 §5.1 — the sitting bounds every candidate below is split under. `chunkOpts` is passed
   // verbatim into `taskChunkMinutes`/`splitIntoChunks`, so a change on /settings reshapes the whole
   // week's proposals with no other code path to keep in sync.
-  const chunkOpts = {
-    maxChunkMinutes: settings.maxChunkMinutes ?? DEFAULT_MAX_CHUNK_MINUTES,
-    minChunkMinutes: settings.minChunkMinutes ?? DEFAULT_MIN_CHUNK_MINUTES
-  };
+  const chunkOpts = sittingBounds(settings);
   const workingWindow = settings.workingWindow ?? DEFAULT_WORKING_WINDOW;
 
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
@@ -402,7 +401,6 @@ function PlanWeekContent() {
   /** Goal hours, each active goal counted once whatever it is linked to. Nothing on this page
    *  proposes them — there is no generator for goal hours — so they sit beside the ledger rather than
    *  inside it, and the meter names them instead of folding them into a number the plan can't move. */
-  const goalMinutes = activeGoals.reduce((sum, goal) => sum + (goal.targetHoursPerWeek ?? 0) * 60, 0);
 
   // ---- Step 4: proposals ----
   // plan/15 §5.3 — the same lead-time spread checkpoint prep uses (evenly across the days from the
@@ -421,7 +419,7 @@ function PlanWeekContent() {
     if (targetIndex === -1) return [{ title, type, durationMinutes: totalMinutes, ...extra }];
     const windowDays = weekDateKeys.slice(0, targetIndex + 1).filter((d) => liveDateKeys.includes(d));
     if (windowDays.length === 0) return [{ title, type, durationMinutes: totalMinutes, ...extra }];
-    const perDay = Math.max(15, Math.ceil(totalMinutes / windowDays.length));
+    const perDay = Math.max(chunkOpts.minChunkMinutes, Math.ceil(totalMinutes / windowDays.length));
     const result: WeekProposalCandidate[] = [];
     let remaining = totalMinutes;
     for (const d of windowDays) {
@@ -429,7 +427,9 @@ function PlanWeekContent() {
       const minutes = Math.min(perDay, remaining);
       // plan/16 §5.3 — one call spreads one piece of work across several days, so the caller's own
       // stable key has to be made unique per day here or every sibling would share one key.
-      result.push({ title, type, durationMinutes: minutes, dateKey: d, ...extra, ...(extra.key ? { key: `${extra.key}:${d}` } : {}) });
+      for (const [index, sitting] of splitIntoChunks(minutes, chunkOpts).entries()) {
+        result.push({ title, type, durationMinutes: sitting, dateKey: d, ...extra, ...(extra.key ? { key: `${extra.key}:${d}${index > 0 ? `:${index}` : ""}` } : {}) });
+      }
       remaining -= minutes;
     }
     return result;
@@ -551,6 +551,7 @@ function PlanWeekContent() {
           type: "deep_work",
           durationMinutes: minutes,
           preferredDateKeys,
+          ...(task.dueDate && task.dueDate >= todayK ? { latestDateKey: task.dueDate } : {}),
           capGroup: family,
           ...shared(minutes, index)
         });
@@ -663,24 +664,28 @@ function PlanWeekContent() {
       (d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt && liveDateKeys.includes(d) && !sharedDays.has(d)
     );
     if (prepOutstanding <= 0 || windowDays.length === 0) continue;
-    const perDay = Math.max(15, Math.ceil(prepOutstanding / Math.max(1, leadDaysLeft)));
+    const perDay = Math.max(chunkOpts.minChunkMinutes, Math.ceil(prepOutstanding / Math.max(1, leadDaysLeft)));
     const start = candidates.length;
     let remaining = prepOutstanding;
     for (const d of windowDays) {
       if (remaining <= 0) break;
       const minutes = Math.min(perDay, remaining);
-      candidates.push({
-        title: `Prep: ${cp.title}`,
-        type: "deep_work",
-        durationMinutes: minutes,
-        plannedMinutes: minutes,
-        dateKey: d,
-        key: `${family}:${d}`,
-        family,
-        refType: "checkpoint",
-        refId: cp.id,
-        objectiveRef: { kind: "checkpoint", id: cp.id }
-      });
+      // Pinned to the day, not exempt from the cap: the timer clamps to it, so a 67-minute prep block
+      // would be a sitting longer than any timer can run.
+      for (const [index, sitting] of splitIntoChunks(minutes, chunkOpts).entries()) {
+        candidates.push({
+          title: `Prep: ${cp.title}`,
+          type: "deep_work",
+          durationMinutes: sitting,
+          plannedMinutes: sitting,
+          dateKey: d,
+          key: `${family}:${d}${index > 0 ? `:${index}` : ""}`,
+          family,
+          refType: "checkpoint",
+          refId: cp.id,
+          objectiveRef: { kind: "checkpoint", id: cp.id }
+        });
+      }
       remaining -= minutes;
     }
     prepRow.sittings.push(...offeredSince(start));
@@ -949,12 +954,17 @@ function PlanWeekContent() {
       taskId: task.id,
       courseId: task.courseId,
       bucket: task.bucket,
-      preferredDateKeys: weekDateKeys.filter((d) => d <= task.dueDate!)
+      preferredDateKeys: weekDateKeys.filter((d) => d <= task.dueDate!),
+      dueDateKey: task.dueDate
     });
   }
   for (const goal of activeGoals) {
-    for (const milestone of goal.milestones) {
-      if (milestone.done || !milestone.dueAt || milestone.dueAt < upcomingFrom || milestone.dueAt > horizonEnd) continue;
+    const dueMilestones = goal.milestones
+      .filter((milestone) => !milestone.done && milestone.dueAt && milestone.dueAt >= upcomingFrom && milestone.dueAt <= horizonEnd)
+      .sort((a, b) => a.dueAt!.localeCompare(b.dueAt!));
+    const goalMinutesOfWeek = Math.max(30, Math.round((goal.targetHoursPerWeek ?? 1) * 60));
+    const shares = milestoneMinuteShares(goalMinutesOfWeek, dueMilestones.length, chunkOpts.minChunkMinutes);
+    for (const [index, milestone] of dueMilestones.entries()) {
       const family = `milestone:${goal.id}:${milestone.id}`;
       const objectiveRef = { kind: "goal" as const, id: goal.id, milestoneId: milestone.id };
       const planned = plannedMinutesForObjective(planningSchedules, objectiveRef, weekDateKeys, cutoff);
@@ -963,10 +973,11 @@ function PlanWeekContent() {
         family,
         title: `${goal.title} — ${milestone.title}`,
         detail: `Milestone · due ${milestone.dueAt}`,
-        minutes: outstandingFor(family, Math.max(30, Math.round((goal.targetHoursPerWeek ?? 1) * 60)), planned),
+        minutes: outstandingFor(family, shares[index], planned),
         planned,
         type: "deep_work",
         preferredDateKeys: weekDateKeys.filter((d) => d <= milestone.dueAt!),
+        dueDateKey: milestone.dueAt!,
         objectiveRef
       });
     }
@@ -1022,7 +1033,8 @@ function PlanWeekContent() {
     const sittings = splitIntoChunks(Math.max(0, add.ask - placedSince - dismissedSince), chunkOpts);
     datedRow.sittings.push(...sittings);
     const groupId = `upcoming:${row.id}:${weekStart}`;
-    const laterDays = weekDateKeys.filter((d) => d >= add.dateKey && liveDateKeys.includes(d));
+    const laterDays = weekDateKeys.filter((d) => d >= add.dateKey && d <= row.dueDateKey && liveDateKeys.includes(d));
+    const inTime = row.dueDateKey >= todayK ? { latestDateKey: row.dueDateKey } : {};
     extraCandidates.push(
       ...sittings.map((minutes, index) => ({
         title: row.title,
@@ -1037,7 +1049,7 @@ function PlanWeekContent() {
         ...(row.taskId ? { taskId: row.taskId } : {}),
         ...(row.objectiveRef ? { objectiveRef: row.objectiveRef } : {}),
         chunk: { groupId, index: index + 1, total: sittings.length },
-        ...(index === 0 && placedSince === 0 ? { dateKey: add.dateKey, fixedStartTime: add.startTime } : { preferredDateKeys: laterDays })
+        ...(index === 0 && placedSince === 0 ? { dateKey: add.dateKey, fixedStartTime: add.startTime } : { preferredDateKeys: laterDays, ...inTime })
       }))
     );
   }
@@ -1057,6 +1069,13 @@ function PlanWeekContent() {
   // `free` is measured *after* the locked layer, which includes every block already accepted onto a
   // day — so it is compared with what is still to place, never with the whole ask. The old meter set
   // the whole ask against it, counting placed work once as committed and again as no longer free.
+  // A milestone's sittings are that goal's hours, so they leave the "plan yourself" remainder.
+  const goalMinutes = activeGoals.reduce((sum, goal) => {
+    const onMilestones = upcomingRows
+      .filter((row) => row.objectiveRef?.kind === "goal" && row.objectiveRef.id === goal.id)
+      .reduce((total, row) => total + row.planned + (upcomingAdds[row.id] ? row.minutes : 0), 0);
+    return sum + Math.max(0, (goal.targetHoursPerWeek ?? 0) * 60 - onMilestones);
+  }, 0);
   const capacity = weekCapacity({ workingWindow, weekDateKeys, claimedSlotsByDate, committedMinutes: totals.ask + goalMinutes, offDateKeys, now });
   const toPlacePct = capacity.freeMinutes > 0 ? (totals.toPlace / capacity.freeMinutes) * 100 : totals.toPlace > 0 ? 100 : 0;
   if (process.env.NODE_ENV !== "production") {
@@ -1896,7 +1915,7 @@ function PlanWeekContent() {
         </div>
         <p className="mb-3 text-xs text-ink-500">
           Tasks and milestones due soon that nothing else plans. Adding one puts its sittings in step 4 — the first at the day and time
-          you pick, the rest on the days after — and nothing reaches a day until you accept it there. Course hours, reading, checkpoint
+          you pick, the rest that day or later, up to the due date — and nothing reaches a day until you accept it there. Course hours, reading, checkpoint
           prep and reviews are planned automatically from step 3.
         </p>
         {upcomingRows.every((row) => row.minutes <= 0 && !upcomingAdds[row.id]) && upcomingNotes.length === 0 ? (
@@ -1980,8 +1999,8 @@ function PlanWeekContent() {
                     </button>
                     {sittings.length > 1 ? (
                       <span className="w-full text-[11px] text-ink-500">
-                        {sittingShape(sittings)}: the first at {values.startTime} on {DAY_LABELS[weekDateKeys.indexOf(values.dateKey)]}, the rest on the
-                        days after.
+                        {sittingShape(sittings)}: the first at {values.startTime} on {DAY_LABELS[weekDateKeys.indexOf(values.dateKey)]}, the rest
+                        that day or later{` up to ${DAY_LABELS[Math.max(0, weekDateKeys.indexOf(row.dueDateKey))]}`}.
                       </span>
                     ) : null}
                   </div>

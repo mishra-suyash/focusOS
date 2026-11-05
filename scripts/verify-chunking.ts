@@ -11,14 +11,15 @@
  * renders no component, and drives no user flow. A green run says the arithmetic is right and
  * nothing more.
  */
-import { DEFAULT_MAX_CHUNK_MINUTES, renumberSittings, splitIntoChunks, taskChunkMinutes, taskBlockMinutes, sittingTitle, type SittingEntry } from "../lib/timeline";
+import { DEFAULT_MAX_CHUNK_MINUTES, renumberSittings, splitIntoChunks, splitLongBlocks, taskChunkMinutes, taskBlockMinutes, sittingTitle, type SittingEntry } from "../lib/timeline";
 import { loggedMinutesForTask, remainingMinutes, sittingOutcome, sittingRemainingMinutes } from "../lib/tracking";
 import { plannedMinutesForObjective, plannedMinutesForTask, plannedMinutesThisWeek } from "../lib/courses";
 import { describeObjective } from "../lib/objectives";
 import { computeDayReadout, computeDayScore } from "../lib/gamify";
 import { isFromDroppedCourse, plannableTasks } from "../lib/courses";
 import { nextPassEstimateMinutes, nextReadingPass, pastPassMinutes, readingCandidates, PASS_SEED_MINUTES } from "../lib/papers";
-import { placeProposals, resolvePlacement, DEFAULT_WORKING_WINDOW, type WeekProposalCandidate } from "../lib/weekplan";
+import { milestoneMinuteShares, placeProposals, resolvePlacement, DEFAULT_WORKING_WINDOW, type WeekProposalCandidate } from "../lib/weekplan";
+import { minutesFromTime } from "../lib/schedule";
 import type { DailySchedule, Paper, PomodoroSession, ScheduleSlot, Task } from "../types";
 
 const failures: string[] = [];
@@ -695,6 +696,37 @@ const donePass = (minutes: number, output?: unknown) => ({ status: "done" as con
   const settled = [{ dateKey: MON, startTime: "09:00", title: "R", chunk: g(1, 2) }, { dateKey: WEEK[1], startTime: "09:00", title: "R", chunk: g(2, 2) }];
   const again = renumberSittings(settled);
   check("already-ordered sittings come back as the same objects", again[0] === settled[0] && again[1] === settled[1]);
+}
+
+// ---- QA decisions 2026-11-05: template blocks, milestone hours, dated work ----
+{
+  const block = (type: ScheduleSlot["type"], startTime: string, endTime: string, locked = false): ScheduleSlot =>
+    ({ id: `${type}-${startTime}`, title: "Deep work", type, startTime, endTime, status: "upcoming", ...(locked ? { locked: true } : {}) });
+  const bounds = { maxChunkMinutes: 60, minChunkMinutes: 20 };
+  const split = splitLongBlocks([block("deep_work", "08:45", "10:45"), block("sleep", "23:00", "24:00")], bounds);
+  check("a 120-minute block becomes two back-to-back 60s", split.filter((s) => s.type === "deep_work").map((s) => `${s.startTime}-${s.endTime}`).join() === "08:45-09:45,09:45-10:45");
+  check("the split is numbered as one", split[1].chunk?.index === 2 && split[1].chunk.total === 2 && split[0].chunk?.groupId === split[1].chunk.groupId);
+  check("a rest block stays whole", splitLongBlocks([block("sleep", "00:00", "07:00")], bounds).length === 1);
+  check("a gym block stays whole", splitLongBlocks([block("gym", "17:00", "19:00")], bounds).length === 1);
+  check("a locked block stays whole", splitLongBlocks([block("deep_work", "08:00", "11:00", true)], bounds).length === 1);
+  check("a block within the cap keeps its id", splitLongBlocks([block("deep_work", "08:00", "09:00")], bounds)[0].id === "deep_work-08:00");
+  const swept = splitLongBlocks([block("reading", "08:00", "10:10")], bounds);
+  check("no minute is lost and no piece breaks the bounds", swept.reduce((sum, s) => sum + minutesFromTime(s.endTime) - minutesFromTime(s.startTime), 0) === 130 && swept.every((s) => minutesFromTime(s.endTime) - minutesFromTime(s.startTime) <= 60));
+
+  check("two milestones of an 8 h goal share it", milestoneMinuteShares(480, 2, 20).join() === "240,240");
+  check("shares never pass the target", milestoneMinuteShares(30, 4, 20).reduce((a, b) => a + b, 0) === 30);
+  check("no share is a sitting too short to run, except what's left", milestoneMinuteShares(50, 3, 20).join() === "20,20,10");
+  check("one milestone asks for all of it", milestoneMinuteShares(480, 1, 20).join() === "480");
+
+  const placeOn = (latestDateKey?: string) =>
+    placeProposals(
+      [{ title: "Milestone", type: "deep_work", durationMinutes: 60, preferredDateKeys: [WEEK[0]], ...(latestDateKey ? { latestDateKey } : {}) }],
+      WEEK,
+      { [WEEK[0]]: [block("deep_work", "00:00", "24:00", true)] },
+      DEFAULT_WORKING_WINDOW
+    )[0];
+  check("a full preferred day falls through without a limit", placeOn().fits && placeOn().dateKey > WEEK[0]);
+  check("past its last day, dated work reads as not fitting", !placeOn(WEEK[0]).fits);
 }
 
 if (failures.length > 0) {

@@ -45,7 +45,7 @@ import {
 import { commitmentSlotsForDate, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { isBreakMode } from "@/lib/terms";
-import { DEFAULT_MAX_CHUNK_MINUTES, nearestFreeGap, rangeOverlapsSlots } from "@/lib/timeline";
+import { DEFAULT_MAX_CHUNK_MINUTES, nearestFreeGap, rangeOverlapsSlots, sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import { friendlyDate, todayKey } from "@/lib/dates";
 import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
@@ -138,7 +138,8 @@ function DayPlannerContent() {
   async function applyTemplate(template: DayTemplate) {
     if (!user) return;
     if (slots.length > 0 && !window.confirm(`${friendlyDate(dateKey)} already has a plan. Replace it with "${template.name}"?`)) return;
-    const nextSchedule = scheduleFromTemplate(template, dateKey);
+    const fromTemplate = scheduleFromTemplate(template, dateKey);
+    const nextSchedule = { ...fromTemplate, slots: splitLongBlocks(fromTemplate.slots, sittingBounds(settings)) };
     setSlots(nextSchedule.slots);
     await saveDailySchedule(user.uid, nextSchedule);
   }

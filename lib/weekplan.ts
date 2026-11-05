@@ -179,6 +179,10 @@ export interface WeekProposalCandidate {
    *  and "the weekend" (backlog). Still subject to the day-off exclusion and the per-day cap, same
    *  as a floating candidate with no preference at all. */
   preferredDateKeys?: string[];
+  /** The last day this work is any use on (its due date). Unlike `preferredDateKeys` this is a hard
+   *  limit: past it the candidate reads "Didn't fit", because a sitting after the deadline looks
+   *  planned and isn't. */
+  latestDateKey?: string;
   courseId?: string;
   bucket?: TaskBucket;
   taskId?: string;
@@ -413,9 +417,10 @@ export function placeProposals(
 
     const capGroup = candidate.capGroup ?? DEFAULT_CAP_GROUP;
     const isCapped = (d: string) => cappedGroupDays.has(`${capGroup}|${d}`);
-    const preferred = (candidate.preferredDateKeys ?? []).filter((d) => workingDates.includes(d) && !isCapped(d));
+    const inTime = (d: string) => !candidate.latestDateKey || d <= candidate.latestDateKey;
+    const preferred = (candidate.preferredDateKeys ?? []).filter((d) => workingDates.includes(d) && !isCapped(d) && inTime(d));
     const fallback = [...workingDates]
-      .filter((d) => !isCapped(d) && !preferred.includes(d))
+      .filter((d) => !isCapped(d) && !preferred.includes(d) && inTime(d))
       .sort((a, b) => totalClaimedMinutes(simulated[a]) - totalClaimedMinutes(simulated[b]));
     let order = [...preferred, ...fallback];
     const spread = candidate.spreadGroup;
@@ -608,6 +613,22 @@ export function readingHabitPlan(params: {
 }
 
 // ---- plan/17 §7 — replanning a week ----
+
+/**
+ * One goal's weekly minutes shared across its milestones due in the window, earliest first. The
+ * shares never add up to more than the goal's target (two milestones of an 8 h goal ask for 4 h
+ * each, not 8), and a share is never a sitting too short to run: when the target can't give every
+ * milestone a full sitting, the later ones get what's left, down to nothing.
+ */
+export function milestoneMinuteShares(goalMinutes: number, count: number, minChunkMinutes: number): number[] {
+  const each = Math.max(minChunkMinutes, Math.floor(goalMinutes / Math.max(1, count)));
+  let left = goalMinutes;
+  return Array.from({ length: count }, () => {
+    const share = Math.min(each, left);
+    left -= share;
+    return share;
+  });
+}
 
 /**
  * plan/17 §7.3 — whether weekly planning put this slot on its day. Read off the markers an accepted
