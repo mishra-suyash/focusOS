@@ -9,7 +9,8 @@
  * kept distinct in nav copy but not in route/code naming. Don't assume shared logic between these
  * just because the names rhyme.
  */
-import { orderBy } from "firebase/firestore";
+import { parseISO, subDays } from "date-fns";
+import { orderBy, where } from "firebase/firestore";
 import { Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -49,7 +50,12 @@ function ReviewPageContent() {
   const { items: paperGroups } = useUserCollection<PaperGroup>("paperGroups", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { allCheckpoints } = useCourseCheckpoints(courses);
   const [revealed, setRevealed] = useState(false);
-  const [reviewedCount, setReviewedCount] = useState(0);
+  // Reviewed items leave the due list, so today's count comes from when each was last reviewed.
+  const { items: recentlyReviewed } = useUserCollection<RevisionItem>(
+    "revisionItems",
+    useMemo(() => [where("lastReviewedAt", ">=", subDays(parseISO(today), 1).toISOString())], [today])
+  );
+  const reviewedCount = recentlyReviewed.filter((item) => item.lastReviewedAt && dateKeyOfIso(item.lastReviewedAt) === today).length;
   const [synthesis, setSynthesis] = useState("");
   const [draftJobId, setDraftJobId] = useState<string | null>(null);
   const [draftError, setDraftError] = useState("");
@@ -127,7 +133,6 @@ function ReviewPageContent() {
     }
     const patch = gradeRevisionItem(current, g, today);
     await updateRevisionItem(user.uid, current.id, patch);
-    setReviewedCount((count) => count + 1);
     setRevealed(false);
   }
 
