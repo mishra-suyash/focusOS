@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { DayTimelineEditor } from "@/components/plan/day-timeline-editor";
+import { TypedTimeInput } from "@/components/plan/typed-time-input";
 import { EmptyState } from "@/components/empty-state";
 import { InfoHint } from "@/components/info-hint";
 import { MoreOptions } from "@/components/more-options";
@@ -34,6 +35,7 @@ import {
   isLockedSlot,
   materializeSlots,
   minutesFromTime,
+  minutesToTime,
   scheduleFromTemplate,
   slotTypeLabels,
   sortedSlots,
@@ -43,7 +45,7 @@ import {
 import { commitmentSlotsForDate, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { isBreakMode } from "@/lib/terms";
-import { rangeOverlapsSlots } from "@/lib/timeline";
+import { DEFAULT_MAX_CHUNK_MINUTES, nearestFreeGap, rangeOverlapsSlots } from "@/lib/timeline";
 import { friendlyDate, todayKey } from "@/lib/dates";
 import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
@@ -113,6 +115,7 @@ function DayPlannerContent() {
   }, [schedule, recurringTemplates, dateKey]);
   const [slots, setSlots] = useState<ScheduleSlot[]>([]);
   const [templateName, setTemplateName] = useState("");
+  const [templateAsDefault, setTemplateAsDefault] = useState(false);
   const [templateDescription, setTemplateDescription] = useState("");
   const [galleryOpen, setGalleryOpen] = useState(false);
   const errors = validateSlots(slots);
@@ -157,16 +160,28 @@ function DayPlannerContent() {
     });
   }
 
+  /** The nearest free stretch to the morning, at a length a single sitting can cover. */
+  function addBlock() {
+    setSlots((items) => {
+      const minutes = Math.min(60, settings.maxChunkMinutes ?? DEFAULT_MAX_CHUNK_MINUTES);
+      const start = nearestFreeGap(items, 9 * 60, minutes);
+      const slot = start === null ? createSlot() : createSlot({ startTime: minutesToTime(start), endTime: minutesToTime(start + minutes) });
+      return sortedSlots([...items, slot]);
+    });
+  }
+
   async function createTemplateFromCurrent() {
     if (!user || !templateName.trim() || errors.length > 0) return;
-    await createDayTemplate(user.uid, {
+    const created = await createDayTemplate(user.uid, {
       name: templateName.trim(),
       description: templateDescription.trim() || undefined,
-      isDefault: templates.length === 0,
+      isDefault: false,
       slots: sortedSlots(slots)
     });
+    if (templateAsDefault && created) await setDefaultTemplate(user.uid, [...templates, { id: created, isDefault: false } as DayTemplate], created);
     setTemplateName("");
     setTemplateDescription("");
+    setTemplateAsDefault(false);
   }
 
   const needsTerm = courses.length > 0 && isBreakMode(terms, dateKey);
@@ -269,6 +284,10 @@ function DayPlannerContent() {
               <div className="space-y-3">
                 <input className="input" value={templateName} onChange={(event) => setTemplateName(event.target.value)} placeholder="Template name" />
                 <textarea className="input min-h-20" value={templateDescription} onChange={(event) => setTemplateDescription(event.target.value)} placeholder="Optional description" />
+                <label className="flex items-center gap-2 text-sm text-ink-600 dark:text-ink-300">
+                  <input type="checkbox" checked={templateAsDefault} onChange={(event) => setTemplateAsDefault(event.target.checked)} />
+                  Use this template when I start my day
+                </label>
                 <button className="btn-primary w-full" onClick={createTemplateFromCurrent} disabled={slots.length === 0 || errors.length > 0}>
                   Save template
                 </button>
@@ -285,7 +304,7 @@ function DayPlannerContent() {
             <div className="flex items-center gap-2">
               {!timelineEditorEnabled ? (
                 <span className="inline-flex items-center gap-1">
-                  <button className="btn-secondary" onClick={() => setSlots((items) => sortedSlots([...items, createSlot()]))}>
+                  <button className="btn-secondary" onClick={addBlock}>
                     <Plus className="h-4 w-4" />
                     Add block
                   </button>
@@ -353,7 +372,7 @@ function DayPlannerContent() {
                 <EmptyState
                   sentence="Your day, block by block."
                   primary={{ label: "Use a template", onClick: () => setGalleryOpen(true) }}
-                  template={{ label: "Add a block", onClick: () => setSlots((items) => sortedSlots([...items, createSlot()])) }}
+                  template={{ label: "Add a block", onClick: addBlock }}
                 />
               ) : null}
             </div>
@@ -447,8 +466,8 @@ function SlotEditor({
       ) : null}
       <div className="grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-[1fr_120px_120px]">
         <input className="input" value={slot.title} disabled={isLocked} onChange={(event) => onChange({ ...slot, title: event.target.value })} />
-        <input className="input" type="time" value={slot.startTime} disabled={isLocked} onChange={(event) => onChange({ ...slot, startTime: event.target.value })} />
-        <input className="input" type="time" value={slot.endTime} disabled={isLocked} onChange={(event) => onChange({ ...slot, endTime: event.target.value })} />
+        <TypedTimeInput value={slot.startTime} disabled={isLocked} onChange={(time) => onChange({ ...slot, startTime: time })} />
+        <TypedTimeInput value={slot.endTime} disabled={isLocked} onChange={(time) => onChange({ ...slot, endTime: time })} />
       </div>
       <div className="mt-3">
         <MoreOptions>

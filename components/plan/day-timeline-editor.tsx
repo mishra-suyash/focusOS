@@ -31,7 +31,7 @@ import {
   userSelectableSlotTypes
 } from "@/lib/schedule";
 import { addDaysToKey, dateKeyOfIso, todayKey } from "@/lib/dates";
-import { MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay } from "@/lib/timeline";
+import { DEFAULT_MAX_CHUNK_MINUTES, MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay } from "@/lib/timeline";
 import type { Checkpoint, Course, DailySchedule, DayTemplate, Goal, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 const DEFAULT_SCROLL_MINUTE = 8 * 60;
@@ -306,12 +306,13 @@ export function DayTimelineEditor({
 
   function createAtFocusedTime() {
     const anchor = selectedSlot ? minutesFromTime(selectedSlot.endTime) : isToday ? nowMinute : DEFAULT_SCROLL_MINUTE;
-    const gapStart = nearestFreeGap(slots, anchor, 60);
+    const minutes = Math.min(60, settings.maxChunkMinutes ?? DEFAULT_MAX_CHUNK_MINUTES);
+    const gapStart = nearestFreeGap(slots, anchor, minutes);
     if (gapStart === null) {
       announce("No free gap to create a block in.");
       return;
     }
-    const next = createSlot({ startTime: minutesToTime(gapStart), endTime: minutesToTime(gapStart + 60) });
+    const next = createSlot({ startTime: minutesToTime(gapStart), endTime: minutesToTime(gapStart + minutes) });
     setJustCreatedId(next.id);
     commitSlots([...slots, next]);
     setSelectedId(next.id);

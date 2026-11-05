@@ -1,5 +1,6 @@
 "use client";
 
+import { parseISO } from "date-fns";
 import { orderBy, where } from "firebase/firestore";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
@@ -30,7 +31,7 @@ import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePack
 import { isBreakMode } from "@/lib/terms";
 import { computeDayScore, isScoredSitting } from "@/lib/gamify";
 import { slotAutoStatus } from "@/lib/tracking";
-import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
+import { isPlannerMade, weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term, WeeklyReview } from "@/types";
 
 function slotsOverlap(a: ScheduleSlot, b: ScheduleSlot) {
@@ -301,8 +302,8 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         ]);
         const onBreak = isBreakMode(terms, today);
         const chosenTemplate = onBreak
-          ? templates.find((template) => template.id === settings.breakTemplateId) ?? templates.find((template) => template.isDefault) ?? templates[0]
-          : templates.find((template) => template.isDefault) ?? templates[0];
+          ? templates.find((template) => template.id === settings.breakTemplateId) ?? templates.find((template) => template.isDefault)
+          : templates.find((template) => template.isDefault);
 
         // F1: with zero templates at all, fall back to the pack's built-in default in memory
         // instead of leaving Start day producing nothing (plan §6.1).
@@ -342,7 +343,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
 
         const notices: string[] = [];
         if (usedFallbackName) notices.push(`Used the ${usedFallbackName} template. Change it in Plan → Templates.`);
-        if (skippedTitles.length > 0) notices.push(`Skipped ${skippedTitles.length} template block${skippedTitles.length > 1 ? "s" : ""} that overlapped a class or routine block: ${skippedTitles.join(", ")}.`);
+        if (skippedTitles.length > 0) notices.push(`Skipped ${skippedTitles.length} template block${skippedTitles.length > 1 ? "s" : ""} that overlapped a class or routine block: ${skippedTitles.map((title) => `“${title}”`).join(", ")}.`);
 
         // plan/14 §7.3 S5 — "No plan for today" is honest about *why* today fell back to a
         // template: the weekly planning session for the current week was never committed. Checked
@@ -350,10 +351,16 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         // run the fallback logic above in the first place.
         const reviews = await fetchCollection<WeeklyReview>(user.uid, "weeklyReviews", [orderBy("weekStart", "desc")]);
         const currentWeekPlanned = reviews.find((review) => review.weekStart === weekStartKey())?.plan?.completedAt;
-        if (!currentWeekPlanned) {
+        // Accepted sittings are the planning session's result even before Commit, and on a Sunday
+        // night they sit in next week.
+        const savedDays = await fetchCollection<DailySchedule>(user.uid, "dailySchedules");
+        const sittingsAccepted = savedDays.some(
+          (day) => day.dateKey >= weekStartKey() && day.slots.some((slot) => isPlannerMade(slot, weekStartKey(parseISO(day.dateKey))))
+        );
+        if (!currentWeekPlanned && !sittingsAccepted) {
           const lastPlanned = reviews.find((review) => review.plan?.completedAt)?.plan?.completedAt;
           const daysSince = lastPlanned ? Math.round((Date.now() - new Date(lastPlanned).getTime()) / 86_400_000) : null;
-          notices.push(daysSince == null ? "No plan for today. You haven't run a weekly planning session yet." : `No plan for today. Your last weekly planning session was ${daysSince} day${daysSince === 1 ? "" : "s"} ago.`);
+          notices.push(daysSince == null ? "You haven't run a weekly planning session yet." : `This week isn't planned yet. Your last weekly planning session was ${daysSince} day${daysSince === 1 ? "" : "s"} ago.`);
           setStartDayLink({ href: "/plan/week", label: "Plan this week" });
         }
         if (notices.length > 0) setStartDayNotice(notices.join(" "));
