@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { evaluateAndSaveAlerts } from "@/lib/admin-alerts";
+import { fetchSettings } from "@/lib/admin-dailyloop";
 import { fetchInsightData, saveInsight } from "@/lib/admin-firestore";
 import { getAdminSettings } from "@/lib/admin-settings";
 import { recordCronRun } from "@/lib/admin-cron-log";
@@ -8,6 +9,7 @@ import { buildInsightFallback, buildInsightPrompt } from "@/lib/ai/prompt";
 import type { InsightDailyOutput } from "@/lib/ai/schemas";
 import { runAiTask } from "@/lib/ai/run";
 import { todayKey } from "@/lib/dates";
+import { isModuleEnabled } from "@/lib/features";
 
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -26,25 +28,30 @@ export async function GET(request: Request) {
   const results = await Promise.all(
     uids.map(async (uid) => {
       try {
-        const data = await fetchInsightData(uid);
-        const fallback = buildInsightFallback(data);
-        const { output, meta } = await runAiTask(uid, "insight.daily", {
-          prompt: buildInsightPrompt(data),
-          fallbackSummary: fallback.summary,
-          fallbackSuggestions: fallback.suggestions
-        });
-        const result = output as InsightDailyOutput;
-        await saveInsight(uid, {
-          date,
-          provider: meta.provider,
-          summary: result.summary,
-          suggestions: result.suggestions,
-          generatedAt: new Date().toISOString(),
-          source: "cron",
-          degraded: meta.degraded
-        });
+        // Insights off means no AI spend on a page nobody can open. Alerts are their own surface.
+        let degraded: boolean | undefined;
+        if (isModuleEnabled(await fetchSettings(uid), "insights")) {
+          const data = await fetchInsightData(uid);
+          const fallback = buildInsightFallback(data);
+          const { output, meta } = await runAiTask(uid, "insight.daily", {
+            prompt: buildInsightPrompt(data),
+            fallbackSummary: fallback.summary,
+            fallbackSuggestions: fallback.suggestions
+          });
+          const result = output as InsightDailyOutput;
+          await saveInsight(uid, {
+            date,
+            provider: meta.provider,
+            summary: result.summary,
+            suggestions: result.suggestions,
+            generatedAt: new Date().toISOString(),
+            source: "cron",
+            degraded: meta.degraded
+          });
+          degraded = meta.degraded;
+        }
         const alerts = await evaluateAndSaveAlerts(uid).catch(() => []);
-        return { uid, ok: true, degraded: meta.degraded, alertCount: alerts.length };
+        return { uid, ok: true, degraded, alertCount: alerts.length };
       } catch (error) {
         return { uid, ok: false, error: error instanceof Error ? error.message : "unknown error" };
       }

@@ -14,7 +14,7 @@ import type { DailySchedule, Day, EveningRollup, MorningBrief, PomodoroSession, 
 /** How far back close-day looks: the day that just ended, and one a run landing early left open. */
 const CLOSE_LOOKBACK_DAYS = 2;
 
-async function fetchSettings(uid: string): Promise<Partial<UserSettings>> {
+export async function fetchSettings(uid: string): Promise<Partial<UserSettings>> {
   const doc = await adminDb().collection("users").doc(uid).collection("meta").doc("settings").get();
   return (doc.data() ?? {}) as Partial<UserSettings>;
 }

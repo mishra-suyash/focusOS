@@ -147,7 +147,7 @@ export function FloatingWidgetContent({ pipWindow }: { pipWindow: Window }) {
         </section>
       ) : null}
 
-      {items.has("loadIndex") ? (
+      {items.has("loadIndex") && isEnabled("workload") ? (
         <section className="card p-3 text-sm">
           <p className="label">Workload</p>
           <p className="mt-0.5 text-xl font-semibold">{loadIndex.value.toFixed(2)}</p>
