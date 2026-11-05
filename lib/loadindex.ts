@@ -1,6 +1,9 @@
+import { getDay, parseISO } from "date-fns";
+import { isModuleEnabled } from "@/lib/features";
 import { goalTargetMinutesForDay } from "@/lib/goals";
 import { MINUTES_PER_REVISION } from "@/lib/revision";
-import type { Checkpoint, Course, Goal, LoadIndexBand, LoadIndexSnapshot, RevisionItem, Term, Topic } from "@/types";
+import { DEFAULT_WORKING_WINDOW } from "@/lib/weekplan";
+import type { Checkpoint, Course, Goal, LoadIndexBand, LoadIndexSnapshot, RevisionItem, Term, Topic, UserSettings } from "@/types";
 
 export interface LoadIndexInputs {
   scheduledDeepWorkMinutes: number;
@@ -18,6 +21,27 @@ export interface LoadIndexInputs {
    *  rather than "Behind." Optional, defaults to false — every existing caller keeps today's
    *  behavior until it's told otherwise. */
   isDayOff?: boolean;
+  /** The weekdays the week planner calls working (`getDay` numbers). Weekly targets spread over
+   *  these, and any other day asks only for what's planned on it. Absent = all seven. */
+  workingDaysOfWeek?: number[];
+}
+
+/**
+ * What a person's settings change about the Load Index, spread after the rest of the inputs. A module
+ * that's off stops counting here, as it does in the planner: Goals off can't keep raising "required
+ * today" from a page you can no longer reach.
+ */
+export function loadIndexScope(settings: Pick<UserSettings, "workingWindow" | "packId" | "enabledModules">) {
+  return {
+    workingDaysOfWeek: (settings.workingWindow ?? DEFAULT_WORKING_WINDOW).daysOfWeek,
+    ...(isModuleEnabled(settings, "goals") ? {} : { goals: [] }),
+    ...(isModuleEnabled(settings, "courses") ? {} : { courses: [], checkpoints: [] }),
+    ...(isModuleEnabled(settings, "revise") ? {} : { revisionDueCount: 0, revisionsCompletedCount: 0 })
+  };
+}
+
+function isNonWorkingDay(inputs: Pick<LoadIndexInputs, "todayKey" | "workingDaysOfWeek">): boolean {
+  return Boolean(inputs.workingDaysOfWeek) && !inputs.workingDaysOfWeek!.includes(getDay(parseISO(inputs.todayKey)));
 }
 
 function daysBetween(laterKey: string, earlierKey: string): number {
@@ -35,24 +59,26 @@ export function checkpointPrepOwedMinutes(checkpoints: Checkpoint[], todayKey: s
 }
 
 /** The other half of the plan's required-minutes formula, alongside `goalTargetMinutesForDay` (lib/goals.ts) — courses carry their own weekly target independent of any goal. */
-export function courseTargetMinutesForDay(courses: Course[], todayKey: string): number {
+export function courseTargetMinutesForDay(courses: Course[], todayKey: string, daysInWeek = 7): number {
   const active = courses.filter((course) => {
     if (course.status === "dropped") return false;
     if (course.endDate && todayKey > course.endDate) return false;
     if (course.startDate && todayKey < course.startDate) return false;
     return true;
   });
-  return active.reduce((sum, course) => sum + (course.targetMinutesPerWeek ?? 0) / 7, 0);
+  return active.reduce((sum, course) => sum + (course.targetMinutesPerWeek ?? 0) / daysInWeek, 0);
 }
 
 export function computeRequiredMinutes(inputs: LoadIndexInputs): number {
   if (inputs.isDayOff) return 0;
+  if (isNonWorkingDay(inputs)) return inputs.scheduledDeepWorkMinutes;
+  const daysInWeek = inputs.workingDaysOfWeek?.length || 7;
   return (
     inputs.scheduledDeepWorkMinutes +
     inputs.revisionDueCount * MINUTES_PER_REVISION +
     checkpointPrepOwedMinutes(inputs.checkpoints, inputs.todayKey) +
-    courseTargetMinutesForDay(inputs.courses, inputs.todayKey) +
-    goalTargetMinutesForDay(inputs.goals ?? [], inputs.terms ?? [], inputs.todayKey)
+    courseTargetMinutesForDay(inputs.courses, inputs.todayKey, daysInWeek) +
+    goalTargetMinutesForDay(inputs.goals ?? [], inputs.terms ?? [], inputs.todayKey, daysInWeek)
   );
 }
 
@@ -90,11 +116,12 @@ export const loadIndexBandStyles: Record<LoadIndexBand, string> = {
  * because too little got scheduled. Flooring that to 30 anyway would price a planned day off as
  * "Behind" (0 actual / 30 floor), which would wrongly break `computeLoadIndexStreak`'s on-track
  * streak the same week this feature was added to stop penalizing a day nobody intended to work.
+ * A non-working day with nothing planned on it is the same case.
  */
 export function buildLoadIndexSnapshot(inputs: LoadIndexInputs): LoadIndexSnapshot {
   const requiredMinutes = computeRequiredMinutes(inputs);
   const actualMinutes = computeActualMinutes(inputs);
-  const value = inputs.isDayOff ? 1 : actualMinutes / Math.max(requiredMinutes, 30);
+  const value = inputs.isDayOff || (isNonWorkingDay(inputs) && requiredMinutes === 0) ? 1 : actualMinutes / Math.max(requiredMinutes, 30);
   return {
     requiredMinutes: Math.round(requiredMinutes),
     actualMinutes: Math.round(actualMinutes),

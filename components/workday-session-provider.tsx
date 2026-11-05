@@ -25,7 +25,8 @@ import {
   subscribeDoc,
   undoEndWorkdaySession
 } from "@/lib/firestore";
-import { buildLoadIndexSnapshot } from "@/lib/loadindex";
+import { isModuleEnabled } from "@/lib/features";
+import { buildLoadIndexSnapshot, loadIndexScope } from "@/lib/loadindex";
 import { currentMinute, getActiveSlot, minutesFromTime, REST_SLOT_TYPES, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePackWorkdayTemplate } from "@/lib/templates/builtin";
 import { isBreakMode } from "@/lib/terms";
@@ -319,7 +320,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         }
         baseSlots = splitLongBlocks(baseSlots, sittingBounds(settings));
 
-        const classSlots = onBreak ? [] : courseSlotsForDate(courses, today);
+        const classSlots = onBreak || !isModuleEnabled(settings, "courses") ? [] : courseSlotsForDate(courses, today);
         // Routine-Blocks-and-AI-Templates spec §2.4 — routine blocks (Sleep, meals, Gym, or a
         // custom one) get the same "always win over the template" treatment class blocks already
         // have (F3), just one rung below classes: a lecture is a fixed external commitment, a
@@ -440,7 +441,8 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         terms,
         focusedMinutes,
         todayKey: today,
-        isDayOff: Boolean(day?.dayOff)
+        isDayOff: Boolean(day?.dayOff),
+        ...loadIndexScope(settings)
       });
       // plan/16 §5.6 — the day's score snapshot, written at exactly the same moment and for the same
       // reason as the Load Index one: a historical record that must not silently change when a later

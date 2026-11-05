@@ -208,11 +208,16 @@ function PlanWeekContent() {
   const chunkOpts = sittingBounds(settings);
   const workingWindow = settings.workingWindow ?? DEFAULT_WORKING_WINDOW;
 
-  const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: allCourses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
+  // A module that's off plans nothing. The data stays put and comes back when it's turned on again.
+  const coursesOn = isEnabled("courses");
+  const courses = useMemo(() => (coursesOn ? allCourses : []), [coursesOn, allCourses]);
   const { items: terms } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: recurringTemplates } = useUserCollection<RecurringTaskTemplate>("recurringTaskTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
-  const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: allGoals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const goalsOn = isEnabled("goals");
+  const goals = useMemo(() => (goalsOn ? allGoals : []), [goalsOn, allGoals]);
   const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
   const { items: schedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
@@ -386,7 +391,7 @@ function PlanWeekContent() {
     (cp) => cp.requiresPrep && cp.status !== "done" && cp.status !== "missed" && weekDateKeys.some((d) => d >= addDaysToKey(cp.dueAt, -cp.prepLeadDays) && d < cp.dueAt)
   );
 
-  const dueRevisionCount = revisionItems.filter((item) => !item.suspended && item.dueDate <= todayK).length;
+  const dueRevisionCount = isEnabled("revise") ? revisionItems.filter((item) => !item.suspended && item.dueDate <= todayK).length : 0;
   const revisionLimits = { maxItems: settings.maxRevisionsPerDay ?? DEFAULT_MAX_REVISIONS_PER_DAY, maxMinutes: settings.maxRevisionMinutesPerDay ?? DEFAULT_MAX_REVISION_MINUTES_PER_DAY };
   const revisionQueueMinutesPerDay = estimatedReviewMinutes(dueRevisionCount, revisionLimits);
   /**

@@ -6,8 +6,9 @@ import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useDay } from "@/hooks/use-day";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
+import { useUserSettings } from "@/hooks/use-user-settings";
 import { todayMetrics } from "@/lib/analytics";
-import { buildLoadIndexSnapshot } from "@/lib/loadindex";
+import { buildLoadIndexSnapshot, loadIndexScope } from "@/lib/loadindex";
 import { scheduleSummary } from "@/lib/schedule";
 import type { Course, DailySchedule, Goal, PomodoroSession, Task, Term } from "@/types";
 
@@ -18,6 +19,7 @@ import type { Course, DailySchedule, Goal, PomodoroSession, Task, Term } from "@
  * on one number instead of drifting apart.
  */
 export function useLiveLoadIndex(todayKey: string) {
+  const { settings } = useUserSettings();
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
   const { items: dailySchedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
@@ -40,6 +42,7 @@ export function useLiveLoadIndex(todayKey: string) {
     terms,
     focusedMinutes: metrics.focusedMinutes,
     todayKey,
-    isDayOff: Boolean(day?.dayOff)
+    isDayOff: Boolean(day?.dayOff),
+    ...loadIndexScope(settings)
   });
 }

@@ -20,6 +20,7 @@ import { SectionHeader } from "@/components/section-header";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useCourseCheckpoints } from "@/hooks/use-course-checkpoints";
 import { useUserSettings } from "@/hooks/use-user-settings";
+import { isModuleEnabled } from "@/lib/features";
 import { courseSlotsForDate } from "@/lib/courses";
 import { todayKey } from "@/lib/dates";
 import { isBreakMode } from "@/lib/terms";
@@ -91,7 +92,7 @@ export default function CalendarPage() {
         <div className="grid grid-cols-7">
           {days.map((day) => {
             const dateKey = format(day, "yyyy-MM-dd");
-            const classes = isBreakMode(terms, dateKey) ? [] : courseSlotsForDate(courses, dateKey);
+            const classes = isBreakMode(terms, dateKey) || !isModuleEnabled(settings, "courses") ? [] : courseSlotsForDate(courses, dateKey);
             const dueTasks = tasks.filter((task) => task.dueDate === dateKey);
             const dueCheckpoints = allCheckpoints.filter((checkpoint) => checkpoint.dueAt === dateKey);
             const hasSchedule = schedules.some((schedule) => schedule.dateKey === dateKey && schedule.slots.length > 0);

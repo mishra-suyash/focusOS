@@ -89,7 +89,7 @@ function DayPlannerContent() {
   // day — see its own `wantedLockedSlots` doc comment), not just when nothing is saved yet.
   // Classes win on conflict: a lecture is a fixed external commitment, a routine anchor isn't.
   const wantedLockedSlots = useMemo(() => {
-    const classSlots = isBreakMode(terms, dateKey) ? [] : courseSlotsForDate(courses, dateKey);
+    const classSlots = isBreakMode(terms, dateKey) || !isEnabled("courses") ? [] : courseSlotsForDate(courses, dateKey);
     // A TA meeting or office hour (a timed recurring commitment) is fixed the same way a lecture is.
     const commitmentSlots = commitmentSlotsForDate(recurringTemplates, dateKey, schedule?.slots ?? []);
     const fixedSlots = [...classSlots, ...commitmentSlots];

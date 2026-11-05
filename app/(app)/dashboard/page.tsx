@@ -33,7 +33,7 @@ import { saveDailySchedule, saveDayFields, updateTask } from "@/lib/firestore";
 import { categoryLabels } from "@/lib/options";
 import { computeStatusPatch } from "@/lib/tasks";
 import { todayMetrics } from "@/lib/analytics";
-import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak } from "@/lib/loadindex";
+import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak, loadIndexScope } from "@/lib/loadindex";
 import { downloadDailyFramePdf } from "@/lib/pdf";
 import { createSlot, currentMinute, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { describeObjective } from "@/lib/objectives";
@@ -90,7 +90,8 @@ function DashboardContent() {
     terms,
     focusedMinutes: metrics.focusedMinutes,
     todayKey: today,
-    isDayOff: Boolean(day?.dayOff)
+    isDayOff: Boolean(day?.dayOff),
+    ...loadIndexScope(settings)
   });
   const chronologicalLI = [...recentDays].filter((d) => d.loadIndex).sort((a, b) => (a.date < b.date ? -1 : 1));
   const debtHours = computeDebtHours(chronologicalLI.map((d) => d.loadIndex!));

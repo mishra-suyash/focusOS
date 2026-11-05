@@ -15,10 +15,10 @@ export function isGoalActiveForDate(goal: Goal, terms: Term[], dateKey: string):
 }
 
 /** The plan's `goalTargetMinutes(day)` term — feeds lib/loadindex.ts's `computeRequiredMinutes`. */
-export function goalTargetMinutesForDay(goals: Goal[], terms: Term[], dateKey: string): number {
+export function goalTargetMinutesForDay(goals: Goal[], terms: Term[], dateKey: string, daysInWeek = 7): number {
   return goals
     .filter((goal) => isGoalActiveForDate(goal, terms, dateKey) && goal.targetHoursPerWeek)
-    .reduce((sum, goal) => sum + ((goal.targetHoursPerWeek ?? 0) * 60) / 7, 0);
+    .reduce((sum, goal) => sum + ((goal.targetHoursPerWeek ?? 0) * 60) / daysInWeek, 0);
 }
 
 function daysBetween(laterKey: string, earlierKey: string): number {
