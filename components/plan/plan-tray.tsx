@@ -282,7 +282,7 @@ export function PlanTray({
   }
 
   function applyTemplateHere(template: TemplateSource) {
-    setTemplateDrop({ templateId: template.id, name: template.name, slots: splitLongBlocks(freshTemplateSlots(template.slots), sittingBounds(settings)) });
+    setTemplateDrop({ templateId: template.id, name: template.name, slots: freshTemplateSlots(template.slots) });
   }
 
   // Template apply never overwrites anything — courses or otherwise. There used to be a "Replace
@@ -294,7 +294,9 @@ export function PlanTray({
   // to start a day over, and it too always keeps class blocks.
   function confirmFillGaps() {
     if (!templateDrop) return;
-    const merged = fillGaps(slots, templateDrop.slots);
+    // Click, drag and AI all end here, and "Add & save as template" saves the template's own blocks first.
+    const blocks = splitLongBlocks(templateDrop.slots, sittingBounds(settings));
+    const merged = fillGaps(slots, blocks);
     const added = merged.length - slots.length;
     if (added === 0) {
       // Nothing fit anywhere free — every template block conflicted with something already on the
@@ -303,7 +305,7 @@ export function PlanTray({
       announce?.(`Every block in "${templateDrop.name}" overlapped something already on the day — nothing added.`);
     } else {
       onCommit(merged);
-      const skipped = templateDrop.slots.length - added;
+      const skipped = blocks.length - added;
       announce?.(`Added ${added} block${added === 1 ? "" : "s"} from "${templateDrop.name}"${skipped > 0 ? `, skipped ${skipped} that overlapped` : ""}.`);
     }
     setTemplateDrop(null);
