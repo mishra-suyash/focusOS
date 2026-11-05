@@ -35,6 +35,7 @@ export default function CalendarPage() {
   const { allCheckpoints } = useCourseCheckpoints(courses);
   const { items: schedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
   const { settings } = useUserSettings();
+  const coursesOn = isModuleEnabled(settings, "courses");
 
   const days = eachDayOfInterval({
     start: startOfWeek(startOfMonth(month), { weekStartsOn: 1 }),
@@ -42,7 +43,7 @@ export default function CalendarPage() {
   });
 
   const today = scheduleDayKey();
-  const needsTerm = courses.length > 0 && isBreakMode(terms, today);
+  const needsTerm = coursesOn && courses.length > 0 && isBreakMode(terms, today);
 
   return (
     <>
@@ -68,14 +69,18 @@ export default function CalendarPage() {
         </div>
       ) : null}
       <div className="mb-2 flex flex-wrap gap-3 text-xs text-ink-500">
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-full bg-fuchsia-500/60" />
-          Class
-        </span>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="h-2.5 w-2.5 rounded-full bg-sky-500/60" />
-          Assessment due
-        </span>
+        {coursesOn ? (
+          <>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-full bg-fuchsia-500/60" />
+              Class
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="h-2.5 w-2.5 rounded-full bg-sky-500/60" />
+              Assessment due
+            </span>
+          </>
+        ) : null}
         <span className="inline-flex items-center gap-1.5">
           <span className="h-2.5 w-2.5 rounded-full bg-amberline/60" />
           Task due
@@ -92,9 +97,9 @@ export default function CalendarPage() {
         <div className="grid grid-cols-7">
           {days.map((day) => {
             const dateKey = format(day, "yyyy-MM-dd");
-            const classes = isBreakMode(terms, dateKey) || !isModuleEnabled(settings, "courses") ? [] : courseSlotsForDate(courses, dateKey);
+            const classes = isBreakMode(terms, dateKey) || !coursesOn ? [] : courseSlotsForDate(courses, dateKey);
             const dueTasks = tasks.filter((task) => task.dueDate === dateKey);
-            const dueCheckpoints = allCheckpoints.filter((checkpoint) => checkpoint.dueAt === dateKey);
+            const dueCheckpoints = coursesOn ? allCheckpoints.filter((checkpoint) => checkpoint.dueAt === dateKey) : [];
             const hasSchedule = schedules.some((schedule) => schedule.dateKey === dateKey && schedule.slots.length > 0);
             const weeklyPlanningSlot = weeklyPlanningSlotForDate(settings.weeklyPlanning, dateKey);
             return (

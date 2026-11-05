@@ -2,6 +2,7 @@ import { adminDb } from "@/lib/firebase-admin";
 import { fetchInsightData } from "@/lib/admin-firestore";
 import { buildMorningBrief, buildProposedSlots, buildProposedTasks } from "@/lib/dailyloop";
 import { addDaysToKey, zonedDayKey } from "@/lib/dates";
+import { isModuleEnabled } from "@/lib/features";
 import { computeDayScore } from "@/lib/gamify";
 import { DEFAULT_TIMEZONE } from "@/lib/google-calendar";
 import { buildLoadIndexSnapshot, computeRequiredMinutes, loadIndexScope } from "@/lib/loadindex";
@@ -169,13 +170,14 @@ export async function generateMorningBrief(uid: string): Promise<MorningBrief> {
     ...loadIndexScope(settings)
   });
 
+  // A module that's off is off here too, the same scope the target above just used.
   const brief = buildMorningBrief({
     todayKey: today,
-    dueRevisionCount,
-    checkpoints,
+    dueRevisionCount: isModuleEnabled(settings, "revise") ? dueRevisionCount : 0,
+    checkpoints: isModuleEnabled(settings, "courses") ? checkpoints : [],
     papers,
     todaySlots: schedule?.slots ?? [],
-    goals,
+    goals: isModuleEnabled(settings, "goals") ? goals : [],
     externalTasks: tasks,
     unresolvedCriticalAlertCount,
     requiredMinutesTarget
@@ -199,14 +201,15 @@ export async function generateEveningRollup(uid: string): Promise<EveningRollup>
   const today = frame.today;
   const yesterday = addDaysToKey(today, -1);
 
-  const [{ checkpoints, tasks, sessions }, dueRevisionCount, dayDoc, revisionSizing] = await Promise.all([
+  const [{ checkpoints, tasks, sessions }, fetchedDueRevisionCount, dayDoc, revisionSizing] = await Promise.all([
     fetchInsightData(uid),
     fetchDueRevisionCount(uid, today),
     adminDb().collection("users").doc(uid).collection("days").doc(today).get(),
     fetchRevisionSizingSettings(uid)
   ]);
+  const dueRevisionCount = isModuleEnabled(settings, "revise") ? fetchedDueRevisionCount : 0;
 
-  const checkpointsNeedingPrep = checkpoints.filter((c) => {
+  const checkpointsNeedingPrep = (isModuleEnabled(settings, "courses") ? checkpoints : []).filter((c) => {
     if (!c.requiresPrep || c.status === "done" || c.status === "missed" || c.status === "submitted") return false;
     const daysUntil = Math.round((new Date(c.dueAt).getTime() - new Date(today).getTime()) / 86_400_000);
     return daysUntil >= 0 && daysUntil <= c.prepLeadDays;
