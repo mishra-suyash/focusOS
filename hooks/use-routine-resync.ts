@@ -5,7 +5,7 @@ import { useAuth } from "@/components/auth-provider";
 import { useToast } from "@/components/toast-host";
 import { scheduleDayKey } from "@/lib/dates";
 import { fetchCollection, saveUserSettings } from "@/lib/firestore";
-import { resyncRoutineDays, undoRoutineDays } from "@/lib/plan-release";
+import { resyncRoutineDays, undoDayChanges } from "@/lib/plan-release";
 import { currentMinute } from "@/lib/schedule";
 import type { PomodoroSession, RoutineBlock, UserSettings } from "@/types";
 
@@ -49,7 +49,7 @@ export function useRoutineResync() {
         label: "Undo",
         onClick: () => {
           void saveUserSettings(uid, { routineBlocks: edit.before.routineBlocks, ...(edit.before.weeklyPlanning ? { weeklyPlanning: edit.before.weeklyPlanning } : {}) });
-          void undoRoutineDays(uid, changes).then((skipped) => {
+          void undoDayChanges(uid, changes).then((skipped) => {
             if (skipped > 0) toast({ message: `${skipped} day${skipped === 1 ? "" : "s"} changed since, so ${skipped === 1 ? "it" : "they"} stayed as ${skipped === 1 ? "it is" : "they are"}.` });
           });
         }

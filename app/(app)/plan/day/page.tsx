@@ -328,9 +328,13 @@ function DayPlannerContent() {
               {a.title} ({a.startTime}–{a.endTime}) overlaps {b.title} ({b.startTime}–{b.endTime}). Both stay on the plan until you change one.
             </p>
           ))}
-          {!timelineEditorEnabled && errors.length > 0 ? (
+          {/* The timeline can't make an overlap itself, but one can arrive from outside it: a class
+              landing on a placed block when a term is lengthened. Said here, or the week plan's Accept
+              refusing this day is the first anyone hears of it. */}
+          {errors.length > 0 ? (
             <div className="mb-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
               {errors.map((error) => <p key={error}>{error}</p>)}
+              {timelineEditorEnabled ? <p className="mt-1 text-xs">Move one of them to a free time. Until then the week plan can&apos;t add sittings to this day.</p> : null}
             </div>
           ) : null}
           {timelineEditorEnabled ? (

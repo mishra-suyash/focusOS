@@ -231,7 +231,7 @@ function CourseCard({
   async function saveSessions(sessions: CourseSession[]) {
     if (!user) return;
     await updateCourse(user.uid, course.id, { sessions });
-    await resyncFutureClassSlots(user.uid, { ...course, sessions }, scheduleDayKey());
+    await resyncFutureClassSlots(user.uid, { ...course, sessions }, scheduleDayKey(), terms);
     setEditingSessions(false);
   }
 

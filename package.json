@@ -29,7 +29,8 @@
     "verify:next-action": "tsx scripts/verify-next-action.ts",
     "verify:chunking": "tsx scripts/verify-chunking.ts",
     "verify:reading": "tsx scripts/verify-reading.ts",
-    "verify:notify": "tsx scripts/verify-notify.ts"
+    "verify:notify": "tsx scripts/verify-notify.ts",
+    "verify:terms": "tsx scripts/verify-terms.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

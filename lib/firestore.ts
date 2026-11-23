@@ -403,10 +403,18 @@ export async function saveDailySchedule(
   return { updatedAt };
 }
 
-export async function createTerm(uid: string, term: NewTerm) {
+export async function createTerm(uid: string, term: NewTerm): Promise<string> {
   const createdAt = now();
   trackWrite();
-  await addDoc(userCollection(uid, "terms"), withoutUndefined({ ...term, createdAt, updatedAt: createdAt }));
+  const ref = await addDoc(userCollection(uid, "terms"), withoutUndefined({ ...term, createdAt, updatedAt: createdAt }));
+  return ref.id;
+}
+
+/** Undo of a delete: the term comes back under its own id, so courses pointing at it find it again. */
+export async function restoreTerm(uid: string, term: Term) {
+  const { id, ...data } = term;
+  trackWrite();
+  await setDoc(doc(userCollection(uid, "terms"), id), withoutUndefined({ ...data, updatedAt: now() }));
 }
 
 export async function updateTerm(uid: string, id: string, patch: Partial<Term>) {

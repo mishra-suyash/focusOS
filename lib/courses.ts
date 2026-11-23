@@ -3,6 +3,7 @@ import { sessionDayKey, sessionSlotDayKey, weekDates, weekStartKey } from "@/lib
 import { fetchCollection, saveDailySchedule, setRecurringTaskTemplate, updateRecurringTaskTemplate } from "@/lib/firestore";
 import { planRevisionTemplateSync } from "@/lib/recurring-tasks";
 import { minutesFromTime, sortedSlots } from "@/lib/schedule";
+import { isBreakMode } from "@/lib/terms";
 import { slotCoverageMinutes } from "@/lib/tracking";
 import type {
   Course,
@@ -14,7 +15,8 @@ import type {
   ScheduleSlot,
   SlotObjectiveRef,
   Task,
-  TaskBucket
+  TaskBucket,
+  Term
 } from "@/types";
 
 /** `status` as stored can go stale (nobody flips it when a course's end date passes) — derive the real one. */
@@ -80,14 +82,15 @@ export function courseSlotsForDate(courses: Course[], dateKey: string): Schedule
 /**
  * After a course's weekly sessions change, its already-generated future schedules
  * still show the old times. Regenerate just this course's class slots on every
- * future DailySchedule, leaving past days and every other slot untouched.
+ * future DailySchedule, leaving past days and every other slot untouched. A date no
+ * semester covers gets none, as `/plan/day` would give it.
  */
-export async function resyncFutureClassSlots(uid: string, course: Course, todayKey: string) {
+export async function resyncFutureClassSlots(uid: string, course: Course, todayKey: string, terms: Term[]) {
   const schedules = await fetchCollection<DailySchedule>(uid, "dailySchedules");
   const futureSchedules = schedules.filter((schedule) => schedule.dateKey > todayKey);
   for (const schedule of futureSchedules) {
     const withoutThisCourse = schedule.slots.filter((slot) => !slot.id.startsWith(`course-${course.id}-`));
-    const refreshedSlots = courseSlotsForDate([course], schedule.dateKey);
+    const refreshedSlots = isBreakMode(terms, schedule.dateKey) ? [] : courseSlotsForDate([course], schedule.dateKey);
     if (refreshedSlots.length === 0 && withoutThisCourse.length === schedule.slots.length) continue;
     await saveDailySchedule(uid, {
       dateKey: schedule.dateKey,
