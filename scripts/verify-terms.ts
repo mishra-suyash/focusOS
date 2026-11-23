@@ -3,6 +3,7 @@
  * Unit-test stand-in for lib/terms.ts and lib/term-change.ts: editing a term's dates — same pattern as
  * scripts/verify-routine.ts, since this repo has no test runner.
  */
+import { coursesByTerm } from "../lib/courses";
 import { classLayerForDate, coursesFollowingTerm, resyncClassesOnDay, templatesFollowingCourses } from "../lib/term-change";
 import { endDateForWeeks, getActiveTerm, isBreakMode, termFormErrors, termLengthLabel } from "../lib/terms";
 import type { Course, RecurringTaskTemplate, ScheduleSlot, Term } from "../types";
@@ -95,6 +96,19 @@ const course = (id: string, patch: Partial<Course> = {}): Course =>
   const otherFixed = at("commitment-ta", "10:00", "11:00");
   const overFixed = run([otherFixed], shortTerm, longTerm);
   check("a class landing on another fixed item keeps both", overFixed !== null && overFixed.slots.length === 2 && overFixed.clashes.length === 0 && overFixed.released.length === 0);
+}
+
+// ---- the course list, semester by semester ----
+{
+  const autumn = term("autumn", "2026-08-01", "2026-12-15");
+  const spring = term("spring", "2026-01-05", "2026-05-10");
+  const groups = coursesByTerm([course("a", { termId: "spring" }), course("b"), course("c", { termId: "autumn" }), course("d", { termId: "gone" })], [spring, autumn]);
+  check(
+    "latest term first, then everything without a live term",
+    groups.map((group) => `${group.term?.id ?? "none"}:${group.courses.map((c) => c.id).join("")}`).join() === "autumn:c,spring:a,none:bd",
+    groups.map((group) => `${group.term?.id ?? "none"}:${group.courses.map((c) => c.id).join("")}`).join()
+  );
+  check("a term with no courses shown gets no group", coursesByTerm([course("b")], [autumn]).length === 1);
 }
 
 if (failures.length > 0) {

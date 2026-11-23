@@ -1,5 +1,6 @@
 "use client";
 
+import { clsx } from "clsx";
 import { orderBy } from "firebase/firestore";
 import { Sparkles, Star, Trash2 } from "lucide-react";
 import Link from "next/link";
@@ -23,6 +24,7 @@ import { saveClassLogEntry } from "@/lib/classlog";
 import {
   bucketWeeklyTarget,
   completedMinutesThisWeek,
+  coursesByTerm,
   courseSlotsForDate,
   currentWeekDateKeys,
   plannedMinutesThisWeek,
@@ -36,7 +38,7 @@ import { classMinutesForWeek } from "@/lib/tracking";
 import { scheduleDayKey, todayKey } from "@/lib/dates";
 import { computeCourseCoverage, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import { taskBucketLabels, taskBuckets } from "@/lib/options";
-import { isBreakMode } from "@/lib/terms";
+import { formatTermDate, getActiveTerm, isBreakMode } from "@/lib/terms";
 import {
   createCheckpoint,
   createCourse,
@@ -93,6 +95,16 @@ function CoursesPageContent() {
   // the work passively, an unplanned target must be visible rather than quietly doing nothing.
   const { items: schedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
 
+  // Active courses by default; finished and dropped ones a click away. Read from the derived status,
+  // so a course whose end date has passed moves across on its own.
+  const [view, setView] = useState<"active" | "past">("active");
+  const activeCourses = courses.filter((course) => effectiveCourseStatus(course, today) === "active");
+  const pastCourses = courses.filter((course) => effectiveCourseStatus(course, today) !== "active");
+  const shown = view === "active" ? activeCourses : pastCourses;
+  const groups = coursesByTerm(shown, terms);
+  const showGroupHeaders = shown.some((course) => terms.some((term) => term.id === course.termId));
+  const currentTerm = getActiveTerm(terms, scheduleDayKey());
+
   /** A new course's revision hours (if set at creation) get their auto "Revise" template the same
    * turn it's created — `createCourse` returns the new id specifically so this doesn't need a
    * second round-trip to look it up. */
@@ -123,24 +135,64 @@ function CoursesPageContent() {
               primary={{ label: "Add a course", onClick: () => focusSection("course-add") }}
             />
           ) : (
-            courses.map((course) => (
-              <CourseCard
-                key={course.id}
-                course={course}
-                terms={terms}
-                today={today}
-                workMinutes={workMinutes}
-                checkpoints={checkpointsByCourse[course.id] ?? []}
-                revisionItems={revisionItems}
-                recurringTemplates={recurringTemplates.filter((item) => item.courseId === course.id)}
-                papers={papers.filter((item) => item.relatedCourseId === course.id)}
-                courseTasks={tasks.filter((item) => item.courseId === course.id)}
-                sessions={sessions}
-                schedules={schedules}
-                openTasks={tasks.filter((item) => item.courseId === course.id && item.status !== "done")}
-                linkedGoals={goals.filter((item) => item.linked.courseIds.includes(course.id))}
-              />
-            ))
+            <>
+              <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Which courses to show">
+                {(["active", "past"] as const).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={view === key}
+                    onClick={() => setView(key)}
+                    className={clsx(
+                      "rounded-full border px-3 py-1 text-xs font-medium",
+                      view === key
+                        ? "border-moss-600 bg-moss-600 text-white"
+                        : "border-ink-200 text-ink-600 hover:border-moss-500 hover:text-moss-700 dark:border-ink-700 dark:text-ink-300 dark:hover:text-moss-400"
+                    )}
+                  >
+                    {key === "active" ? "Active" : "Past & dropped"} · {key === "active" ? activeCourses.length : pastCourses.length}
+                  </button>
+                ))}
+              </div>
+              {shown.length === 0 ? (
+                <p className="card p-5 text-sm text-ink-500">
+                  {view === "active" ? "No active courses. Finished and dropped ones are under Past & dropped." : "Nothing finished or dropped yet."}
+                </p>
+              ) : null}
+              {groups.map((group) => (
+                <div key={group.term?.id ?? "no-term"} className="space-y-4">
+                  {showGroupHeaders ? (
+                    <h2 className="flex flex-wrap items-baseline gap-x-2 pt-1 text-sm font-semibold">
+                      {group.term?.name ?? "No term"}
+                      {group.term ? (
+                        <span className="text-xs font-normal text-ink-500">
+                          {formatTermDate(group.term.startDate)} – {formatTermDate(group.term.endDate)}
+                          {group.term.id === currentTerm?.id ? " · current" : ""}
+                        </span>
+                      ) : null}
+                    </h2>
+                  ) : null}
+                  {group.courses.map((course) => (
+                    <CourseCard
+                      key={course.id}
+                      course={course}
+                      terms={terms}
+                      today={today}
+                      workMinutes={workMinutes}
+                      checkpoints={checkpointsByCourse[course.id] ?? []}
+                      revisionItems={revisionItems}
+                      recurringTemplates={recurringTemplates.filter((item) => item.courseId === course.id)}
+                      papers={papers.filter((item) => item.relatedCourseId === course.id)}
+                      courseTasks={tasks.filter((item) => item.courseId === course.id)}
+                      sessions={sessions}
+                      schedules={schedules}
+                      openTasks={tasks.filter((item) => item.courseId === course.id && item.status !== "done")}
+                      linkedGoals={goals.filter((item) => item.linked.courseIds.includes(course.id))}
+                    />
+                  ))}
+                </div>
+              ))}
+            </>
           )}
         </section>
       </div>

@@ -52,6 +52,17 @@ export function plannableTasks<T extends Pick<Task, "courseId">>(tasks: T[], cou
   return tasks.filter((task) => !isFromDroppedCourse(task, courses));
 }
 
+/**
+ * Courses grouped by the term they belong to, latest term first, for showing a course list semester by
+ * semester. Courses without a term, or whose term was deleted, come last in one group.
+ */
+export function coursesByTerm<T extends Pick<Course, "termId">>(courses: T[], terms: Term[]): { term?: Term; courses: T[] }[] {
+  const ordered = [...terms].sort((a, b) => b.startDate.localeCompare(a.startDate));
+  const groups = ordered.map((term) => ({ term, courses: courses.filter((course) => course.termId === term.id) })).filter((group) => group.courses.length > 0);
+  const loose = courses.filter((course) => !ordered.some((term) => term.id === course.termId));
+  return loose.length > 0 ? [...groups, { courses: loose }] : groups;
+}
+
 export function courseSlotsForDate(courses: Course[], dateKey: string): ScheduleSlot[] {
   const dayOfWeek = getDay(parseISO(dateKey));
   const slots: ScheduleSlot[] = [];
