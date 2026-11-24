@@ -5,6 +5,7 @@
  */
 import { DEFAULT_WORKING_WINDOW, freeMinutesOnDay, isPlannerMade, isTiedToFinishedWork, keyedAfterRemoval, placeInWindow, placeProposals, sittingsOfFinishedWork, type FinishedWork, releasableSlots, replanDiff, resolvePlacement, slotFamily, usableWindow, weekCapacity, weeklyPlanningSlotForDate, type WeekProposal, type WeekProposalCandidate } from "../lib/weekplan";
 import { minutesFromTime } from "../lib/schedule";
+import { taskMinutesAccounted } from "../lib/courses";
 import type { ScheduleSlot } from "../types";
 
 const failures: string[] = [];
@@ -390,6 +391,37 @@ const SAT = WEEK[5];
   const m2 = at("m2", { objectiveRef: { kind: "goal", id: "g", milestoneId: "b" }, startTime: "12:00", endTime: "13:00" });
   check("a done milestone takes only its own sittings", ids([{ dateKey: "2026-11-06", slots: [m1, m2] }], { kind: "goal", id: "g", milestoneId: "a" }) === "2026-11-06:m1");
   check("a stopped goal takes all of its sittings", ids([{ dateKey: "2026-11-06", slots: [m1, m2] }], { kind: "goal", id: "g" }) === "2026-11-06:m1,2026-11-06:m2");
+}
+
+// ---- Overhaul 2026-11-24 ----
+{
+  // "Keep my moves" pins softly: a sitting that can't keep its exact time is placed elsewhere, its own
+  // day first, instead of coming back "Didn't fit" with the old one already lifted off the day.
+  const candidates: WeekProposalCandidate[] = [
+    { title: "Kept", type: "deep_work", durationMinutes: 50, dateKey: TUE, fixedStartTime: "09:00", softPin: true, key: "kept" }
+  ];
+  const [placed] = placeProposals(candidates, WEEK, { [TUE]: [{ startTime: "09:30", endTime: "10:00" }] }, DEFAULT_WORKING_WINDOW);
+  check("soft pin: a taken time falls back to a search", placed.fits, JSON.stringify(placed));
+  check("soft pin: its own day is tried first", placed.dateKey === TUE && placed.startTime !== "09:00", `${placed.dateKey} ${placed.startTime}`);
+  const [hard] = placeProposals([{ ...candidates[0], softPin: undefined }], WEEK, { [TUE]: [{ startTime: "09:30", endTime: "10:00" }] }, DEFAULT_WORKING_WINDOW);
+  check("hard pin: a taken time is still refused", !hard.fits);
+}
+{
+  // A task's owed minutes are its estimate less what's been worked and what's still ahead, so
+  // accepting the offer leaves nothing more to offer. `max(logged, planned)` offered 25 more each time.
+  const cutoff = { todayKey: TUE, nowMinutes: minutesFromTime("12:00") };
+  const sessions = [{ mode: "work" as const, minutes: 25, taskId: "t", completedAt: "2026-09-01T10:00:00" }];
+  const sitting = (id: string, startTime: string, endTime: string): ScheduleSlot => ({ id, title: "T", type: "deep_work", startTime, endTime, status: "upcoming", assignedTaskIds: ["t"] });
+  check("taskMinutesAccounted: worked minutes count before anything is placed", taskMinutesAccounted(sessions, [], "t", WEEK, cutoff) === 25);
+  const placedAhead = [{ dateKey: WEEK[3], slots: [sitting("a", "09:00", "09:35"), sitting("b", "10:00", "10:40")] }];
+  check("taskMinutesAccounted: and still count once sittings are placed", taskMinutesAccounted(sessions, placedAhead, "t", WEEK, cutoff) === 25 + 75);
+  const behind = [{ dateKey: MON, slots: [sitting("c", "09:00", "10:00")] }];
+  check("taskMinutesAccounted: a sitting behind you counts only through its sessions", taskMinutesAccounted(sessions, behind, "t", WEEK, cutoff) === 25);
+  const unnamed = [...sessions, { mode: "work" as const, minutes: 40, slotId: "c", slotDateKey: MON, completedAt: `${MON}T10:00:00` }];
+  check("taskMinutesAccounted: a session on the sitting that didn't name the task still counts", taskMinutesAccounted(unnamed, behind, "t", WEEK, cutoff) === 25 + 40);
+  const ongoing = [{ dateKey: TUE, slots: [sitting("d", "11:30", "12:30")] }];
+  const midway = [{ mode: "work" as const, minutes: 20, taskId: "t", slotId: "d", slotDateKey: TUE, completedAt: `${TUE}T11:55:00` }];
+  check("taskMinutesAccounted: a sitting under way counts what's worked once, plus the rest", taskMinutesAccounted(midway, ongoing, "t", WEEK, cutoff) === 20 + 40);
 }
 
 if (failures.length > 0) {

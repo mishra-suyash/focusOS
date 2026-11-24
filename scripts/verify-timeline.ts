@@ -4,7 +4,7 @@
  * criterion "timeline tests green") — same pattern as scripts/verify-templates.ts, since this
  * repo has no test runner.
  */
-import { fixedClashes, minutesFromTime, scheduleFromTemplate, validateSlots } from "../lib/schedule";
+import { fixedClashes, isLockedSlot, minutesFromTime, scheduleFromTemplate, templateBlocks, validateSlots } from "../lib/schedule";
 import {
   categoryForSlotType,
   clampToDay,
@@ -16,10 +16,12 @@ import {
   MINUTES_PER_DAY,
   minutesToPx,
   nearestFreeGap,
+  newOverlap,
   parseTypedTime,
   pxToMinutes,
   QUICK_BLOCK_PRESETS,
   rangeOverlapsSlots,
+  replaceWithTemplate,
   rippleMove,
   rippleShift,
   shiftRestOfDay,
@@ -305,10 +307,35 @@ check("categoryForSlotType: meal -> personal", categoryForSlotType("meal") === "
   check("shiftRestOfDay: refuses when any slot would be capped short of the full shift", shiftRestOfDay(slots, 0, 30) === null);
 }
 {
-  // A locked class block never moves (rippleShift skips it) — shifting everything else into it
-  // produces an overlap, which shiftRestOfDay must catch via validateSlots and refuse.
-  const slots = [slot("moving", "09:00", "10:00"), slot("locked", "10:15", "11:00", "class")];
-  check("shiftRestOfDay: refuses when the shift would overlap a locked class block", shiftRestOfDay(slots, minutesFromTime("09:00"), 30) === null);
+  // A class never moves, so a block that would land on it goes to the first free time after it,
+  // and the block behind it follows rather than jumping ahead.
+  const slots = [slot("moving", "09:00", "10:00"), slot("locked", "10:15", "11:00", "class"), slot("next", "11:00", "11:30")];
+  const result = shiftRestOfDay(slots, minutesFromTime("09:00"), 30);
+  const byId = new Map((result ?? []).map((s) => [s.id, s]));
+  check("shiftRestOfDay: a block that would land on a class goes after it", byId.get("moving")?.startTime === "11:00" && byId.get("moving")?.endTime === "12:00");
+  check("shiftRestOfDay: the class stays put", byId.get("locked")?.startTime === "10:15");
+  check("shiftRestOfDay: the block behind follows", byId.get("next")?.startTime === "12:00");
+}
+{
+  // Routine, commitments and finished blocks stay put. The default routine's 23:00 Sleep can't move
+  // past midnight, and shifting it made "Running late?" refuse on every ordinary day.
+  const routine = (id: string, startTime: string, endTime: string): ScheduleSlot => ({ ...slot(id, startTime, endTime, "meal"), locked: true });
+  const slots = [
+    slot("sitting", "09:00", "10:00"),
+    routine("routine-lunch", "12:30", "13:15"),
+    slot("commitment-ta", "15:00", "16:00", "admin"),
+    { ...slot("done", "16:00", "16:30"), status: "completed" as const },
+    routine("routine-sleep-bed", "23:00", "24:00")
+  ];
+  const result = shiftRestOfDay(slots, minutesFromTime("08:45"), 15);
+  const byId = new Map((result ?? []).map((s) => [s.id, s]));
+  check("shiftRestOfDay: works on a day with the default Sleep routine", result !== null);
+  check("shiftRestOfDay: the sitting moves", byId.get("sitting")?.startTime === "09:15");
+  check(
+    "shiftRestOfDay: routine, commitments and finished blocks don't move",
+    byId.get("routine-lunch")?.startTime === "12:30" && byId.get("commitment-ta")?.startTime === "15:00" && byId.get("done")?.startTime === "16:00" && byId.get("routine-sleep-bed")?.startTime === "23:00"
+  );
+  check("shiftRestOfDay: nothing to move is a refusal, not a silent no-op", shiftRestOfDay([routine("routine-lunch", "12:30", "13:15")], 0, 15) === null);
 }
 {
   // A negative shift ("running early"?) is mechanically supported by the same full-amount check —
@@ -331,6 +358,47 @@ check("categoryForSlotType: meal -> personal", categoryForSlotType("meal") === "
   check("a sitting on top of a class is still refused", validateSlots([lecture, at("x", "deep_work", "15:00", "15:30")]).length === 1);
   check("a routine block on a class is still refused", validateSlots([lecture, { ...at("routine-a", "gym", "15:00", "17:00"), locked: true }]).length === 1);
   check("two sittings are still refused", validateSlots([at("x", "deep_work", "09:00", "10:00"), at("y", "deep_work", "09:30", "10:30")]).length === 1);
+}
+
+// ---- Overhaul 2026-11-24: leaving an overlap, templates, and Apply template ----
+{
+  // A block already on a class may move off it, or slide along it, but not onto something new.
+  const slots = [slot("class", "14:00", "16:00", "class"), slot("stuck", "14:30", "15:30"), slot("meeting", "16:00", "17:00", "admin")];
+  check("newOverlap: moving within the overlap it already has is allowed", newOverlap(slots, "stuck", minutesFromTime("14:45"), minutesFromTime("15:45")) === undefined);
+  check("newOverlap: moving clear of it is allowed", newOverlap(slots, "stuck", minutesFromTime("18:00"), minutesFromTime("19:00")) === undefined);
+  check("newOverlap: running into something new is named", newOverlap(slots, "stuck", minutesFromTime("15:30"), minutesFromTime("16:30"))?.id === "meeting");
+}
+{
+  const marked: ScheduleSlot = { ...slot("sitting", "09:00", "10:00"), chunk: { groupId: "g", index: 1, total: 2 }, plannedMinutes: 60, placedByUser: true, objectiveRef: { kind: "readingHabit" } };
+  const kept = templateBlocks([
+    slot("course-a-0", "10:00", "11:00", "class"),
+    { ...slot("routine-lunch", "12:30", "13:15", "meal"), locked: true },
+    slot("commitment-ta", "14:00", "15:00", "admin"),
+    slot("weekly-planning", "17:00", "17:30", "admin"),
+    marked
+  ]);
+  check("templateBlocks: class, routine, commitment and anchor blocks are left out", kept.length === 1 && kept[0].id === "sitting", kept.map((s) => s.id).join(","));
+  check("templateBlocks: the week plan's marks come off", !kept[0].chunk && kept[0].plannedMinutes === undefined && !kept[0].placedByUser && !kept[0].objectiveRef);
+}
+{
+  const day = [
+    slot("course-a-0", "10:00", "11:00", "class"),
+    slot("event", "15:00", "16:00", "external"),
+    { ...slot("done", "08:00", "09:00"), status: "completed" as const },
+    slot("mine", "13:00", "14:00")
+  ];
+  const template = [slot("t-morning", "09:00", "10:00"), slot("t-class-time", "10:00", "11:00"), slot("t-afternoon", "13:00", "14:00")];
+  const { slots: next, left } = replaceWithTemplate(day, template);
+  const ids = next.map((s) => s.id);
+  check("replaceWithTemplate: the class, calendar event and finished block stay", ["course-a-0", "event", "done"].every((id) => ids.includes(id)));
+  check("replaceWithTemplate: a block you placed gives way to the template's", !ids.includes("mine") && ids.includes("t-afternoon"));
+  check("replaceWithTemplate: a template block on the class is left out and counted", !ids.includes("t-class-time") && left === 1);
+  check("replaceWithTemplate: the result has no overlaps", validateSlots(next).length === 0, validateSlots(next).join(" "));
+}
+
+{
+  check("isLockedSlot: a course's own class block is locked", isLockedSlot(slot("course-a-0", "10:00", "11:00", "class")));
+  check("isLockedSlot: a class copied in by an old template can be deleted", !isLockedSlot(slot("3f2c-copy", "10:00", "11:00", "class")));
 }
 
 if (failures.length > 0) {

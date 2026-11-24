@@ -1,6 +1,6 @@
 "use client";
 
-import { getDay, parseISO } from "date-fns";
+import { format, getDay, parseISO } from "date-fns";
 import { orderBy, where } from "firebase/firestore";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -27,6 +27,7 @@ import {
   plannedMinutesThisWeek,
   scheduledMinutesThisWeek,
   syncRevisionTemplate,
+  taskMinutesAccounted,
   type PlanningCutoff
 } from "@/lib/courses";
 import { addDaysToKey, dateKeyOfIso, scheduleDayKey, sessionSlotDayKey, weekDates, weekStartKey } from "@/lib/dates";
@@ -52,9 +53,9 @@ import { DEFAULT_MAX_REVISIONS_PER_DAY, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, es
 import { commitmentSlotsForDate, isFixedCommitment, isFixedCommitmentOccurrence, isTemplateDueOn, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { describeObjective, objectiveChipText } from "@/lib/objectives";
-import { fixedClashes, minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
+import { fixedClashes, mergeMissingLockedSlots, minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
 import { isBreakMode } from "@/lib/terms";
-import { loggedMinutesForTask, sittingOutcome } from "@/lib/tracking";
+import { sittingOutcome } from "@/lib/tracking";
 import {
   rangeOverlapsSlots,
   renumberSittings,
@@ -310,7 +311,15 @@ function PlanWeekContent() {
 
   // ---- Step 2: the week already contains (also the source of "claimed" minutes for Step 3's meter and Step 4's placement) ----
   function claimedSlotsForDate(dateKey: string): ScheduleSlot[] {
-    const saved = planningSchedules.find((s) => s.dateKey === dateKey)?.slots ?? [];
+    return daySlotsWithFixed(planningSchedules.find((s) => s.dateKey === dateKey)?.slots ?? [], dateKey);
+  }
+  /**
+   * A day as `/plan/day` would open it: what's saved, plus any class, commitment, routine block or
+   * planning anchor it should carry and doesn't yet. A day saved before a course existed has no class
+   * slot; reading only what was saved let a sitting land on the class time, and the class then arrived
+   * on top of it when the day was next opened.
+   */
+  function daySlotsWithFixed(saved: ScheduleSlot[], dateKey: string): ScheduleSlot[] {
     const classSlots = isBreakMode(terms, dateKey) ? [] : courseSlotsForDate(courses, dateKey);
     // A TA meeting or office hour is fixed reality the same way a lecture is, so it claims its time
     // whether the day is saved or not — a saved day is exactly the one with accepted blocks on it.
@@ -321,7 +330,7 @@ function PlanWeekContent() {
     const routineSlots = routineSlotsForDate(settings.routineBlocks ?? DEFAULT_ROUTINE_BLOCKS, dateKey).filter(
       (slot) => !rangeOverlapsSlots(minutesFromTime(slot.startTime), minutesFromTime(slot.endTime), fixed)
     );
-    const base = saved.length > 0 ? withCommitments(saved, commitments) : [...classSlots, ...commitments, ...routineSlots];
+    const base = saved.length > 0 ? mergeMissingLockedSlots(withCommitments(saved, commitments), [...classSlots, ...routineSlots]) : [...classSlots, ...commitments, ...routineSlots];
     const anchor = weeklyPlanningSlotForDate(settings.weeklyPlanning, dateKey);
     return anchor && !base.some((slot) => slot.id === anchor.id) ? [...base, anchor] : base;
   }
@@ -606,7 +615,7 @@ function PlanWeekContent() {
         continue;
       }
       const taskFamily = `task:${task.id}`;
-      const remaining = outstandingFor(taskFamily, estimate, Math.max(loggedMinutesForTask(sessions, task.id), plannedMinutesForTask(planningSchedules, task.id, weekDateKeys, cutoff)));
+      const remaining = outstandingFor(taskFamily, estimate, taskMinutesAccounted(sessions, planningSchedules, task.id, weekDateKeys, cutoff));
       const taskDismissed = dismissedMinutes[taskFamily] ?? 0;
       // Whatever of the estimate isn't still owed or dismissed is on a day or already worked.
       row.placed += Math.max(0, estimate - remaining - taskDismissed);
@@ -776,17 +785,14 @@ function PlanWeekContent() {
   );
   const taskRow: LedgerRow = { id: "tasks", label: "Backlog tasks", ask: 0, placed: 0, dismissed: 0, sittings: [], families: [] };
   for (const task of backlogTasks) {
-    // plan/16 §5.1 — propose only what's actually left. `logged` (real session minutes) and `planned`
-    // (minutes already on a day) overlap in time, so the larger is taken rather than the sum: a
-    // 50-minute sitting with 22 logged counts 50, not 72. Errs toward proposing slightly too much in
-    // the middle, the safe direction — an over-proposal is visible and dismissable.
+    // plan/16 §5.1 — propose only what's actually left: the estimate less what's been worked and
+    // what's still ahead on a day (`taskMinutesAccounted`, which counts no minute twice).
     const family = `task:${task.id}`;
-    const logged = loggedMinutesForTask(sessions, task.id);
     const planned = plannedMinutesForTask(planningSchedules, task.id, weekDateKeys, cutoff);
     taskRow.placed += planned;
     taskRow.dismissed += dismissedMinutes[family] ?? 0;
     taskRow.families.push(family);
-    const total = outstandingFor(family, taskBlockMinutes(task, workMinutes), Math.max(logged, planned));
+    const total = outstandingFor(family, taskBlockMinutes(task, workMinutes), taskMinutesAccounted(sessions, planningSchedules, task.id, weekDateKeys, cutoff));
     if (total <= 0) continue;
     const start = candidates.length;
     pushTaskCandidates(task, total, weekend);
@@ -956,7 +962,7 @@ function PlanWeekContent() {
       family,
       title: task.title,
       detail: `${task.kind === "external" ? "External · " : ""}Task · due ${task.dueDate}`,
-      minutes: outstandingFor(family, taskBlockMinutes(task, workMinutes), Math.max(loggedMinutesForTask(sessions, task.id), planned)),
+      minutes: outstandingFor(family, taskBlockMinutes(task, workMinutes), taskMinutesAccounted(sessions, planningSchedules, task.id, weekDateKeys, cutoff)),
       planned,
       type: "deep_work",
       taskId: task.id,
@@ -1116,6 +1122,8 @@ function PlanWeekContent() {
    * before the search places what's left.
    */
   const keptMoveKeys = new Set<string>();
+  /** Kept moves that were placed by hand to begin with; the rest were the search's, and stay so. */
+  const keptByHand = new Set<string>();
   if (replan?.keepMoves) {
     const byHandFirst = [...released].sort((a, b) => Number(Boolean(b.slot.placedByUser)) - Number(Boolean(a.slot.placedByUser)));
     for (const item of byHandFirst) {
@@ -1124,16 +1132,21 @@ function PlanWeekContent() {
       if (!candidate?.key) continue;
       candidate.dateKey = item.dateKey;
       candidate.fixedStartTime = item.slot.startTime;
-      delete candidate.preferredDateKeys;
+      candidate.softPin = true;
       keptMoveKeys.add(candidate.key);
+      if (item.slot.placedByUser) keptByHand.add(candidate.key);
     }
   }
   const orderedCandidates = [...extraCandidates, ...candidates.filter((c) => c.key && keptMoveKeys.has(c.key)), ...candidates.filter((c) => !c.key || !keptMoveKeys.has(c.key))];
   const freshProposals = placeProposals(orderedCandidates, weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys, now);
   /** A committed week shows what was committed and can't be edited — except in Replan mode. */
   const frozen = committed && !replan;
+  // A plan saved by an earlier replan kept the sittings it put on days in this list too; one already
+  // on its day at that time is shown there, not drawn a second time over it.
+  const onItsDay = (p: Pick<WeekProposal, "dateKey" | "startTime" | "title">) =>
+    (schedules.find((schedule) => schedule.dateKey === p.dateKey)?.slots ?? []).some((slot) => slot.startTime === p.startTime && slot.title === p.title);
   const proposals: WeekProposal[] = frozen
-    ? (existingReview!.plan!.proposedBlocks.map((p, index) => ({ ...p, key: p.key ?? `${index}`, fits: true })) as WeekProposal[])
+    ? (existingReview!.plan!.proposedBlocks.map((p, index) => ({ ...p, key: p.key ?? `${index}`, fits: true })).filter((p) => !onItsDay(p)) as WeekProposal[])
     : freshProposals;
 
   /**
@@ -1462,8 +1475,11 @@ function PlanWeekContent() {
     if (!replan) return;
     const ok = await acceptProposals(acceptableProposals, released);
     if (!ok) return;
+    const accepted = new Set(acceptableProposals.map((p) => p.key));
     await patchPlan({
-      proposedBlocks: effectiveProposals.map(({ fits, ...rest }) => rest),
+      // Only what didn't go onto a day. The accepted sittings are on their days now, and a committed
+      // week draws this list on its grid, so keeping them here drew every sitting twice.
+      proposedBlocks: effectiveProposals.filter((p) => !accepted.has(p.key)).map(({ fits, ...rest }) => rest),
       dismissedMinutes: replan.resetDismissals ? {} : storedDismissed,
       readingTarget,
       revisions: [
@@ -1539,12 +1555,13 @@ function PlanWeekContent() {
         if (!byDate.has(item.dateKey)) byDate.set(item.dateKey, []);
       }
       const writes: { dateKey: string; templateId?: string; slots: ScheduleSlot[] }[] = [];
+      const skipped: string[] = [];
       for (const [dateKey, props] of byDate) {
         const savedSlots = schedules.find((s) => s.dateKey === dateKey)?.slots;
         if (!savedSlots && props.length === 0) continue;
         // A saved day gets its fixed commitments here too, so what is written matches the grid the
         // proposals were placed against (and an overlapping routine block steps aside, as it does there).
-        const baseSlots = savedSlots ? withCommitments(savedSlots, commitmentSlotsForDate(recurringTemplates, dateKey, savedSlots)) : claimedSlotsForDate(dateKey);
+        const baseSlots = savedSlots ? daySlotsWithFixed(savedSlots, dateKey) : claimedSlotsForDate(dateKey);
         const releasedHere = releasedOn.get(dateKey);
         const existingSlots = baseSlots.filter((slot) => !releasedHere?.has(slot.id)).map((slot) => {
           const numbered = siblingUpdates.find((e) => e.slot!.id === slot.id && e.dateKey === dateKey);
@@ -1569,20 +1586,26 @@ function PlanWeekContent() {
           ...(p.chunk ? { chunk: p.chunk } : {}),
           ...(p.plannedMinutes != null ? { plannedMinutes: p.plannedMinutes } : {}),
           // plan/17 §7.3 — a time set by hand (drag or typed) is remembered, so a replan can keep it.
-          ...(placements[p.key] || keptMoveKeys.has(p.key) ? { placedByUser: true } : {})
+          ...(placements[p.key] || keptByHand.has(p.key) ? { placedByUser: true } : {})
         }));
         const merged = sortedSlots([...existingSlots, ...newSlots]);
-        const errors = validateSlots(merged);
+        // Only what this accept would add counts against it. An overlap already on the day (a class that
+        // arrived on a placed block) is the day page's to show; refusing over it used to throw away every
+        // sitting of the week for one day nobody was touching. A day that does fail is left out on its own.
+        const already = new Set(validateSlots(existingSlots));
+        const errors = validateSlots(merged).filter((error) => !already.has(error));
         if (errors.length > 0) {
-          setAcceptError(`${dateKey}: ${errors[0]}`);
-          return false;
+          skipped.push(`${format(parseISO(dateKey), "EEE d MMM")}: ${errors[0]}`);
+          continue;
         }
         writes.push({ dateKey, templateId: schedules.find((s) => s.dateKey === dateKey)?.templateId, slots: merged });
       }
       for (const w of writes) await saveDailySchedule(user.uid, w);
+      if (skipped.length > 0) setAcceptError(`${writes.length > 0 ? "Everything else was added. " : ""}Not added: ${skipped.join(" ")} Move one of them on that day, then accept again.`);
       // The accepted sittings leave the regenerated list and the rest close up, so positions keyed
       // by the old indices are moved with them rather than left on whatever inherits each key.
-      const acceptedKeys = fitting.map((p) => p.key);
+      const writtenDays = new Set(writes.map((w) => w.dateKey));
+      const acceptedKeys = fitting.filter((p) => writtenDays.has(p.dateKey)).map((p) => p.key);
       setPlacements((current) => keyedAfterRemoval(current, acceptedKeys));
       setPlacementNotes((current) => keyedAfterRemoval(current, acceptedKeys));
       setPinOverrides((current) => keyedAfterRemoval(current, acceptedKeys));
@@ -1590,7 +1613,10 @@ function PlanWeekContent() {
       // No accept flag is written. The `ScheduleSlot` just saved onto the day *is* the record that
       // this work is planned, and every generator now subtracts what is on the calendar — so a second
       // record would only be a chance for the two to disagree, which is exactly what went wrong.
-      return true;
+      return skipped.length === 0;
+    } catch (error) {
+      setAcceptError(`Couldn't save the week: ${error instanceof Error ? error.message : String(error)}. Nothing after the first failed day was written; try again.`);
+      return false;
     } finally {
       setAccepting(false);
     }
@@ -1618,6 +1644,12 @@ function PlanWeekContent() {
     if (!user) return;
     setCommitting(true);
     try {
+      // Committing used to freeze the grid without putting anything on a day: the sittings showed on
+      // the plan, every Accept was disabled, and Today and /plan/day had none of them. What's still on
+      // the grid is what's being committed to, so it goes onto its days first.
+      const leftOnGrid = frozen ? [] : acceptableProposals;
+      if (leftOnGrid.length > 0 && !(await acceptProposals(leftOnGrid))) return;
+      const accepted = new Set(leftOnGrid.map((p) => p.key));
       const targets = activeCourses.flatMap((course) => COURSE_BUCKETS.map((bucket) => ({ courseId: course.id, bucket, minutes: hoursFor(course, bucket) })));
       await patchPlan({
         targets,
@@ -1628,7 +1660,7 @@ function PlanWeekContent() {
         // plan/16 §5.3 — `effectiveProposals`, not `proposals`: the week is committed as the user
         // left it, drags and typed times included. Committing the search's own positions would
         // silently discard every move the moment the week was committed and re-opened.
-        proposedBlocks: effectiveProposals.map(({ fits, ...rest }) => rest),
+        proposedBlocks: effectiveProposals.filter((p) => !accepted.has(p.key)).map(({ fits, ...rest }) => rest),
         // plan/17 §6.6 — this week's reading habit, snapshotted like `targets`.
         readingTarget,
         completedAt: new Date().toISOString()
@@ -2547,7 +2579,9 @@ function PlanWeekContent() {
         <p className="mb-3 text-sm text-ink-500">
           {committed
             ? `Committed ${dateKeyOfIso(existingReview!.plan!.completedAt!)}.`
-            : "Writes the targets, capacity, and accepted blocks onto this week's plan."}
+            : acceptableProposals.length > 0
+              ? `Puts the ${acceptableProposals.length} sitting${acceptableProposals.length === 1 ? "" : "s"} still on the grid onto ${acceptableProposals.length === 1 ? "its day" : "their days"}, then saves this week's targets and capacity.`
+              : "Saves this week's targets, capacity and plan."}
         </p>
         <button className="btn-primary" onClick={commitWeek} disabled={committing}>
           {committing ? "Committing..." : committed ? "Re-commit" : "Commit"}

@@ -81,8 +81,18 @@ export function useDayAutosave({ uid, dateKey, templateId, remoteUpdatedAt }: { 
           setStatus("offline");
           return;
         }
-        const { updatedAt } = await saveDailySchedule(uid, { dateKey, templateId, slots });
+        // The baseline moves before the write, not after it: Firestore shows this tab its own write in
+        // a snapshot before `setDoc` resolves, and that snapshot, carrying a stamp newer than the old
+        // baseline, read as another tab's change. Every save raised a false "changed in another tab".
+        const previousBaseline = baselineUpdatedAtRef.current;
+        const updatedAt = new Date().toISOString();
         baselineUpdatedAtRef.current = updatedAt;
+        try {
+          await saveDailySchedule(uid, { dateKey, templateId, slots }, updatedAt);
+        } catch (error) {
+          baselineUpdatedAtRef.current = previousBaseline;
+          throw error;
+        }
         setStatus("saved");
         triggerGoogleCalendarPush();
       } catch {

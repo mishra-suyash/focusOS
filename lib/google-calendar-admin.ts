@@ -358,9 +358,9 @@ function buildDesiredEvents(
         // (sleep/meal/gym — materialized into every day's slots by mergeMissingLockedSlots, so
         // pushing them would mean the same block every day forever), and external (a slot pulled
         // *from* Google in a future Phase 2 — pushing it back would be an immediate sync loop).
-        // `isLockedSlot` is exactly this set — see plan/13 A3 for why a hand-rolled equivalent of
-        // it drifts.
-        if (isLockedSlot(slot)) continue;
+        // `isLockedSlot` is this set, plus a class copied in by an old template (unlocked so it can be
+        // deleted, but still a class) — see plan/13 A3 for why a hand-rolled equivalent of it drifts.
+        if (isLockedSlot(slot) || slot.type === "class") continue;
         drafts.push(
           planBlockEventDraft({
             dateKey: schedule.dateKey,

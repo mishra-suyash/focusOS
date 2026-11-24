@@ -20,6 +20,7 @@ import {
   type QueryConstraint
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { templateBlocks } from "@/lib/schedule";
 import { trackRead, trackWrite } from "@/lib/usage";
 import type { PublicCatalog } from "@/lib/templates/schema";
 import type {
@@ -343,13 +344,13 @@ export async function saveWeeklyReviewFields(uid: string, weekStart: string, fie
 export async function createDayTemplate(uid: string, template: NewDayTemplate): Promise<string> {
   const createdAt = now();
   trackWrite();
-  const ref = await addDoc(userCollection(uid, "dayTemplates"), withoutUndefined({ ...template, createdAt, updatedAt: createdAt }));
+  const ref = await addDoc(userCollection(uid, "dayTemplates"), withoutUndefined({ ...template, slots: templateBlocks(template.slots), createdAt, updatedAt: createdAt }));
   return ref.id;
 }
 
 export async function updateDayTemplate(uid: string, id: string, patch: Partial<DayTemplate>) {
   trackWrite();
-  await updateDoc(doc(userCollection(uid, "dayTemplates"), id), withoutUndefined({ ...patch, updatedAt: now() }));
+  await updateDoc(doc(userCollection(uid, "dayTemplates"), id), withoutUndefined({ ...patch, ...(patch.slots ? { slots: templateBlocks(patch.slots) } : {}), updatedAt: now() }));
 }
 
 export async function deleteDayTemplate(uid: string, id: string) {
@@ -382,15 +383,17 @@ export async function duplicateDayTemplate(uid: string, template: DayTemplate) {
   });
 }
 
+/** `updatedAt` may be chosen by the caller, so it can know the stamp of its own write before the
+ *  snapshot of that write arrives (the day autosave's two-tab guard reads it). */
 export async function saveDailySchedule(
   uid: string,
-  schedule: Omit<DailySchedule, "id" | "createdAt" | "updatedAt"> & { createdAt?: string }
+  schedule: Omit<DailySchedule, "id" | "createdAt" | "updatedAt"> & { createdAt?: string },
+  updatedAt = now()
 ) {
   const ref = doc(userCollection(uid, "dailySchedules"), schedule.dateKey);
   const existing = await getDoc(ref);
   trackRead(1);
   trackWrite();
-  const updatedAt = now();
   await setDoc(
     ref,
     withoutUndefined({

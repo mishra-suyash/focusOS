@@ -1,4 +1,4 @@
-import { createSlot, minutesFromTime, minutesToTime, sortedSlots, validateSlots } from "@/lib/schedule";
+import { createSlot, isFixedSlot, isLockedSlot, minutesFromTime, minutesToTime, sortedSlots, templateBlocks, validateSlots } from "@/lib/schedule";
 import type { Category, ScheduleSlot, ScheduleSlotType, Task, UserSettings } from "@/types";
 
 /**
@@ -56,6 +56,21 @@ function rangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: numbe
 export function rangeOverlapsSlots(startMinutes: number, endMinutes: number, slots: ScheduleSlot[], excludeId?: string): boolean {
   return slots.some(
     (slot) => slot.id !== excludeId && rangesOverlap(startMinutes, endMinutes, minutesFromTime(slot.startTime), minutesFromTime(slot.endTime))
+  );
+}
+
+/**
+ * The block a move or resize of `id` to `start`–`end` would newly run into, if any. A block it already
+ * overlaps where it stands doesn't count: an overlap can arrive from outside the editor (a class landing
+ * on a placed block when a term grows), and a "no overlap anywhere" rule then refused every step of the
+ * way out, so the block could only be deleted. Moving off it, or sliding along it, is allowed.
+ */
+export function newOverlap(slots: ScheduleSlot[], id: string, startMinutes: number, endMinutes: number): ScheduleSlot | undefined {
+  const current = slots.find((slot) => slot.id === id);
+  const overlapsNow = (slot: ScheduleSlot) =>
+    current ? rangesOverlap(minutesFromTime(current.startTime), minutesFromTime(current.endTime), minutesFromTime(slot.startTime), minutesFromTime(slot.endTime)) : false;
+  return slots.find(
+    (slot) => slot.id !== id && rangesOverlap(startMinutes, endMinutes, minutesFromTime(slot.startTime), minutesFromTime(slot.endTime)) && !overlapsNow(slot)
   );
 }
 
@@ -495,6 +510,21 @@ export function fillGaps(existing: ScheduleSlot[], templateSlots: ScheduleSlot[]
   return sortedSlots([...existing, ...accepted]);
 }
 
+/**
+ * "Apply template" on a day that already has a plan: the blocks you placed give way to the template's.
+ * What isn't yours to replace stays where it is: classes, routine, commitments, calendar events, the
+ * planning anchor, anything done or skipped, and on today anything already started. The template's
+ * blocks go around those (`fillGaps`); `left` is how many of them found no room.
+ *
+ * Applying used to swap the whole day for the template and add only classes and routine back, so a
+ * calendar event or a finished block vanished, and a class could land on a template block.
+ */
+export function replaceWithTemplate(current: ScheduleSlot[], templateSlots: ScheduleSlot[], nowMinute?: number): { slots: ScheduleSlot[]; left: number } {
+  const stays = current.filter((slot) => !isShiftableSlot(slot) || (nowMinute != null && minutesFromTime(slot.startTime) < nowMinute));
+  const slots = fillGaps(stays, templateSlots);
+  return { slots, left: templateSlots.length - (slots.length - stays.length) };
+}
+
 /** The sitting bounds from settings, with the same defaults the planner and the timer use. */
 export function sittingBounds(settings: Pick<UserSettings, "maxChunkMinutes" | "minChunkMinutes">) {
   return {
@@ -534,7 +564,7 @@ export function splitLongBlocks(slots: ScheduleSlot[], bounds: { maxChunkMinutes
 
 /** A template's slots, re-issued with fresh ids at drag/apply time — matches `scheduleFromTemplate`'s own `{ ...slot, id: crypto.randomUUID(), status: "upcoming" }`, so a tray-driven apply and the old editor's template apply produce identical slot content modulo ids (DP3 exit criterion: "Template apply equals old behaviour in Replace mode"). */
 export function freshTemplateSlots(slots: ScheduleSlot[]): ScheduleSlot[] {
-  return sortedSlots(slots).map((slot) => ({ ...slot, id: crypto.randomUUID(), status: "upcoming" }));
+  return templateBlocks(slots).map((slot) => ({ ...slot, id: crypto.randomUUID(), status: "upcoming" }));
 }
 
 /**
@@ -606,31 +636,47 @@ export function categoryForSlotType(type: ScheduleSlotType): Category {
   return SLOT_TYPE_CATEGORY[type];
 }
 
+/** A block "Running late?" may move: not a class, calendar event, commitment, routine block or the
+ *  planning anchor (none of which move because you're late), and not already done or skipped. */
+export function isShiftableSlot(slot: ScheduleSlot): boolean {
+  if (isLockedSlot(slot) || isFixedSlot(slot)) return false;
+  if (slot.id.startsWith("routine-") || slot.id === "weekly-planning") return false;
+  return slot.status !== "completed" && slot.status !== "skipped";
+}
+
 /**
- * S1 ("Running late? Shift rest of day") — the strict call site `rippleShift`'s own doc comment
- * asked DP5 to build: shifts every unlocked (non-class) slot at or after `afterMinutes` by exactly
- * `shiftByMinutes`, but refuses the *entire* action (returns `null`) rather than silently applying
- * a partial shift when either:
+ * S1 ("Running late? Shift rest of day") — every block you could move that starts at or after
+ * `afterMinutes` moves by `shiftByMinutes`. Everything else stays put: classes, meetings, Lunch and the
+ * rest of the routine don't happen later because you're late. A block that would land on one of them
+ * goes to the first free time after it instead, and the blocks behind follow in order.
  *
- * - any slot that should have moved got capped short of the full amount (`rippleShift`'s own
- *   24:00/00:00 boundary protection — see its doc comment), or
- * - the result contains any overlap at all (`validateSlots`), which catches a shifted block
- *   landing on a class block that correctly never moved.
+ * Refuses the whole action (`null`) rather than half-applying it when a block can't be kept whole
+ * before 24:00, or when shifting earlier would land on something. Overlaps already on the day before
+ * the shift don't count against it.
  *
- * "Running late" should either cleanly clear the rest of the day out of the way, or visibly do
- * nothing so the user knows to resolve it by hand — never leave some blocks shifted and others not.
+ * This used to lock only classes, so Lunch, Dinner, commitments and the 23:00 Sleep were shifted too;
+ * Sleep can't move past midnight, so the shift was refused on every day with the default routine.
  */
 export function shiftRestOfDay(slots: ScheduleSlot[], afterMinutes: number, shiftByMinutes: number): ScheduleSlot[] | null {
-  const lockedIds = new Set(slots.filter((slot) => slot.type === "class").map((slot) => slot.id));
-  const shifted = rippleShift(slots, afterMinutes, shiftByMinutes, lockedIds);
+  const moving = sortedSlots(slots.filter((slot) => minutesFromTime(slot.startTime) >= afterMinutes && isShiftableSlot(slot)));
+  if (moving.length === 0) return null;
+  const movingIds = new Set(moving.map((slot) => slot.id));
+  const placed: ScheduleSlot[] = slots.filter((slot) => !movingIds.has(slot.id));
+  const firstHit = (start: number, end: number) =>
+    placed.filter((slot) => start < minutesFromTime(slot.endTime) && minutesFromTime(slot.startTime) < end).sort((a, b) => minutesFromTime(b.endTime) - minutesFromTime(a.endTime))[0];
 
-  const fullyShifted = slots.every((original) => {
-    if (lockedIds.has(original.id) || minutesFromTime(original.startTime) < afterMinutes) return true;
-    const after = shifted.find((slot) => slot.id === original.id)!;
-    return minutesFromTime(after.startTime) - minutesFromTime(original.startTime) === shiftByMinutes;
-  });
-  if (!fullyShifted) return null;
+  for (const slot of moving) {
+    const duration = minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime);
+    let start = minutesFromTime(slot.startTime) + shiftByMinutes;
+    for (let hit = firstHit(start, start + duration); hit; hit = firstHit(start, start + duration)) {
+      if (shiftByMinutes < 0) return null;
+      start = minutesFromTime(hit.endTime);
+    }
+    if (start < 0 || start + duration > MINUTES_PER_DAY) return null;
+    placed.push({ ...slot, startTime: minutesToTime(start), endTime: minutesToTime(start + duration) });
+  }
 
-  const sorted = sortedSlots(shifted);
-  return validateSlots(sorted).length === 0 ? sorted : null;
+  const sorted = sortedSlots(placed);
+  const already = new Set(validateSlots(slots));
+  return validateSlots(sorted).some((error) => !already.has(error)) ? null : sorted;
 }

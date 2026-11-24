@@ -33,6 +33,7 @@ import {
 } from "@/lib/firestore";
 import {
   createSlot,
+  currentMinute,
   fixedClashes,
   isLockedSlot,
   materializeSlots,
@@ -48,7 +49,7 @@ import { finishedWorkNotice, withoutFinishedWork } from "@/lib/plan-release";
 import { commitmentSlotsForDate, withCommitments } from "@/lib/recurring-tasks";
 import { DEFAULT_ROUTINE_BLOCKS, routineSlotsForDate } from "@/lib/routine";
 import { isBreakMode } from "@/lib/terms";
-import { DEFAULT_MAX_CHUNK_MINUTES, nearestFreeGap, rangeOverlapsSlots, sittingBounds, splitLongBlocks } from "@/lib/timeline";
+import { DEFAULT_MAX_CHUNK_MINUTES, isShiftableSlot, nearestFreeGap, rangeOverlapsSlots, replaceWithTemplate, sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import { friendlyDate, scheduleDayKey } from "@/lib/dates";
 import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { DayTemplatePayload, PublicCatalog } from "@/lib/templates/schema";
@@ -76,7 +77,7 @@ function DayPlannerContent() {
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: courses, loading: coursesLoading } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: terms, loading: termsLoading } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
-  const { items: recurringTemplates } = useUserCollection<RecurringTaskTemplate>("recurringTaskTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: recurringTemplates, loading: commitmentsLoading } = useUserCollection<RecurringTaskTemplate>("recurringTaskTemplates", useMemo(() => [orderBy("createdAt", "desc")], []));
   // plan/16 §5.2 — the rest of the objective context. Without these a reading block on this page
   // rendered "Paper reading" with no idea *which* paper: `describeObjective` degrades to the label
   // when it can't resolve a reference, which is the right fallback but the wrong outcome here,
@@ -141,13 +142,14 @@ function DayPlannerContent() {
 
   async function applyTemplate(template: DayTemplate) {
     if (!user) return;
-    if (slots.length > 0 && !window.confirm(`${friendlyDate(dateKey)} already has a plan. Replace it with "${template.name}"?`)) return;
+    if (slots.some(isShiftableSlot) && !window.confirm(`Replace the blocks you placed on ${friendlyDate(dateKey)} with "${template.name}"? Classes, routine, meetings and anything done stay.`)) return;
     const fromTemplate = scheduleFromTemplate(template, dateKey);
     const { slots: liveSlots, skipped } = await withoutFinishedWork(user.uid, fromTemplate.slots);
-    const nextSchedule = { ...fromTemplate, slots: splitLongBlocks(liveSlots, sittingBounds(settings)) };
-    setSlots(nextSchedule.slots);
-    await saveDailySchedule(user.uid, nextSchedule);
-    if (skipped.length > 0) toast({ message: finishedWorkNotice(skipped) });
+    const { slots: next, left } = replaceWithTemplate(slots, splitLongBlocks(liveSlots, sittingBounds(settings)), dateKey === scheduleDayKey() ? currentMinute() : undefined);
+    setSlots(next);
+    await saveDailySchedule(user.uid, { ...fromTemplate, slots: next });
+    const notes = [left > 0 ? `${left} block${left === 1 ? "" : "s"} of "${template.name}" overlapped something that stays and ${left === 1 ? "was" : "were"} left out.` : "", skipped.length > 0 ? finishedWorkNotice(skipped) : ""].filter(Boolean);
+    if (notes.length > 0) toast({ message: notes.join(" ") });
   }
 
   /** An org-sourced copy (`sourceTemplateId: "org:<id>"`) with a newer version published in the catalog — "Update available" (plan §7.4). Publishing/editing never touches the copy on its own; this is the explicit opt-in. */
@@ -199,7 +201,7 @@ function DayPlannerContent() {
     <>
       <SectionHeader title="Day" eyebrow={friendlyDate(dateKey)}>
         <div className="flex items-center gap-2">
-          <input className="input max-w-48" type="date" value={dateKey} onChange={(event) => setDateKey(event.target.value)} />
+          <input className="input max-w-48" type="date" value={dateKey} onChange={(event) => event.target.value && setDateKey(event.target.value)} />
           <button
             className="btn-secondary py-1.5 text-xs"
             onClick={() => user && (day?.dayOff ? clearDayOff(user.uid, dateKey) : setDayOff(user.uid, dateKey))}
@@ -340,12 +342,12 @@ function DayPlannerContent() {
           {timelineEditorEnabled ? (
             // `DayTimelineEditor` seeds its undo stack and autosave baseline from `schedule` (merged
             // with `wantedLockedSlots`) once, on mount — mounting it before the
-            // `dailySchedules`/`courses`/`terms`/settings snapshots have all arrived would seed from
+            // `dailySchedules`/`courses`/`terms`/`recurringTaskTemplates`/settings snapshots have all arrived would seed from
             // stale/incomplete data (an empty day, or one missing class/routine blocks) that no later
             // snapshot arrival can ever correct: the undo stack would start wrong, and the autosave
             // baseline would then read the real doc as a foreign, newer "another tab" change —
             // "Keep mine" on that banner would overwrite the real saved day with the wrong one.
-            schedulesLoading || coursesLoading || termsLoading || !settingsLoaded ? (
+            schedulesLoading || coursesLoading || termsLoading || commitmentsLoading || !settingsLoaded ? (
               <p className="text-sm text-ink-500">Loading…</p>
             ) : (
               <DayTimelineEditor

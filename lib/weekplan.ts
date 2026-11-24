@@ -208,6 +208,11 @@ export interface WeekProposalCandidate {
    *  `dateKey`; if the pinned range is already occupied the candidate comes back `fits: false`
    *  rather than being quietly moved, because moving it would discard the one fact that mattered. */
   fixedStartTime?: string;
+  /** With `fixedStartTime`: the time is a wish, not a fact. If it's taken or has passed, the candidate
+   *  is searched for like any other, its pinned day first, instead of coming back "Didn't fit". A
+   *  replan's "Keep my moves" pins this way: a sitting that can't keep its exact time should still
+   *  land, not be lifted off the day it was on with nothing put back. */
+  softPin?: boolean;
   /** plan/16 §5.3 — a stable identity for this candidate, minted by its generator from what the
    *  candidate is *about* (`task:<id>:2`, `revision:<courseId>:0`, `paper:<id>:1`) rather than from
    *  where it landed in the array. Absent = the array index, which is what every pre-`16` caller
@@ -384,7 +389,8 @@ export function placeProposals(
     return slot;
   }
 
-  return candidates.map((candidate, index) => {
+  return candidates.map((pinned, index) => {
+    let candidate = pinned;
     // plan/16 §5.3 — the generator's own stable key where it minted one, the array index otherwise.
     const key = candidate.key ?? `${index}`;
 
@@ -403,7 +409,9 @@ export function placeProposals(
         const slot = commit(candidate.dateKey, start, candidate.durationMinutes, null);
         return { ...candidate, key, dateKey: candidate.dateKey, ...slot, fits: true };
       }
-      return { ...candidate, key, dateKey: candidate.dateKey, startTime: candidate.fixedStartTime, endTime: minutesToTime(end), fits: false };
+      if (!candidate.softPin) return { ...candidate, key, dateKey: candidate.dateKey, startTime: candidate.fixedStartTime, endTime: minutesToTime(end), fits: false };
+      // A soft pin that can't keep its time floats, its own day tried first.
+      candidate = { ...candidate, dateKey: undefined, fixedStartTime: undefined, softPin: undefined, preferredDateKeys: [candidate.dateKey, ...(candidate.preferredDateKeys ?? [])] };
     }
 
     if (candidate.dateKey) {

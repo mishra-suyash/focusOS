@@ -56,7 +56,7 @@ export function UncoveredBlocksReview({
   // A date the clock has passed is over, however early it is now: a wrap-up at 00:38 still reviews all of it.
   const minute = date < scheduleDayKey() ? MINUTES_PER_DAY : currentMinute();
   const uncovered = sortedSlots(schedule.slots).filter(
-    (slot) => slot.status !== "completed" && slot.status !== "skipped" && !isLockedSlot(slot) && minutesFromTime(slot.endTime) <= minute
+    (slot) => slot.status !== "completed" && slot.status !== "skipped" && !isLockedSlot(slot) && slot.type !== "class" && minutesFromTime(slot.endTime) <= minute
   );
 
   if (uncovered.length === 0) return null;

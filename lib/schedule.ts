@@ -112,7 +112,11 @@ export function sortedSlots(slots: ScheduleSlot[]) {
  * (`type === "external"`, plan/11.FocusOS-v2-Google-Calendar-Sync-Plan.md §4.4/§7) gets the same
  * treatment for the same reason: FocusOS didn't create it and has no business silently reshaping it. */
 export function isLockedSlot(slot: ScheduleSlot): boolean {
-  return slot.type === "class" || slot.type === "external" || slot.locked === true;
+  // A class is locked because its course puts it there (`course-<id>-<session>`). A class block under
+  // any other id is a copy an old day template carried onto a date; no course owns it and nothing would
+  // ever remove it, so it can be deleted by hand.
+  if (slot.type === "class") return slot.id.startsWith("course-");
+  return slot.type === "external" || slot.locked === true;
 }
 
 /** Appends any `wanted` slot whose `id` isn't already present in `existing`, leaving every other
@@ -277,6 +281,20 @@ export function scheduleFromTemplate(template: DayTemplate, dateKey: string): Om
   return {
     dateKey,
     templateId: template.id,
-    slots: template.slots.map((slot) => ({ ...slot, id: crypto.randomUUID(), status: "upcoming" }))
+    slots: templateBlocks(template.slots).map((slot) => ({ ...slot, id: crypto.randomUUID(), status: "upcoming" }))
   };
+}
+
+/**
+ * What a day template keeps of a day: the blocks you placed. Not the class, routine, commitment,
+ * calendar and planning-anchor blocks, which every date adds for itself, and not the week plan's marks
+ * on a sitting. Saved as they were, a class came back on every day the template was applied as a
+ * locked copy under a new id that no term or course change could ever remove, and copied sittings were
+ * counted, and released by a replan, as the week plan's own. Applied on save and again on apply, for
+ * templates saved before this.
+ */
+export function templateBlocks(slots: ScheduleSlot[]): ScheduleSlot[] {
+  return sortedSlots(slots)
+    .filter((slot) => !isLockedSlot(slot) && !isFixedSlot(slot) && !slot.id.startsWith("routine-") && slot.id !== "weekly-planning" && !slot.sourceGoogleEventId)
+    .map(({ chunk, plannedMinutes, placedByUser, objectiveRef, ...block }) => block);
 }

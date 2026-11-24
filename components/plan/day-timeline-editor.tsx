@@ -8,6 +8,7 @@ import { BlockInspector } from "@/components/plan/block-inspector";
 import { DayStrip } from "@/components/plan/day-strip";
 import { PlanTray } from "@/components/plan/plan-tray";
 import { TimeGrid, type TimeGridHandle } from "@/components/plan/time-grid";
+import { useToast } from "@/components/toast-host";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
 import { useDayAutosave } from "@/hooks/use-day-autosave";
 import { useUndoStack } from "@/hooks/use-undo-stack";
@@ -32,7 +33,7 @@ import {
 } from "@/lib/schedule";
 import { addDaysToKey, scheduleDayKey, sessionSlotDayKey } from "@/lib/dates";
 import { finishedWorkNotice, withoutFinishedWork } from "@/lib/plan-release";
-import { DEFAULT_MAX_CHUNK_MINUTES, MINUTES_PER_DAY, nearestFreeGap, rangeOverlapsSlots, shiftRestOfDay, sittingBounds, splitLongBlocks } from "@/lib/timeline";
+import { DEFAULT_MAX_CHUNK_MINUTES, MINUTES_PER_DAY, isShiftableSlot, nearestFreeGap, newOverlap, rangeOverlapsSlots, replaceWithTemplate, shiftRestOfDay, sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import type { Checkpoint, Course, DailySchedule, DayTemplate, Goal, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 const DEFAULT_SCROLL_MINUTE = 8 * 60;
@@ -120,6 +121,7 @@ export function DayTimelineEditor({
   const [shiftMenuOpen, setShiftMenuOpen] = useState(false);
   const [shiftCustomMinutes, setShiftCustomMinutes] = useState("");
   const [announcement, setAnnouncement] = useState({ text: "", seq: 0 });
+  const toast = useToast();
   const [traySheetOpen, setTraySheetOpen] = useState(false);
   const [pendingFocusId, setPendingFocusId] = useState<string | null>(null);
   const gridRef = useRef<TimeGridHandle>(null);
@@ -266,9 +268,9 @@ export function DayTimelineEditor({
     const duration = minutesFromTime(slot.endTime) - start;
     const nextStart = Math.min(Math.max(0, start + deltaMinutes), MINUTES_PER_DAY - duration);
     const nextEnd = nextStart + duration;
-    if (rangeOverlapsSlots(nextStart, nextEnd, slots, slot.id)) {
-      const overlap = slots.find((item) => item.id !== slot.id && minutesFromTime(item.startTime) < nextEnd && nextStart < minutesFromTime(item.endTime));
-      announce(overlap ? `Cannot move, overlaps ${overlap.title}.` : "Cannot move there.");
+    const overlap = newOverlap(slots, slot.id, nextStart, nextEnd);
+    if (overlap) {
+      announce(`Cannot move, overlaps ${overlap.title}.`);
       return;
     }
     commitSlots(slots.map((item) => (item.id === slot.id ? { ...item, startTime: minutesToTime(nextStart), endTime: minutesToTime(nextEnd) } : item)));
@@ -280,9 +282,9 @@ export function DayTimelineEditor({
     const end = minutesFromTime(slot.endTime);
     const nextStart = edge === "start" ? Math.max(0, Math.min(end - ARROW_SNAP_MINUTES, start + deltaMinutes)) : start;
     const nextEnd = edge === "end" ? Math.min(MINUTES_PER_DAY, Math.max(start + ARROW_SNAP_MINUTES, end + deltaMinutes)) : end;
-    if (rangeOverlapsSlots(nextStart, nextEnd, slots, slot.id)) {
-      const overlap = slots.find((item) => item.id !== slot.id && minutesFromTime(item.startTime) < nextEnd && nextStart < minutesFromTime(item.endTime));
-      announce(overlap ? `Cannot resize, overlaps ${overlap.title}.` : "Cannot resize there.");
+    const overlap = newOverlap(slots, slot.id, nextStart, nextEnd);
+    if (overlap) {
+      announce(`Cannot resize, overlaps ${overlap.title}.`);
       return;
     }
     commitSlots(slots.map((item) => (item.id === slot.id ? { ...item, startTime: minutesToTime(nextStart), endTime: minutesToTime(nextEnd) } : item)));
@@ -383,13 +385,22 @@ export function DayTimelineEditor({
   async function handleApplyTemplate() {
     const template = templates.find((item) => item.id === applyTemplateId);
     if (!template) return;
-    if (slots.length > 0 && !window.confirm(`Replace today's plan with "${template.name}"?`)) return;
+    if (slots.some(isShiftableSlot) && !window.confirm(`Replace the blocks you placed on this day with "${template.name}"? Classes, routine, meetings and anything done stay.`)) return;
     const { slots: liveSlots, skipped } = await withoutFinishedWork(uid, scheduleFromTemplate(template, dateKey).slots);
     const templateSlots = splitLongBlocks(liveSlots, sittingBounds(settings));
-    commitSlots(mergeMissingLockedSlots(templateSlots, wantedLockedSlots ?? []));
+    const { slots: next, left } = replaceWithTemplate(mergeMissingLockedSlots(slots, wantedLockedSlots ?? []), templateSlots, isToday ? nowMinute : undefined);
+    commitSlots(next);
     setApplyTemplateOpen(false);
     setApplyTemplateId("");
-    announce(`Applied template "${template.name}".${skipped.length > 0 ? ` ${finishedWorkNotice(skipped)}` : ""}`);
+    const message = [
+      `Applied template "${template.name}".`,
+      left > 0 ? `${left} of its block${left === 1 ? "" : "s"} overlapped something that stays, so ${left === 1 ? "it was" : "they were"} left out.` : "",
+      skipped.length > 0 ? finishedWorkNotice(skipped) : ""
+    ]
+      .filter(Boolean)
+      .join(" ");
+    announce(message);
+    if (left > 0 || skipped.length > 0) toast({ message });
   }
 
   /** S1 "Running late? Shift rest of day" — the only place `Shift`-drag's ripple math is reachable without a pointer, and today-only (it anchors at `nowMinute`, which has no meaning on another date). */
@@ -397,12 +408,21 @@ export function DayTimelineEditor({
     setShiftMenuOpen(false);
     setShiftCustomMinutes("");
     const result = shiftRestOfDay(slots, nowMinute, minutesDelta);
+    // Said on screen as well as to a screen reader: the live region alone left a refused shift looking
+    // like a button that did nothing.
     if (!result) {
-      announce("Couldn't shift the rest of the day — it would overlap a locked block or run past the end of the day.");
+      const message = slots.some((slot) => minutesFromTime(slot.startTime) >= nowMinute && isShiftableSlot(slot))
+        ? "Couldn't shift the rest of the day: a block would run past midnight. Move or shorten one by hand."
+        : "Nothing left today to shift. Classes, meetings and routine blocks stay where they are.";
+      announce(message);
+      toast({ message, tone: "error" });
       return;
     }
+    const moved = result.filter((slot) => slots.some((before) => before.id === slot.id && before.startTime !== slot.startTime)).length;
     commitSlots(result);
-    announce(`Rest of the day shifted by ${minutesDelta > 0 ? "+" : ""}${minutesDelta} minutes.`);
+    const message = `Moved ${moved} block${moved === 1 ? "" : "s"} ${minutesDelta > 0 ? "later" : "earlier"}. Classes, meetings and routine stay put; anything in their way went after them.`;
+    announce(message);
+    toast({ message });
   }
 
   // §5's keyboard column — the non-drag equivalent for every mouse gesture. Skips typing targets
@@ -513,7 +533,7 @@ export function DayTimelineEditor({
               </button>
               {shiftMenuOpen ? (
                 <div className="absolute right-0 top-full z-20 mt-1 w-56 space-y-2 rounded-md border border-ink-200 bg-white p-3 shadow-lg dark:border-ink-700 dark:bg-ink-900">
-                  <p className="text-xs text-ink-500">Shift every block after now later — locked class blocks never move.</p>
+                  <p className="text-xs text-ink-500">Push the blocks still ahead of you later. Classes, meetings and routine stay put.</p>
                   <div className="flex gap-2">
                     <button className="btn-secondary flex-1 py-1 text-xs" onClick={() => handleShiftRestOfDay(15)}>
                       +15m

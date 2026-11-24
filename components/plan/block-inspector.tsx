@@ -8,8 +8,8 @@ import { TypedTimeInput } from "@/components/plan/typed-time-input";
 import { describeObjective, objectiveChipText } from "@/lib/objectives";
 import { isActivePaper, nextReadingPass, PASS_LABELS, readingOrder } from "@/lib/papers";
 import { taskBucketLabels, taskBuckets } from "@/lib/options";
-import { isLockedSlot, minutesFromTime, REST_SLOT_TYPES, slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
-import { categoryForSlotType, rangeOverlapsSlots } from "@/lib/timeline";
+import { isLockedSlot, minutesFromTime, minutesToTime, REST_SLOT_TYPES, slotTypeLabels, userSelectableSlotTypes } from "@/lib/schedule";
+import { categoryForSlotType, MINUTES_PER_DAY, newOverlap } from "@/lib/timeline";
 import type { Checkpoint, Course, Goal, Paper, ScheduleSlot, ScheduleSlotType, Task } from "@/types";
 
 /**
@@ -70,20 +70,30 @@ export function BlockInspector({
     if (autoFocusTitle) titleRef.current?.focus();
   }, []);
 
+  /**
+   * A new start moves the block and keeps its length; a new end resizes it. Changing the start used to
+   * resize too, so moving 10:00–11:00 to 14:00 meant passing through "End must be after start" or a
+   * 10:00–15:00 that overlapped everything in between, and the block couldn't get there at all.
+   */
   function commitTime(field: "startTime" | "endTime", value: string): boolean {
-    const candidate = { ...slot, [field]: value };
-    const start = minutesFromTime(candidate.startTime);
-    const end = minutesFromTime(candidate.endTime);
+    const length = minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime);
+    const start = field === "startTime" ? minutesFromTime(value) : minutesFromTime(slot.startTime);
+    const end = field === "startTime" ? start + length : minutesFromTime(value);
     if (end <= start) {
       setTimeError("End must be after start.");
       return false;
     }
-    if (rangeOverlapsSlots(start, end, allSlots, slot.id)) {
-      setTimeError("That overlaps another block.");
+    if (end > MINUTES_PER_DAY) {
+      setTimeError("That runs past midnight.");
+      return false;
+    }
+    const hit = newOverlap(allSlots, slot.id, start, end);
+    if (hit) {
+      setTimeError(`That overlaps ${hit.title} (${hit.startTime}–${hit.endTime}).`);
       return false;
     }
     setTimeError(null);
-    onChange(candidate);
+    onChange({ ...slot, startTime: minutesToTime(start), endTime: minutesToTime(end) });
     return true;
   }
 

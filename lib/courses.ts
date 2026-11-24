@@ -293,6 +293,39 @@ export function plannedMinutesForTask(
     .reduce((sum, { slot, dateKey }) => sum + accountedSlotMinutes(slot, dateKey, cutoff), 0);
 }
 
+/**
+ * How much of one task is already taken care of: every minute worked on it, plus the sittings still
+ * ahead this week. A sitting behind you counts only through its sessions, which the first term
+ * already holds, and one under way counts only its unworked rest, so no minute is counted twice.
+ *
+ * This replaced `max(logged, planned)`, which forgot the logged minutes as soon as anything was placed:
+ * a 100-minute task with 25 worked offered 75, and once those 75 were accepted it offered 25 more, so
+ * "Accept all" never emptied the list.
+ */
+export function taskMinutesAccounted(
+  sessions: Pick<PomodoroSession, "mode" | "minutes" | "taskId" | "slotId" | "slotDateKey" | "completedAt">[],
+  schedules: Pick<DailySchedule, "dateKey" | "slots">[],
+  taskId: string,
+  weekDateKeys: string[],
+  cutoff: Pick<PlanningCutoff, "todayKey" | "nowMinutes">
+): number {
+  const logged = sessions.filter((session) => session.mode === "work" && session.taskId === taskId).reduce((sum, session) => sum + Math.max(0, session.minutes), 0);
+  const counted = slotsInWeek(schedules, weekDateKeys)
+    .filter(({ slot }) => slot.assignedTaskIds?.includes(taskId))
+    .reduce((sum, { slot, dateKey }) => {
+      const length = slotMinutes(slot);
+      if (dateKey > cutoff.todayKey || (dateKey === cutoff.todayKey && minutesFromTime(slot.startTime) >= cutoff.nowMinutes)) return sum + length;
+      // Worked against this sitting without naming the task (a block shared by two tasks): not in
+      // `logged`, so counted here, through the block.
+      const sameDay = sessions.filter((session) => sessionSlotDayKey(session) === dateKey);
+      const unnamed = slotCoverageMinutes(slot, sameDay.filter((session) => session.taskId !== taskId));
+      if (dateKey < cutoff.todayKey || minutesFromTime(slot.endTime) <= cutoff.nowMinutes) return sum + unnamed;
+      // Under way: the rest of it is still ahead.
+      return sum + Math.max(unnamed, length - slotCoverageMinutes(slot, sameDay));
+    }, 0);
+  return logged + counted;
+}
+
 type BucketedSession = Pick<PomodoroSession, "mode" | "minutes" | "completedAt" | "courseId" | "bucket" | "taskId">;
 
 /**

@@ -4,7 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "re
 import { clsx } from "clsx";
 import { Check, Lock, X } from "lucide-react";
 import { computeSlotStatus, createSlot, isLockedSlot, minutesFromTime, minutesToTime, slotTypeIcons, slotTypeLabels, slotTypeStyles } from "@/lib/schedule";
-import { clampToDay, laneLayout, magnetize, minutesToPx, MINUTES_PER_DAY, nearestFreeGap, pxToMinutes, rangeOverlapsSlots, rippleMove } from "@/lib/timeline";
+import { clampToDay, laneLayout, magnetize, minutesToPx, MINUTES_PER_DAY, nearestFreeGap, newOverlap, pxToMinutes, rangeOverlapsSlots, rippleMove } from "@/lib/timeline";
 import type { ScheduleSlot, ScheduleSlotType } from "@/types";
 
 const STATUS_WORDS: Record<ReturnType<typeof computeSlotStatus>, string> = {
@@ -269,7 +269,7 @@ export const TimeGrid = forwardRef<
       const magnetized = magnetize(rawStart, edges);
       const start = Math.min(Math.max(0, magnetized), MINUTES_PER_DAY - gesture.duration);
       const end = start + gesture.duration;
-      const valid = !rangeOverlapsSlots(start, end, slots, gesture.id);
+      const valid = !newOverlap(slots, gesture.id, start, end);
       if (!valid && event.shiftKey) {
         const rippled = rippleMove(slots, gesture.id, start, end);
         if (rippled) {
@@ -285,7 +285,7 @@ export const TimeGrid = forwardRef<
       const edges = edgesExcluding(gesture.id);
       if (gesture.edge === "end") {
         const end = Math.max(gesture.original.start + MIN_DURATION_MINUTES, magnetize(minute, edges));
-        const valid = !rangeOverlapsSlots(gesture.original.start, end, slots, gesture.id);
+        const valid = !newOverlap(slots, gesture.id, gesture.original.start, end);
         setPreview({
           kind: "resize",
           id: gesture.id,
@@ -297,7 +297,7 @@ export const TimeGrid = forwardRef<
       } else {
         const start = Math.min(gesture.original.end - MIN_DURATION_MINUTES, magnetize(minute, edges));
         const clampedStart = Math.max(0, start);
-        const valid = !rangeOverlapsSlots(clampedStart, gesture.original.end, slots, gesture.id);
+        const valid = !newOverlap(slots, gesture.id, clampedStart, gesture.original.end);
         setPreview({
           kind: "resize",
           id: gesture.id,
