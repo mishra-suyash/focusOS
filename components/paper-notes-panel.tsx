@@ -18,11 +18,17 @@ const NOTE_KINDS: PaperNoteKind[] = ["quote", "idea", "question", "critique", "t
 export function PaperNotesPanel({
   paperId,
   anchor,
-  onJump
+  onJump,
+  onAdded,
+  compact = false
 }: {
   paperId: string;
   anchor?: { page: number; quote?: string };
   onJump?: (page: number) => void;
+  /** After a note is saved: the reader drops the highlight draft whose passage the note just took. */
+  onAdded?: () => void;
+  /** The reader's narrow sidebar: the form stacks instead of sitting on one row. */
+  compact?: boolean;
 }) {
   const { user } = useAuth();
   const [notes, setNotes] = useState<PaperNote[]>([]);
@@ -45,6 +51,7 @@ export function PaperNotesPanel({
       anchorQuote: anchor?.quote
     });
     setBody("");
+    onAdded?.();
   }
 
   async function promote(note: PaperNote) {
@@ -61,20 +68,51 @@ export function PaperNotesPanel({
           {anchor.quote ? <> and the selected quote</> : null}.
         </p>
       ) : null}
-      <form onSubmit={submit} className="mb-3 grid gap-2 sm:grid-cols-[120px_1fr_auto]">
-        <select className="input" value={kind} onChange={(e) => setKind(e.target.value as PaperNoteKind)}>
-          {NOTE_KINDS.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-        <input className="input" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Add a note..." />
-        <button className="btn-secondary">Add</button>
-      </form>
+      {compact ? (
+        <form onSubmit={submit} className="mb-3 space-y-2">
+          <textarea
+            className="input min-h-[4rem] text-xs"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter adds the note, Shift+Enter starts a new line.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder="Add a note..."
+            aria-label="Note"
+          />
+          <div className="flex gap-2">
+            <select className="input py-1 text-xs" value={kind} onChange={(e) => setKind(e.target.value as PaperNoteKind)} aria-label="Note kind">
+              {NOTE_KINDS.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+            <button className="btn-secondary shrink-0 px-3 py-1 text-xs" disabled={!body.trim()}>
+              Add
+            </button>
+          </div>
+        </form>
+      ) : (
+        <form onSubmit={submit} className="mb-3 grid gap-2 sm:grid-cols-[120px_1fr_auto]">
+          <select className="input" value={kind} onChange={(e) => setKind(e.target.value as PaperNoteKind)}>
+            {NOTE_KINDS.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </select>
+          <input className="input" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Add a note..." />
+          <button className="btn-secondary">Add</button>
+        </form>
+      )}
       <div className="space-y-2">
         {notes.map((note) => (
-          <div key={note.id} className="flex items-start justify-between gap-2 rounded-md border border-ink-200 p-2 text-sm dark:border-ink-800">
+          <div key={note.id} className={`flex items-start justify-between gap-2 rounded-md border border-ink-200 p-2 dark:border-ink-800 ${compact ? "text-xs" : "text-sm"}`}>
             <div className="min-w-0 break-words">
               <span className="mr-2 rounded bg-ink-50 px-1.5 py-0.5 text-[11px] font-semibold uppercase text-ink-600 dark:bg-ink-800 dark:text-ink-300">
                 {note.kind}
@@ -89,6 +127,8 @@ export function PaperNotesPanel({
                   p.{note.anchorPage}
                 </button>
               ) : null}
+              {/* The passage the note was written against, which was saved but never shown. */}
+              {note.anchorQuote ? <p className="mt-1 line-clamp-2 border-l-2 border-ink-200 pl-2 text-xs text-ink-500 dark:border-ink-700">&ldquo;{note.anchorQuote}&rdquo;</p> : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {note.kind === "todo" ? (

@@ -51,3 +51,9 @@ body {
     @apply text-xs font-semibold uppercase tracking-wide text-ink-500 dark:text-ink-400;
   }
 }
+
+/* The reader's invisible text layer: a selection shows as a tint over the rendered page, not as a second copy of the text. */
+.pdf-text-layer ::selection {
+  background: rgba(37, 99, 235, 0.3);
+  color: transparent;
+}

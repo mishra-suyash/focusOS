@@ -105,14 +105,19 @@ export async function getPageTextIndex(doc: PdfDocumentProxy, pageNum: number): 
   return buildPageIndex(pageNum, items);
 }
 
+/** Every page's text index off a document that's already loaded — the reader's own, so find and highlight matching don't download the PDF a second time. */
+export async function documentTextIndex(doc: PdfDocumentProxy): Promise<PageTextIndex[]> {
+  const pages: PageTextIndex[] = [];
+  for (let pageNum = 1; pageNum <= doc.numPages; pageNum += 1) {
+    pages.push(await getPageTextIndex(doc, pageNum));
+  }
+  return pages;
+}
+
 export async function buildDocumentTextIndex(pdfUrl: string): Promise<PageTextIndex[]> {
   const { doc, destroy } = await loadPdfDocument(pdfUrl);
   try {
-    const pages: PageTextIndex[] = [];
-    for (let pageNum = 1; pageNum <= doc.numPages; pageNum += 1) {
-      pages.push(await getPageTextIndex(doc, pageNum));
-    }
-    return pages;
+    return await documentTextIndex(doc);
   } finally {
     await destroy();
   }
@@ -218,15 +223,19 @@ export function quadFromItem(item: PdfTextItem): HighlightQuad {
 }
 
 export function mergeQuadsByLine(matchedRanges: ItemRange[], items: PdfTextItem[]): HighlightQuad[] {
-  const byLine = new Map<number, ItemRange[]>();
-  matchedRanges.forEach((range) => {
-    const bucket = byLine.get(range.lineIndex) ?? [];
-    bucket.push(range);
-    byLine.set(range.lineIndex, bucket);
+  return mergeLineQuads(matchedRanges.map((range) => ({ lineIndex: range.lineIndex, quad: quadFromItem(items[range.itemIndex]) })));
+}
+
+/** One box per text line, covering every quad on that line. */
+export function mergeLineQuads(entries: { lineIndex: number; quad: HighlightQuad }[]): HighlightQuad[] {
+  const byLine = new Map<number, HighlightQuad[]>();
+  entries.forEach(({ lineIndex, quad }) => {
+    const bucket = byLine.get(lineIndex) ?? [];
+    bucket.push(quad);
+    byLine.set(lineIndex, bucket);
   });
 
-  return Array.from(byLine.values()).map((rangesInLine) => {
-    const quads = rangesInLine.map((range) => quadFromItem(items[range.itemIndex]));
+  return Array.from(byLine.values()).map((quads) => {
     const x = Math.min(...quads.map((q) => q.x));
     const y = Math.min(...quads.map((q) => q.y));
     const right = Math.max(...quads.map((q) => q.x + q.width));
