@@ -37,6 +37,7 @@
     "app/api/cron/close-day/route.ts": { "maxDuration": 120 },
     "app/api/daily-loop/rollup/route.ts": { "maxDuration": 120 },
     "app/api/cron/google-calendar-sync/route.ts": { "maxDuration": 120 },
-    "app/api/integrations/google-calendar/sync-now/route.ts": { "maxDuration": 120 }
+    "app/api/integrations/google-calendar/sync-now/route.ts": { "maxDuration": 120 },
+    "app/api/mcp/route.ts": { "maxDuration": 60 }
   }
 }

@@ -1,6 +1,7 @@
 import { del, list, put } from "@vercel/blob";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import { writeAuditEntry } from "@/lib/admin-audit";
+import { deleteUserCredentials } from "@/lib/oauth/tokens";
 import type { AdminJob } from "@/types";
 
 /**
@@ -91,6 +92,13 @@ async function runFirestoreStage(job: AdminJob): Promise<Partial<AdminJob>> {
   return { deletedCollections: [...job.deletedCollections, "firestore"] };
 }
 
+/** plan/19 §4.4 — the account's Claude connections (tokens and pending codes) live outside users/{uid}, so the recursive delete above doesn't reach them. */
+async function runMcpStage(job: AdminJob): Promise<Partial<AdminJob>> {
+  if (job.deletedCollections.includes("mcp")) return {};
+  await deleteUserCredentials(job.targetUid);
+  return { deletedCollections: [...job.deletedCollections, "mcp"] };
+}
+
 async function runAuthStage(job: AdminJob): Promise<Partial<AdminJob>> {
   if (job.deletedCollections.includes("auth")) return {};
   try {
@@ -116,7 +124,7 @@ export async function advanceDeleteJob(jobId: string, actor: { uid: string; emai
   await ref.set({ status: "running", updatedAt: new Date().toISOString() }, { merge: true });
 
   try {
-    for (const stage of [runExportStage, runBlobStage, runFirestoreStage, runAuthStage]) {
+    for (const stage of [runExportStage, runBlobStage, runMcpStage, runFirestoreStage, runAuthStage]) {
       const patch = await stage(job);
       if (Object.keys(patch).length > 0) {
         await ref.set({ ...patch, updatedAt: new Date().toISOString() }, { merge: true });

@@ -20,6 +20,7 @@ import {
   type QueryConstraint
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
+import { expandDotPaths, paperPatch, taskPatch, withoutUndefined } from "@/lib/patches";
 import { templateBlocks } from "@/lib/schedule";
 import { trackRead, trackWrite } from "@/lib/usage";
 import type { PublicCatalog } from "@/lib/templates/schema";
@@ -68,43 +69,6 @@ import type {
 } from "@/types";
 
 const now = () => new Date().toISOString();
-
-function withoutUndefined<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, item]) => item !== undefined)
-      .map(([key, item]) => [key, cleanValue(item)])
-  );
-}
-
-function cleanValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => cleanValue(item));
-  if (value && typeof value === "object" && value.constructor === Object) {
-    return withoutUndefined(value as Record<string, unknown>);
-  }
-  return value;
-}
-
-/**
- * Turns dot-path keys (`"session.startedAt"`) into a real nested object (`{session: {startedAt}}`)
- * — the shape a brand-new document needs, since `updateDoc`'s dot-path parsing (what actually
- * treats a dotted key as a field path — see `saveDayFields`'s doc comment) only works on a
- * document that already exists.
- */
-function expandDotPaths(fields: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(fields)) {
-    const parts = key.split(".");
-    let node = result;
-    for (let i = 0; i < parts.length - 1; i += 1) {
-      const part = parts[i];
-      if (typeof node[part] !== "object" || node[part] === null) node[part] = {};
-      node = node[part] as Record<string, unknown>;
-    }
-    node[parts[parts.length - 1]] = value;
-  }
-  return result;
-}
 
 export function userCollection(uid: string, name: string) {
   if (!db) throw new Error("Firebase is not configured.");
@@ -242,11 +206,9 @@ export async function createTasksBatch(uid: string, tasks: NewTask[]) {
 }
 
 export async function updateTask(uid: string, id: string, patch: Partial<Task>) {
-  const payload: Record<string, unknown> = withoutUndefined({ ...patch, updatedAt: now() });
-  if ("completedAt" in patch && patch.completedAt === undefined) payload.completedAt = deleteField();
-  if ("weeklyTargetDay" in patch && patch.weeklyTargetDay === undefined) payload.weeklyTargetDay = deleteField();
+  // plan/19 §5.1 — the clear-field rules live in lib/patches.ts, shared with the MCP server.
   trackWrite();
-  await updateDoc(doc(userCollection(uid, "tasks"), id), payload);
+  await updateDoc(doc(userCollection(uid, "tasks"), id), taskPatch(patch, deleteField(), now()));
 }
 
 /** Called on every completed work-mode focus session linked to a task (components/focus-session-provider.tsx's `finalizeSession`) — an atomic `increment` rather than a read-then-write patch, so two sessions finishing close together can't clobber each other's count. */
@@ -383,6 +345,18 @@ export async function duplicateDayTemplate(uid: string, template: DayTemplate) {
   });
 }
 
+/**
+ * plan/19 §2.4 — the stamp of the last schedule write *this tab* made for each date, by any path (the
+ * day editor's autosave, a sitting closing itself in the focus timer, Start day, a released sitting).
+ * The day editor's two-tab guard reads it to tell this tab's own writes from another writer's (a second
+ * tab, or Claude through the MCP server): its own are adopted quietly, the others raise the conflict.
+ */
+const ownScheduleStamps = new Map<string, string>();
+
+export function ownScheduleStamp(dateKey: string): string | undefined {
+  return ownScheduleStamps.get(dateKey);
+}
+
 /** `updatedAt` may be chosen by the caller, so it can know the stamp of its own write before the
  *  snapshot of that write arrives (the day autosave's two-tab guard reads it). */
 export async function saveDailySchedule(
@@ -394,6 +368,7 @@ export async function saveDailySchedule(
   const existing = await getDoc(ref);
   trackRead(1);
   trackWrite();
+  ownScheduleStamps.set(schedule.dateKey, updatedAt);
   await setDoc(
     ref,
     withoutUndefined({
@@ -515,13 +490,15 @@ export async function appendProposedSlotToSchedule(
     status: "upcoming"
   };
   trackWrite();
+  const updatedAt = now();
+  ownScheduleStamps.set(dateKey, updatedAt);
   await setDoc(
     ref,
     withoutUndefined({
       dateKey,
       slots: [...baseSlots, newSlot],
-      createdAt: existing.exists() ? existing.data().createdAt : now(),
-      updatedAt: now()
+      createdAt: existing.exists() ? existing.data().createdAt : updatedAt,
+      updatedAt
     }),
     { merge: true }
   );
@@ -681,27 +658,10 @@ export async function createPaper(uid: string, paper: NewPaper): Promise<string>
 }
 
 export async function updatePaper(uid: string, id: string, patch: Partial<Paper>) {
-  const payload: Record<string, unknown> = withoutUndefined({ ...patch, updatedAt: now() });
-  if ("readAt" in patch && patch.readAt === undefined) payload.readAt = deleteField();
-  if ("fileId" in patch && patch.fileId === undefined) payload.fileId = deleteField();
-  if ("weeklyTargetDay" in patch && patch.weeklyTargetDay === undefined) payload.weeklyTargetDay = deleteField();
-  // plan/17 §5.2 — the shelf/queue/drop/inbox fields are cleared by passing `undefined` (the exit
-  // patches in lib/papers.ts do), which `withoutUndefined` would otherwise silently drop — leaving
-  // "Read now" or "Undo drop" doing nothing at all. `shelvedUntil: null` is a real value and is kept.
-  for (const key of ["queuedAt", "shelvedUntil", "droppedAt", "inbox"] as const) {
-    if (key in patch && patch[key] === undefined) payload[key] = deleteField();
-  }
-  // Replacing or removing the attached PDF invalidates any cached Anthropic
-  // file reference and the layered notes generated from it — a stale summary
-  // of a since-replaced PDF would be actively misleading, not just outdated.
-  if ("fileId" in patch) {
-    payload.anthropicFileId = deleteField();
-    payload.layeredNotes = deleteField();
-  }
-  if ("anthropicFileId" in patch && patch.anthropicFileId === undefined) payload.anthropicFileId = deleteField();
-  if ("layeredNotes" in patch && patch.layeredNotes === undefined) payload.layeredNotes = deleteField();
+  // plan/19 §5.1 — the clear-field rules and the attached-PDF invalidation live in lib/patches.ts,
+  // shared with the MCP server.
   trackWrite();
-  await updateDoc(doc(userCollection(uid, "papers"), id), payload);
+  await updateDoc(doc(userCollection(uid, "papers"), id), paperPatch(patch, deleteField(), now()));
 }
 
 /** Deletes a paper's notes/annotations subcollections along with the paper itself. Does not touch an attached file — see lib/files-client.ts's deletePaperFile, which needs a server route since Blob deletion requires the write token. */

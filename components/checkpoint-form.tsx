@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { checkpointDefaultsForType } from "@/lib/checkpoints";
 import type { CheckpointType, NewCheckpoint } from "@/types";
 
 const CHECKPOINT_TYPES: CheckpointType[] = ["quiz", "lab", "assignment", "midsem", "endsem", "presentation", "other"];
@@ -14,21 +15,6 @@ export const checkpointTypeLabels: Record<CheckpointType, string> = {
   presentation: "Presentation",
   other: "Other"
 };
-
-/** Defaults by type — quiz/midsem/endsem/presentation need prep, lab/assignment don't. */
-const TYPE_DEFAULTS: Record<CheckpointType, { requiresPrep: boolean; prepLeadDays: number; prepEstimateMin: number }> = {
-  quiz: { requiresPrep: true, prepLeadDays: 3, prepEstimateMin: 90 },
-  lab: { requiresPrep: false, prepLeadDays: 2, prepEstimateMin: 60 },
-  assignment: { requiresPrep: false, prepLeadDays: 5, prepEstimateMin: 180 },
-  midsem: { requiresPrep: true, prepLeadDays: 10, prepEstimateMin: 600 },
-  endsem: { requiresPrep: true, prepLeadDays: 21, prepEstimateMin: 1500 },
-  presentation: { requiresPrep: true, prepLeadDays: 7, prepEstimateMin: 240 },
-  other: { requiresPrep: false, prepLeadDays: 3, prepEstimateMin: 60 }
-};
-
-export function checkpointDefaultsForType(type: CheckpointType) {
-  return TYPE_DEFAULTS[type];
-}
 
 export function CheckpointForm({ courseId, onCreate }: { courseId: string; onCreate: (checkpoint: NewCheckpoint) => Promise<void> }) {
   const [type, setType] = useState<CheckpointType>("assignment");

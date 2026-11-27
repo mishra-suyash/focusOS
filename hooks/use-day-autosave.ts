@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { saveDailySchedule } from "@/lib/firestore";
+import { ownScheduleStamp, saveDailySchedule } from "@/lib/firestore";
 import { auth } from "@/lib/firebase";
 import type { ScheduleSlot } from "@/types";
 
-export type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error";
+/** "held": an edit made while the day had changed elsewhere, kept unsaved until Reload or Keep mine. */
+export type SaveStatus = "idle" | "saving" | "saved" | "offline" | "error" | "held";
 
 const DEBOUNCE_MS = 1000;
 
@@ -56,9 +57,32 @@ function triggerGoogleCalendarPush() {
  * `scheduleSave` is the only path that can write, and nothing calls it from inside a pointermove
  * handler (checked in `TimeGrid`/`DayTimelineEditor` — writes only happen from pointerup/blur).
  */
-export function useDayAutosave({ uid, dateKey, templateId, remoteUpdatedAt }: { uid: string; dateKey: string; templateId?: string; remoteUpdatedAt?: string }) {
+export function useDayAutosave({
+  uid,
+  dateKey,
+  templateId,
+  remoteUpdatedAt,
+  onAdoptOwnWrite
+}: {
+  uid: string;
+  dateKey: string;
+  templateId?: string;
+  remoteUpdatedAt?: string;
+  /** This tab wrote the day by another path (a sitting closing itself, a released sitting) while the
+   *  editor had nothing unsaved: take the saved day as the editor's own, with no conflict. */
+  onAdoptOwnWrite?: () => void;
+}) {
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [conflict, setConflict] = useState(false);
+  // plan/19 §2.4 — the guard has to hold writes, not just announce the change: an edit made after
+  // another writer (a second tab, or Claude through the MCP server) saved this day used to autosave
+  // this tab's stale copy straight over theirs while the banner was still showing.
+  const conflictRef = useRef(false);
+  const onAdoptRef = useRef(onAdoptOwnWrite);
+  // Declared before the conflict effect below, so it has run by the time that one reads the ref.
+  useEffect(() => {
+    onAdoptRef.current = onAdoptOwnWrite;
+  });
 
   const timeoutRef = useRef<number | null>(null);
   const pendingRef = useRef<ScheduleSlot[] | null>(null);
@@ -112,6 +136,10 @@ export function useDayAutosave({ uid, dateKey, templateId, remoteUpdatedAt }: { 
     }
     const pending = pendingRef.current;
     if (!pending || savingRef.current) return;
+    if (conflictRef.current) {
+      setStatus("held");
+      return;
+    }
     pendingRef.current = null;
     void writeNow(pending);
   }, [writeNow]);
@@ -120,6 +148,10 @@ export function useDayAutosave({ uid, dateKey, templateId, remoteUpdatedAt }: { 
   const scheduleSave = useCallback(
     (slots: ScheduleSlot[]) => {
       pendingRef.current = slots;
+      if (conflictRef.current) {
+        setStatus("held");
+        return;
+      }
       setStatus("saving");
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current);
       timeoutRef.current = window.setTimeout(flush, DEBOUNCE_MS);
@@ -135,6 +167,7 @@ export function useDayAutosave({ uid, dateKey, templateId, remoteUpdatedAt }: { 
         timeoutRef.current = null;
       }
       pendingRef.current = null;
+      conflictRef.current = false;
       setConflict(false);
       await writeNow(slots);
     },
@@ -144,8 +177,16 @@ export function useDayAutosave({ uid, dateKey, templateId, remoteUpdatedAt }: { 
   /** "Reload" on the conflict prompt — the caller resets its own local state from the remote value; this just accepts that version as the new baseline and clears the prompt. */
   const dismissConflict = useCallback(() => {
     baselineUpdatedAtRef.current = remoteUpdatedAt;
+    // Reload takes the remote day, so an edit held during the conflict is dropped with it.
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    pendingRef.current = null;
+    conflictRef.current = false;
+    setStatus("idle");
     setConflict(false);
-  }, [remoteUpdatedAt]);
+  }, [remoteUpdatedAt, dateKey]);
 
   useEffect(() => {
     function onVisibilityChange() {
@@ -165,8 +206,15 @@ export function useDayAutosave({ uid, dateKey, templateId, remoteUpdatedAt }: { 
     const baseline = baselineUpdatedAtRef.current;
     if (remoteUpdatedAt === baseline) return; // our own write echoing back, or no real change
     if (baseline !== undefined && remoteUpdatedAt < baseline) return; // an out-of-order/stale snapshot
+    // This tab's own write by another path, with no edit of ours waiting: nothing to choose between.
+    if (remoteUpdatedAt === ownScheduleStamp(dateKey) && pendingRef.current === null && !savingRef.current && !conflictRef.current) {
+      baselineUpdatedAtRef.current = remoteUpdatedAt;
+      onAdoptRef.current?.();
+      return;
+    }
+    conflictRef.current = true;
     setConflict(true);
-  }, [remoteUpdatedAt]);
+  }, [remoteUpdatedAt, dateKey]);
 
   return { status, scheduleSave, flush, conflict, forceSave, dismissConflict };
 }

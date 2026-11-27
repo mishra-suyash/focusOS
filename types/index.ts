@@ -1145,12 +1145,18 @@ export interface AdminSettings {
     anonymous: boolean;
   };
   ownerBootstrapped?: boolean;
+  /** plan/19 §4.3 — the MCP server's kill switch (Claude connector). Absent = off. */
+  mcpEnabled?: boolean;
+  /** plan/19 D2 — whether member accounts may connect Claude too. Owner and admin always may while
+   *  `mcpEnabled` is on. Absent = off. */
+  mcpMembersAllowed?: boolean;
   updatedAt?: string;
   updatedBy?: string;
 }
 
 export type AuditAction =
   | "settings.update"
+  | "mcp.toggle"
   | "ai.killswitch"
   | "cron.toggle"
   | "maintenance.toggle"

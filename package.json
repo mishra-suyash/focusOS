@@ -30,11 +30,13 @@
     "verify:chunking": "tsx scripts/verify-chunking.ts",
     "verify:reading": "tsx scripts/verify-reading.ts",
     "verify:notify": "tsx scripts/verify-notify.ts",
-    "verify:terms": "tsx scripts/verify-terms.ts"
+    "verify:terms": "tsx scripts/verify-terms.ts",
+    "verify:patches": "tsx scripts/verify-patches.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
     "@google/generative-ai": "^0.24.1",
+    "@modelcontextprotocol/server": "2.4.0",
     "@tailwindcss/forms": "^0.5.9",
     "@vercel/blob": "^2.8.0",
     "clsx": "^2.1.1",

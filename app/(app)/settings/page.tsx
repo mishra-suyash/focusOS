@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { FloatingWidgetCustomizeDialog } from "@/components/floating-widget-customize-dialog";
+import { ConnectedAppsSettings } from "@/components/connected-apps-settings";
 import { GoogleCalendarSettings } from "@/components/google-calendar-settings";
 import { InfoHint } from "@/components/info-hint";
 import { ReadingHabitSettings } from "@/components/reading-habit-settings";
@@ -124,6 +125,7 @@ export default function SettingsPage() {
           </div>
         </section>
         <GoogleCalendarSettings />
+        <ConnectedAppsSettings />
         <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Reminders, sounds &amp; notifications</h2>
           <div className="space-y-3">

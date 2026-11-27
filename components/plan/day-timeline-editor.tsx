@@ -10,7 +10,7 @@ import { PlanTray } from "@/components/plan/plan-tray";
 import { TimeGrid, type TimeGridHandle } from "@/components/plan/time-grid";
 import { useToast } from "@/components/toast-host";
 import { useCurrentMinute } from "@/hooks/use-current-minute";
-import { useDayAutosave } from "@/hooks/use-day-autosave";
+import { useDayAutosave, type SaveStatus } from "@/hooks/use-day-autosave";
 import { useUndoStack } from "@/hooks/use-undo-stack";
 import { useDay } from "@/hooks/use-day";
 import { useUserCollection } from "@/hooks/use-user-collection";
@@ -169,7 +169,11 @@ export function DayTimelineEditor({
     uid,
     dateKey,
     templateId: schedule?.templateId,
-    remoteUpdatedAt: schedule?.updatedAt
+    remoteUpdatedAt: schedule?.updatedAt,
+    // A sitting that closed itself (or one released) on this day, from this tab: show the saved day.
+    onAdoptOwnWrite: () => {
+      if (schedule) reset(mergeMissingLockedSlots(schedule.slots, wantedLockedSlots ?? []));
+    }
   });
 
   const selectedSlot = slots.find((slot) => slot.id === selectedId) ?? null;
@@ -767,8 +771,9 @@ export function DayTimelineEditor({
   );
 }
 
-function SaveStatusPill({ status, onRetry }: { status: "idle" | "saving" | "saved" | "offline" | "error"; onRetry: () => void }) {
+function SaveStatusPill({ status, onRetry }: { status: SaveStatus; onRetry: () => void }) {
   if (status === "saving") return <span>Saving…</span>;
+  if (status === "held") return <span className="text-amber-600 dark:text-amber-400">Not saved: choose Reload or Keep mine</span>;
   if (status === "saved") return <span className="text-moss-600 dark:text-moss-400">Saved ✓</span>;
   if (status === "offline") return <span className="text-amber-600 dark:text-amber-400">Offline, will retry</span>;
   if (status === "error") {

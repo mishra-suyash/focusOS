@@ -65,6 +65,18 @@ export default function AdminSettingsPage() {
       </section>
 
       <section className="card mb-4 space-y-3 p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-500">Claude connector (MCP)</h2>
+        <label className="flex items-center justify-between text-sm">
+          MCP server enabled — off refuses every Claude connection at once, including ones already approved
+          <input type="checkbox" checked={Boolean(settings.mcpEnabled)} disabled={saving} onChange={(e) => save({ mcpEnabled: e.target.checked })} />
+        </label>
+        <label className="flex items-center justify-between text-sm">
+          Members may connect — off keeps it to owner and admin accounts
+          <input type="checkbox" checked={Boolean(settings.mcpMembersAllowed)} disabled={saving} onChange={(e) => save({ mcpMembersAllowed: e.target.checked })} />
+        </label>
+      </section>
+
+      <section className="card mb-4 space-y-3 p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-500">Access</h2>
         <label className="block text-sm">
           Signup mode

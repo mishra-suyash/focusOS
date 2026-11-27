@@ -30,10 +30,9 @@ import {
   plannedMinutesThisWeek,
   dayOfWeekLabels,
   effectiveCourseStatus,
-  resyncFutureClassSlots,
-  scheduledMinutesThisWeek,
-  syncRevisionTemplate
+  scheduledMinutesThisWeek
 } from "@/lib/courses";
+import { resyncFutureClassSlots, syncRevisionTemplate } from "@/lib/courses-sync";
 import { classMinutesForWeek } from "@/lib/tracking";
 import { scheduleDayKey, todayKey } from "@/lib/dates";
 import { computeCourseCoverage, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";

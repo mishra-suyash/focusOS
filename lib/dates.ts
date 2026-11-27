@@ -89,6 +89,13 @@ export function zonedDayKey(date: Date, timeZone: string, dayEndsAt?: string) {
   return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(subMinutes(date, dayEndMinutes(dayEndsAt)));
 }
 
+/** `currentMinute` for the server: minutes past midnight on the wall clock in `timeZone` (no day-end shift — it pairs with a schedule date). */
+export function zonedMinute(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date);
+  const value = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+  return value("hour") * 60 + value("minute");
+}
+
 export function weekStartKey(date = logicalNow()) {
   return format(startOfWeek(date, { weekStartsOn: 1 }), "yyyy-MM-dd");
 }

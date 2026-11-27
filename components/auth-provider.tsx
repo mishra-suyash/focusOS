@@ -21,6 +21,25 @@ import type { UserRole } from "@/types";
 
 const MAGIC_LINK_EMAIL_KEY = "focusos-magic-link-email";
 
+/**
+ * plan/19 §4.2 — where to go after signing in, when a page sent you to /login on its way somewhere (the
+ * Claude consent screen at /oauth/authorize, with its whole OAuth request in the query). Same-origin
+ * paths only: anything not starting with a single "/" (an absolute URL, "//host", "/\\host") is ignored,
+ * so a crafted /login link can't bounce a fresh sign-in to another site.
+ */
+export function safeReturnTo(value: string | null | undefined): string | null {
+  if (!value || !value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return null;
+  return value;
+}
+
+function returnToFromLocation(): string | null {
+  if (typeof window === "undefined") return null;
+  return safeReturnTo(new URLSearchParams(window.location.search).get("returnTo"));
+}
+
+/** Routes that send a signed-out visitor to /login *and back*. Everywhere else still lands on /dashboard after signing in, as before. */
+const RETURN_TO_PREFIXES = ["/oauth/"];
+
 interface AuthContextValue {
   user: User | null;
   loading: boolean;
@@ -97,15 +116,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!email) return;
       await signInWithEmailLink(auth, email, window.location.href);
       window.localStorage.removeItem(MAGIC_LINK_EMAIL_KEY);
-      router.replace("/dashboard");
+      router.replace(returnToFromLocation() ?? "/dashboard");
     })();
   }, [router]);
 
   useEffect(() => {
     if (loading) return;
     const publicRoute = pathname === "/login";
-    if (!user && !publicRoute) router.replace("/login");
-    if (user && publicRoute) router.replace("/dashboard");
+    if (!user && !publicRoute) {
+      const comeBack = RETURN_TO_PREFIXES.some((prefix) => pathname.startsWith(prefix));
+      router.replace(comeBack ? `/login?returnTo=${encodeURIComponent(pathname + window.location.search)}` : "/login");
+    }
+    if (user && publicRoute) router.replace(returnToFromLocation() ?? "/dashboard");
   }, [loading, pathname, router, user]);
 
   const value = useMemo<AuthContextValue>(
@@ -134,7 +156,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       },
       sendMagicLink: async (email: string) => {
         if (!auth || typeof window === "undefined") return;
-        await sendSignInLinkToEmail(auth, email, { url: `${window.location.origin}/login`, handleCodeInApp: true });
+        // The link opens in a new tab from the mail app, so a pending returnTo rides in the link itself.
+        const returnTo = returnToFromLocation();
+        await sendSignInLinkToEmail(auth, email, { url: `${window.location.origin}/login${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`, handleCodeInApp: true });
         window.localStorage.setItem(MAGIC_LINK_EMAIL_KEY, email);
       },
       logOut: async () => {

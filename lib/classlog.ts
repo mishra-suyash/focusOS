@@ -1,19 +1,8 @@
 import { createRevisionItem, createTask, createTopic, fetchCourseTopics, saveClassLog, updateTopic } from "@/lib/firestore";
-import { DEFAULT_LADDER, ladderIndexForConfidence } from "@/lib/revision";
-import { addDays, format, parseISO } from "date-fns";
+import { splitTopics, topicRevisionSeed } from "@/lib/classlog-plan";
 import type { ClassAttendance, Course } from "@/types";
 
-/** Rule-based topic split for Phase 1 — an AI task (course.splitTopics) replaces this in Phase 4, with this as its fallback. */
-export function splitTopics(raw: string): string[] {
-  return Array.from(
-    new Set(
-      raw
-        .split(/[\n;,]/)
-        .map((item) => item.trim())
-        .filter(Boolean)
-    )
-  );
-}
+export { splitTopics };
 
 export interface ClassLogInput {
   date: string;
@@ -25,8 +14,7 @@ export interface ClassLogInput {
 }
 
 async function ensureRevisionItem(uid: string, topicId: string, courseId: string, title: string, confidence: number, todayKey: string) {
-  const ladderIndex = ladderIndexForConfidence(confidence);
-  const dueDate = format(addDays(parseISO(todayKey), DEFAULT_LADDER[ladderIndex]), "yyyy-MM-dd");
+  const { ladderIndex, dueDate } = topicRevisionSeed(confidence, todayKey);
   const revisionItemId = await createRevisionItem(uid, {
     kind: "topic",
     refId: topicId,

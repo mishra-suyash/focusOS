@@ -86,6 +86,11 @@ export default function LoginPage() {
   }
 
   const disabled = busy || loading || isDemoMode;
+  // plan/19 §4.2 — arrived from Claude's consent screen (AuthProvider carries the request in returnTo).
+  const [connectingClaude, setConnectingClaude] = useState(false);
+  useEffect(() => {
+    setConnectingClaude(new URLSearchParams(window.location.search).get("returnTo")?.startsWith("/oauth/") ?? false);
+  }, []);
 
   return (
     <main className="grid min-h-screen place-items-center bg-ink-50 px-4 py-10 dark:bg-ink-950">
@@ -97,6 +102,11 @@ export default function LoginPage() {
             A calm research operating system for planning deep work, reviewing progress, and keeping scholarly momentum visible.
           </p>
         </div>
+        {connectingClaude ? (
+          <div className="mb-4 rounded-md border border-moss-600/30 bg-moss-600/10 p-3 text-sm text-ink-700 dark:text-ink-200">
+            Sign in to connect Claude to your FocusLab. You&apos;ll confirm what it can do on the next screen.
+          </div>
+        ) : null}
         {isDemoMode ? (
           <div className="mb-4 rounded-md border border-amberline/30 bg-amberline/10 p-3 text-sm text-ink-700 dark:text-ink-200">
             Firebase environment variables are missing. Add them from `.env.example` to enable sign-in and persistence.

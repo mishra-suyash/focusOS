@@ -1,7 +1,7 @@
 import { adminDb } from "@/lib/firebase-admin";
 import { fetchInsightData } from "@/lib/admin-firestore";
 import { buildMorningBrief, buildProposedSlots, buildProposedTasks } from "@/lib/dailyloop";
-import { addDaysToKey, zonedDayKey } from "@/lib/dates";
+import { addDaysToKey, zonedDayKey, zonedMinute } from "@/lib/dates";
 import { isModuleEnabled } from "@/lib/features";
 import { computeDayScore } from "@/lib/gamify";
 import { DEFAULT_TIMEZONE } from "@/lib/google-calendar";
@@ -23,19 +23,30 @@ export async function fetchSettings(uid: string): Promise<Partial<UserSettings>>
  * The server runs in UTC, so a day is worked out for the person: `lib/dates.ts`'s `todayKey` here would
  * give the UTC date, and the same session day-keys the client derives wouldn't line up. `at` turns a
  * timestamp into their day; `sessionDay` and `slotDay` are `sessionDayKey`/`sessionSlotDayKey` in their zone.
+ *
+ * plan/19 §5.1 — exported so the MCP server and the crons agree on which day it is. `today` is the logical
+ * day (`todayKey`: Workload, stats, Start/End day) and `scheduleDay` the date the clock is on
+ * (`scheduleDayKey`: anything pairing a day's blocks with the clock), with `minute` that clock's minute.
+ * The two days differ between midnight and `dayEndsAt`. Never call `setDayEnd` on the server: it is
+ * module state, and one user's day end would leak into the next request.
  */
-function dayFrame(settings: Partial<UserSettings>) {
+export function dayFrame(settings: Partial<UserSettings>, now = new Date()) {
   const timeZone = settings.timezone ?? DEFAULT_TIMEZONE;
   const midnightDay = (iso: string) => zonedDayKey(new Date(iso), timeZone);
   return {
-    today: zonedDayKey(new Date(), timeZone, settings.dayEndsAt),
+    timeZone,
+    today: zonedDayKey(now, timeZone, settings.dayEndsAt),
+    scheduleDay: zonedDayKey(now, timeZone),
+    minute: zonedMinute(now, timeZone),
     at: (iso: string) => zonedDayKey(new Date(iso), timeZone, settings.dayEndsAt),
     sessionDay: (session: Pick<PomodoroSession, "dayKey" | "completedAt">) => session.dayKey ?? midnightDay(session.completedAt),
     slotDay: (session: Pick<PomodoroSession, "slotDateKey" | "completedAt">) => session.slotDateKey ?? midnightDay(session.completedAt)
   };
 }
 
-async function fetchDueRevisionCount(uid: string, dateKey: string): Promise<number> {
+export type DayFrame = ReturnType<typeof dayFrame>;
+
+export async function fetchDueRevisionCount(uid: string, dateKey: string): Promise<number> {
   const snapshot = await adminDb()
     .collection("users")
     .doc(uid)
@@ -46,7 +57,7 @@ async function fetchDueRevisionCount(uid: string, dateKey: string): Promise<numb
   return snapshot.size;
 }
 
-async function fetchDailySchedule(uid: string, dateKey: string): Promise<DailySchedule | null> {
+export async function fetchDailySchedule(uid: string, dateKey: string): Promise<DailySchedule | null> {
   const snapshot = await adminDb().collection("users").doc(uid).collection("dailySchedules").doc(dateKey).get();
   return snapshot.exists ? ({ id: snapshot.id, ...snapshot.data() } as DailySchedule) : null;
 }
@@ -90,19 +101,21 @@ function dayMetrics(tasks: Task[], sessions: PomodoroSession[], dateKey: string,
 }
 
 /**
- * The stored record of a day: its Load Index and score, computed from what the day actually held and
- * written once, so a later edit can't change what that day was (plan/16 §5.6). Returns the Load Index.
+ * Everything a day's Load Index is computed from, assembled once (plan/19 §2.2): the day snapshot below
+ * and the MCP server's `get_overview` both read Workload through this, so the two can't drift into a
+ * third way of building it. (The client builds its live number in hooks/use-live-load-index.ts.)
  */
-async function writeDaySnapshot(uid: string, dateKey: string, settings: Partial<UserSettings>, closing = false): Promise<number> {
+export async function loadIndexForDay(uid: string, dateKey: string, settings: Partial<UserSettings>) {
   const frame = dayFrame(settings);
-  const [{ checkpoints, tasks, sessions, courses, goals, terms }, dueRevisionCount, revisionsCompletedCount, dayDoc, schedule] = await Promise.all([
+  const [data, dueRevisionCount, revisionsCompletedCount, dayDoc, schedule] = await Promise.all([
     fetchInsightData(uid),
     fetchDueRevisionCount(uid, dateKey),
     fetchRevisionsCompletedCount(uid, dateKey, frame.at),
     adminDb().collection("users").doc(uid).collection("days").doc(dateKey).get(),
     fetchDailySchedule(uid, dateKey)
   ]);
-  const dayData = dayDoc.data() as Day | undefined;
+  const { checkpoints, tasks, sessions, courses, goals, terms } = data;
+  const day = dayDoc.data() as Day | undefined;
   const snapshot = buildLoadIndexSnapshot({
     scheduledDeepWorkMinutes: scheduleSummary(schedule?.slots ?? []).plannedDeepWork,
     revisionDueCount: dueRevisionCount,
@@ -113,16 +126,25 @@ async function writeDaySnapshot(uid: string, dateKey: string, settings: Partial<
     terms,
     focusedMinutes: dayMetrics(tasks, sessions, dateKey, frame).focusedMinutes,
     todayKey: dateKey,
-    isDayOff: Boolean(dayData?.dayOff),
+    isDayOff: Boolean(day?.dayOff),
     ...loadIndexScope(settings)
   });
+  return { snapshot, data, day, schedule, dueRevisionCount, revisionsCompletedCount, frame };
+}
+
+/**
+ * The stored record of a day: its Load Index and score, computed from what the day actually held and
+ * written once, so a later edit can't change what that day was (plan/16 §5.6). Returns the Load Index.
+ */
+async function writeDaySnapshot(uid: string, dateKey: string, settings: Partial<UserSettings>, closing = false): Promise<number> {
+  const { snapshot, data, day: dayData, schedule, frame } = await loadIndexForDay(uid, dateKey, settings);
   // plan/16 §5.6 — the day score rides along with the Load Index snapshot, written at the same
   // point and gated by the same condition, because it is the same kind of record: a historical
   // number for a day that is over. `nowMinute` is deliberately not passed, so the absolute score is
   // the honest reading, not a pace.
   const game = computeDayScore({
     slots: schedule?.slots ?? [],
-    sessions: sessions.filter((session) => frame.slotDay(session) === dateKey),
+    sessions: data.sessions.filter((session) => frame.slotDay(session) === dateKey),
     loadIndex: snapshot,
     isDayOff: Boolean(dayData?.dayOff)
   });

@@ -26,10 +26,10 @@ import {
   plannedMinutesForTask,
   plannedMinutesThisWeek,
   scheduledMinutesThisWeek,
-  syncRevisionTemplate,
   taskMinutesAccounted,
   type PlanningCutoff
 } from "@/lib/courses";
+import { syncRevisionTemplate } from "@/lib/courses-sync";
 import { addDaysToKey, dateKeyOfIso, scheduleDayKey, sessionSlotDayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { clearDayOff, fetchCourseClassLogs, saveDailySchedule, saveWeeklyReviewFields, setDayOff, updateCourse, updateGoal, updatePaper, updateTask } from "@/lib/firestore";
 import { isGoalActiveForDate } from "@/lib/goals";

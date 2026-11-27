@@ -12,7 +12,9 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   cronEnabled: true,
   maintenanceMode: false,
   chainOrder: ["local", "claude", "gemini"],
-  signInMethods: { google: true, emailPassword: true, emailLink: true, anonymous: true }
+  signInMethods: { google: true, emailPassword: true, emailLink: true, anonymous: true },
+  mcpEnabled: false,
+  mcpMembersAllowed: false
 };
 
 let cached: { value: AdminSettings; expiresAt: number } | null = null;
@@ -54,7 +56,9 @@ export async function updateAdminSettings(
           ? "chain.reorder"
           : patch.signInMethods !== undefined
             ? "signin.method.toggle"
-            : "settings.update";
+            : patch.mcpEnabled !== undefined || patch.mcpMembersAllowed !== undefined
+              ? "mcp.toggle"
+              : "settings.update";
 
   await writeAuditEntry({
     actorUid: actor.uid,
