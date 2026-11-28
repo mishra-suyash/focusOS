@@ -7,6 +7,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { clsx } from "clsx";
 import { DeadlineBanner } from "@/components/deadline-banner";
+import { useToast } from "@/components/toast-host";
 import { unplannedHardDeadlines } from "@/lib/deadlines";
 import { goalWeekPace } from "@/lib/goals";
 import { dayShapeWindows, energyOf, windowsForEnergy, workWindowsOf } from "@/lib/weekplan";
@@ -39,7 +40,7 @@ import { categoryLabels } from "@/lib/options";
 import { useReleaseSittings } from "@/hooks/use-release-sittings";
 import { computeStatusPatch } from "@/lib/tasks";
 import { todayMetrics } from "@/lib/analytics";
-import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak, loadIndexScope } from "@/lib/loadindex";
+import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak, daysSinceCatchUpClear, loadIndexScope } from "@/lib/loadindex";
 import { downloadDailyFramePdf } from "@/lib/pdf";
 import { createSlot, currentMinute, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { describeObjective } from "@/lib/objectives";
@@ -61,6 +62,7 @@ function DashboardContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { settings, update: updateSettings } = useUserSettings();
+  const toast = useToast();
   const widgets = resolveDashboardWidgets(settings);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [showAllTasks, setShowAllTasks] = useState(false);
@@ -108,7 +110,8 @@ function DashboardContent() {
     ...loadIndexScope(settings)
   });
   const chronologicalLI = [...recentDays].filter((d) => d.loadIndex).sort((a, b) => (a.date < b.date ? -1 : 1));
-  const debtHours = computeDebtHours(chronologicalLI.map((d) => d.loadIndex!));
+  // Catch-up counts only days after the last clear; the streak still reads every day.
+  const debtHours = computeDebtHours(daysSinceCatchUpClear(chronologicalLI, settings.catchUpClearedOn).map((d) => d.loadIndex!));
   const liStreak = computeLoadIndexStreak(chronologicalLI.map((d) => d.loadIndex!));
   // plan/16 §5.7 — the same hook the floating widget's "Next" card uses, so the two surfaces can't
   // disagree about what's next or about what a session started from it should arm and attribute
@@ -443,7 +446,18 @@ function DashboardContent() {
 
         <div className="space-y-4">
           {widgets.has("workload") ? (
-            <LoadIndexWidget snapshot={loadIndex} debtHours={widgets.has("catchUpHours") ? debtHours : undefined} streak={liStreak} dayOff={Boolean(day?.dayOff)} />
+            <LoadIndexWidget
+              snapshot={loadIndex}
+              debtHours={widgets.has("catchUpHours") ? debtHours : undefined}
+              streak={liStreak}
+              dayOff={Boolean(day?.dayOff)}
+              catchUpClearedOn={settings.catchUpClearedOn}
+              onClearCatchUp={() => {
+                const before = settings.catchUpClearedOn;
+                updateSettings({ catchUpClearedOn: today });
+                toast({ message: `Catch-up hours cleared (${debtHours}h). Days from tomorrow count again.`, ms: 10000, action: { label: "Undo", onClick: () => updateSettings({ catchUpClearedOn: before }) } });
+              }}
+            />
           ) : null}
           <ReadingNowCard papers={papers} sessions={sessions} onBreak={isBreakMode(terms, today)} />
           {widgets.has("scratchpad") ? (

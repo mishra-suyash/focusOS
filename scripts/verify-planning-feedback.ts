@@ -6,6 +6,7 @@
  * no user flow. A green run says the arithmetic is right and nothing more.
  */
 import { computeDayScore, computeDayReadout } from "../lib/gamify";
+import { computeDebtHours, daysSinceCatchUpClear } from "../lib/loadindex";
 import { fitPlannedMinutes } from "../lib/patches";
 import { isThinPass, passOutputShortfall, splitCitation } from "../lib/papers";
 import { pastBlockOutcome, sittingPlannedMinutes, sittingRemainingMinutes } from "../lib/tracking";
@@ -175,6 +176,14 @@ const work = (slotId: string, minutes: number): Pick<PomodoroSession, "slotId" |
   check("a block may sit on a tentative one", validateSlots([held, work]).length === 0, validateSlots([held, work]).join(" "));
   check("a firm meeting there is a clash", validateSlots([{ ...held, tentative: undefined }, work]).length === 1);
   check("placement ignores tentative time", placeInWindow([held], 720, 1020, 50) === 720);
+}
+
+// --- Clearing catch-up hours ---
+{
+  const days = ["2026-11-20", "2026-11-27", "2026-11-28"].map((date) => ({ date, loadIndex: { requiredMinutes: 120, actualMinutes: 0 } }));
+  check("uncleared, every day counts", computeDebtHours(daysSinceCatchUpClear(days).map((d) => d.loadIndex)) === 6);
+  check("cleared on the 27th, only later days count", computeDebtHours(daysSinceCatchUpClear(days, "2026-11-27").map((d) => d.loadIndex)) === 2);
+  check("the day of the clear itself doesn't come back", daysSinceCatchUpClear(days, "2026-11-28").length === 0);
 }
 
 if (failures.length > 0) {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { InfoHint } from "@/components/info-hint";
 import { loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import type { LoadIndexSnapshot } from "@/types";
@@ -8,7 +9,9 @@ export function LoadIndexWidget({
   snapshot,
   debtHours,
   streak,
-  dayOff
+  dayOff,
+  catchUpClearedOn,
+  onClearCatchUp
 }: {
   snapshot: LoadIndexSnapshot;
   /** 14-day rolling shortfall in hours (lib/loadindex.ts's computeDebtHours) — omitted callers just don't show the row. */
@@ -20,7 +23,12 @@ export function LoadIndexWidget({
    *  light day, which would misleadingly print "0m done of 30m required" for a day nobody intended
    *  to work. Swapped for a plain note instead of trying to make the floored math read sensibly. */
   dayOff?: boolean;
+  /** When catch-up hours were last cleared (yyyy-MM-dd), shown under a zero so it reads as a choice. */
+  catchUpClearedOn?: string;
+  /** Clears catch-up hours from today on. Omitted = no Clear control. */
+  onClearCatchUp?: () => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   return (
     <section className="card p-4">
       <div className="mb-2 flex items-center justify-between">
@@ -51,9 +59,38 @@ export function LoadIndexWidget({
             </span>
           ) : null}
           {debtHours !== undefined ? (
-            <span className="inline-flex items-center gap-1">
+            <span className="inline-flex flex-wrap items-center gap-1">
               {debtHours}h catch-up (14-day)
               <InfoHint term="catchUpHours" />
+              {catchUpClearedOn && debtHours === 0 ? <span className="text-ink-400">· cleared {catchUpClearedOn}</span> : null}
+              {onClearCatchUp && debtHours > 0 ? (
+                confirming ? (
+                  <>
+                    <button
+                      type="button"
+                      className="ml-1 font-medium text-red-600 underline dark:text-red-400"
+                      onClick={() => {
+                        setConfirming(false);
+                        onClearCatchUp();
+                      }}
+                    >
+                      Clear {debtHours}h
+                    </button>
+                    <button type="button" className="underline" onClick={() => setConfirming(false)}>
+                      Keep
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="ml-1 underline decoration-dotted"
+                    title="Start catch-up hours fresh: shortfall from today and earlier stops counting. Your day records are kept, and you can undo it."
+                    onClick={() => setConfirming(true)}
+                  >
+                    Clear
+                  </button>
+                )
+              ) : null}
             </span>
           ) : null}
         </div>

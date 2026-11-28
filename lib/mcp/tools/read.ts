@@ -11,7 +11,7 @@ import { userCol, userRef } from "@/lib/admin-writes";
 import { effectiveCourseStatus, isFromDroppedCourse, plannableTasks } from "@/lib/courses";
 import { addDaysToKey, weekDates, weekStartKey } from "@/lib/dates";
 import { goalWeekPace, overdueMilestones } from "@/lib/goals";
-import { computeCourseCoverage, computeDebtHours, computeLoadIndexStreak, loadIndexBand, loadIndexBandLabels } from "@/lib/loadindex";
+import { computeCourseCoverage, computeDebtHours, daysSinceCatchUpClear, computeLoadIndexStreak, loadIndexBand, loadIndexBandLabels } from "@/lib/loadindex";
 import { computeDayReadout, formatDayReadout, isScoredSitting } from "@/lib/gamify";
 import { compact, fail, isPlainId, ok, paginate, requireModule, type ToolContext } from "@/lib/mcp/context";
 import { dayAsOpened } from "@/lib/mcp/day";
@@ -136,7 +136,7 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
   const historyDays = recentDays.filter((d) => d.loadIndex && d.date <= today).sort((a, b) => a.date.localeCompare(b.date));
   const history = historyDays.map((d) => d.loadIndex!);
   const catchUpDays = modules.has("workload")
-    ? await catchUpBreakdown(ctx, historyDays.map((d) => ({ date: d.date, requiredMinutes: d.loadIndex!.requiredMinutes, actualMinutes: d.loadIndex!.actualMinutes })), sessions, frame.slotDay, frame.scheduleDay, minute)
+    ? await catchUpBreakdown(ctx, daysSinceCatchUpClear(historyDays, settings.catchUpClearedOn).map((d) => ({ date: d.date, requiredMinutes: d.loadIndex!.requiredMinutes, actualMinutes: d.loadIndex!.actualMinutes })), sessions, frame.slotDay, frame.scheduleDay, minute)
     : [];
   // `useDayReadout`'s inputs: the logical day's own blocks and sessions, paced against the clock only
   // while that day is the date the clock is on.
@@ -194,7 +194,8 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
           ...workload.snapshot,
           bandLabel: loadIndexBandLabels[loadIndexBand(workload.snapshot.value)],
           onTrackStreakDays: computeLoadIndexStreak(history),
-          catchUpHours14Days: computeDebtHours(history),
+          catchUpHours14Days: computeDebtHours(daysSinceCatchUpClear(historyDays, settings.catchUpClearedOn).map((d) => d.loadIndex!)),
+          catchUpClearedOn: settings.catchUpClearedOn ? `${settings.catchUpClearedOn} (the person cleared catch-up hours; only later days count)` : undefined,
           catchUpBreakdown: compact({
             how: "Sum of each day's Workload shortfall (required − actual minutes) over the last 14 day records, capped at 40 h. Required = that day's deep_work blocks + 3 min per revision due + assessment prep owed + the daily share of course and goal weekly targets; actual = focus minutes + 3 per revision done. Reading/admin blocks aren't in required, so the work blocks that passed unworked (missed = no focus time, partial = under 60%) are listed per day beside the numbers, not as what the figure is made of.",
             days: catchUpDays

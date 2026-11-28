@@ -33,7 +33,7 @@ import { syncRevisionTemplate } from "@/lib/courses-sync";
 import { addDaysToKey, dateKeyOfIso, scheduleDayKey, sessionSlotDayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { clearDayOff, fetchCourseClassLogs, saveDailySchedule, saveWeeklyReviewFields, setDayOff, updateCourse, updateGoal, updatePaper, updateTask } from "@/lib/firestore";
 import { isGoalActiveForDate } from "@/lib/goals";
-import { computeDebtHours, computeLoadIndexStreak, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
+import { computeDebtHours, computeLoadIndexStreak, daysSinceCatchUpClear, loadIndexBand, loadIndexBandLabels, loadIndexBandStyles } from "@/lib/loadindex";
 import { taskBucketLabels } from "@/lib/options";
 import {
   DEFAULT_READING_HABIT,
@@ -1692,7 +1692,7 @@ function PlanWeekContent() {
   const behindDays = priorWeekLI.filter((d) => loadIndexBand(d.loadIndex!.value) === "behind").length;
   const onTrackDays = priorWeekLI.length - behindDays;
   const daysWithLI = [...recentDays].filter((d) => d.loadIndex).sort((a, b) => (a.date < b.date ? -1 : 1));
-  const debtHours = computeDebtHours(daysWithLI.map((d) => d.loadIndex!));
+  const debtHours = computeDebtHours(daysSinceCatchUpClear(daysWithLI, settings.catchUpClearedOn).map((d) => d.loadIndex!));
   const streak = computeLoadIndexStreak(daysWithLI.map((d) => d.loadIndex!));
   const avgFocus = averageFocusRating(priorWeekDays);
 

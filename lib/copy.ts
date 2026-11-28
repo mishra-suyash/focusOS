@@ -18,7 +18,7 @@ export const copy = {
   workload: { label: "Workload", hint: "How much you've done today compared with what today asked for" },
   planned: { label: "Planned" },
   done: { label: "Done" },
-  catchUpHours: { label: "Catch-up hours", hint: "Planned work you didn't get to over the last two weeks" },
+  catchUpHours: { label: "Catch-up hours", hint: "Planned work you didn't get to over the last two weeks (since you last cleared it)" },
   onTrackStreak: { label: "On-track streak", hint: "Days in a row you hit your planned workload" },
   dayScore: {
     label: "Day score",

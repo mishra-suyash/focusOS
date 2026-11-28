@@ -1081,6 +1081,9 @@ export interface UserSettings {
    *  (admin, the revision queue) in `light` windows first, then `deep`; Up next suggests no work
    *  outside every window and no assessment prep in a light one; nothing is placed outside them.
    *  Windows are "HH:mm" ranges inside the working window's days (`lib/weekplan.ts` `dayShapeWindows`). */
+  /** The day (yyyy-MM-dd) catch-up hours were last cleared on: shortfall from that day and earlier no
+   *  longer counts (`daysSinceCatchUpClear`). Absent = never cleared. Day records are kept as they are. */
+  catchUpClearedOn?: string;
   /** A soft cap on sittings in one day (default 7, `DEFAULT_MAX_SITTINGS_PER_DAY`). Going over it is
    *  allowed but warned about: in Claude's week view and block writes, and by the lead-up planner. */
   maxSittingsPerDay?: number;

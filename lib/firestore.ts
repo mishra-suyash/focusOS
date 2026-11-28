@@ -832,6 +832,8 @@ export async function saveUserSettings(uid: string, patch: Partial<Omit<UserSett
   // `enabledModules: undefined` — under merge:true that's normally a no-op (the key is just
   // omitted), the same bug class `setPackDefaultTemplate` had to work around in U2.
   if ("enabledModules" in patch && patch.enabledModules === undefined) payload.enabledModules = deleteField();
+  // Undoing a catch-up clear removes the date, so every day counts again.
+  if ("catchUpClearedOn" in patch && patch.catchUpClearedOn === undefined) payload.catchUpClearedOn = deleteField();
   // Clearing the day shape goes back to "work anywhere in the working window".
   if ("dayShape" in patch && patch.dayShape === undefined) payload.dayShape = deleteField();
   // plan/17 — `merge: true` deep-merges maps, so clearing the reading habit's preferred days or time

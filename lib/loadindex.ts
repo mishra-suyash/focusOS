@@ -145,6 +145,16 @@ export function computeDebtHours(history: Pick<LoadIndexSnapshot, "requiredMinut
   return Math.min(DEBT_CAP_HOURS, Number((shortfallMinutes / 60).toFixed(1)));
 }
 
+/**
+ * The day records catch-up hours are measured over: only days after the person last cleared them
+ * (`UserSettings.catchUpClearedOn`, the Workload card's "Clear"). The day of the clear doesn't count
+ * either, so clearing on a bad evening doesn't bring that same day's shortfall back when it closes.
+ * Nothing is deleted: the records stay as history, and removing the date restores the old figure.
+ */
+export function daysSinceCatchUpClear<T extends { date: string }>(days: T[], clearedOn?: string): T[] {
+  return clearedOn ? days.filter((day) => day.date > clearedOn) : days;
+}
+
 /** Consecutive most-recent days with LI >= 0.9 (plan §10.2's streak, replacing the old pomodoro streak). `history` must be chronological, most recent last. */
 export function computeLoadIndexStreak(history: Pick<LoadIndexSnapshot, "value">[]): number {
   let streak = 0;
