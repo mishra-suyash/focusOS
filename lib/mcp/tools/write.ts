@@ -280,7 +280,7 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext) {
     "update_paper",
     {
       title: "Update a paper's details",
-      description: "Changes a paper's metadata and reading goal. Pass null to clear an optional field. Status moves (queue, shelve, drop) go through update_paper_status.",
+      description: "Changes a paper's metadata and reading goal. Pass null to clear an optional field. goalId links the paper to a Goal (list_goals): its reading sittings and focus time then count toward that goal's weekly hours (pace, Workload, weekly planning). `goal` is something else: the reading-goal text asked before a Skim. Status moves (queue, shelve, drop) go through update_paper_status.",
       inputSchema: z.object({
         id: z.string(),
         title: z.string().min(1).max(500).optional(),
@@ -294,6 +294,7 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext) {
         goal: z.string().max(1000).nullable().optional(),
         goalKind: z.enum(["survey", "method", "baseline", "related-work", "reproduce", "critique"]).nullable().optional(),
         relatedCourseId: z.string().nullable().optional(),
+        goalId: z.string().nullable().optional().describe("The Goal this paper's reading counts toward (an active goal's id), or null to unlink."),
         weeklyTargetDay: z.number().int().min(0).max(6).nullable().optional(),
         idempotencyKey
       }),
@@ -304,11 +305,16 @@ export function registerWriteTools(server: McpServer, ctx: ToolContext) {
       runWrite(ctx, "update_paper", key, async () => {
         const paper = await ctx.get<Paper>("papers", id);
         if (!paper) return fail(`No paper with id ${id}.`);
-        const { set, cleared } = setsAndClears(input, ["venue", "year", "link", "doi", "goal", "goalKind", "relatedCourseId"]);
+        const { set, cleared } = setsAndClears(input, ["venue", "year", "link", "doi", "goal", "goalKind", "relatedCourseId", "goalId"]);
         const patch = set as Partial<Paper>;
         if (weeklyTargetDay === null) patch.weeklyTargetDay = undefined;
         else if (weeklyTargetDay !== undefined) patch.weeklyTargetDay = weeklyTargetDay;
         if (patch.relatedCourseId && !(await ctx.get<Course>("courses", patch.relatedCourseId))) return fail(`No course with id ${patch.relatedCourseId}.`);
+        if (patch.goalId) {
+          const goal = await ctx.get<Goal>("goals", patch.goalId);
+          if (!goal) return fail(`No goal with id ${patch.goalId}.`);
+          if (goal.status !== "active") return fail(`"${goal.title}" is ${goal.status}; link a paper to an active goal.`);
+        }
         if (Object.keys(patch).length === 0 && cleared.length === 0) return fail("Nothing to change.");
         await writes.updatePaper(ctx.uid, id, patch, cleared);
         const after = (await ctx.get<Paper>("papers", id))!;

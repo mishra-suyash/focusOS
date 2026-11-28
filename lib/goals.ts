@@ -1,7 +1,7 @@
 import { sessionSlotDayKey } from "@/lib/dates";
 import { minutesFromTime } from "@/lib/schedule";
 import { getActiveTerm } from "@/lib/terms";
-import type { DailySchedule, Goal, GoalMilestone, PomodoroSession, ScheduleSlot, Term } from "@/types";
+import type { DailySchedule, Goal, GoalMilestone, Paper, PomodoroSession, ScheduleSlot, Term } from "@/types";
 
 /**
  * A `break`-horizon goal only counts on the days its own `termId` is actually
@@ -78,35 +78,47 @@ export interface GoalPace {
 
 /**
  * How a goal's weekly hours are going (mid-week pace). A goal's time is its own blocks
- * (`objectiveRef.kind === "goal"`) plus goal-bucket work in its linked courses, the same two routes the
- * weekly planner books it through. Logged = focus sessions in those blocks or tagged to that bucket,
- * each counted once. Planned = those blocks still ahead (a block behind you counts only through what
+ * (`objectiveRef.kind === "goal"`), goal-bucket work in its linked courses, and (plan/20 §4) reading on
+ * papers linked to it (`Paper.goalId`): blocks with that paper's objective, and any focus session on
+ * that paper, including a habit sitting that picked it at start. Logged = focus sessions in those
+ * blocks, tagged to that bucket or on those papers, each counted once. Planned = those blocks still ahead (a block behind you counts only through what
  * was logged in it). The warning fires from Tuesday when nothing at all is planned or logged, and from
  * Wednesday when planned + logged is under half the target.
  */
 export function goalWeekPace(params: {
   goals: Pick<Goal, "id" | "title" | "status" | "targetHoursPerWeek" | "linked">[];
   schedules: Pick<DailySchedule, "dateKey" | "slots">[];
-  sessions: Pick<PomodoroSession, "slotId" | "slotDateKey" | "completedAt" | "mode" | "minutes" | "courseId" | "bucket">[];
+  sessions: Pick<PomodoroSession, "slotId" | "slotDateKey" | "completedAt" | "mode" | "minutes" | "courseId" | "bucket" | "paperId">[];
   weekDateKeys: string[];
   todayKey: string;
   nowMinutes: number;
+  papers?: Pick<Paper, "id" | "goalId">[];
 }): GoalPace[] {
-  const { goals, schedules, sessions, weekDateKeys, todayKey, nowMinutes } = params;
+  const { goals, schedules, sessions, weekDateKeys, todayKey, nowMinutes, papers = [] } = params;
   const inWeek = new Set(weekDateKeys);
   const dayIndex = weekDateKeys.indexOf(todayKey);
   return goals
     .filter((goal) => goal.status === "active" && goal.targetHoursPerWeek)
     .map((goal) => {
       const courseIds = new Set(goal.linked.courseIds);
-      const isGoalSlot = (slot: ScheduleSlot) => (slot.objectiveRef?.kind === "goal" && slot.objectiveRef.id === goal.id) || (slot.bucket === "goal" && !!slot.courseId && courseIds.has(slot.courseId));
+      const paperIds = new Set(papers.filter((paper) => paper.goalId === goal.id).map((paper) => paper.id));
+      const isGoalSlot = (slot: ScheduleSlot) =>
+        !slot.rescheduledTo &&
+        ((slot.objectiveRef?.kind === "goal" && slot.objectiveRef.id === goal.id) ||
+          (slot.objectiveRef?.kind === "paper" && paperIds.has(slot.objectiveRef.id)) ||
+          (slot.bucket === "goal" && !!slot.courseId && courseIds.has(slot.courseId)));
       const goalSlots = schedules.filter((s) => inWeek.has(s.dateKey)).flatMap((s) => s.slots.filter(isGoalSlot).map((slot) => ({ slot, dateKey: s.dateKey })));
       const ahead = goalSlots.filter(({ slot, dateKey }) => dateKey > todayKey || (dateKey === todayKey && minutesFromTime(slot.endTime) > nowMinutes));
       const plannedMinutes = ahead.reduce((sum, { slot }) => sum + Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime)), 0);
       const slotKeys = new Set(goalSlots.map(({ slot, dateKey }) => `${dateKey}|${slot.id}`));
       const loggedMinutes = sessions
         .filter((session) => session.mode === "work" && inWeek.has(sessionSlotDayKey(session)))
-        .filter((session) => (session.slotId && slotKeys.has(`${sessionSlotDayKey(session)}|${session.slotId}`)) || (session.bucket === "goal" && !!session.courseId && courseIds.has(session.courseId)))
+        .filter(
+          (session) =>
+            (session.slotId && slotKeys.has(`${sessionSlotDayKey(session)}|${session.slotId}`)) ||
+            (session.bucket === "goal" && !!session.courseId && courseIds.has(session.courseId)) ||
+            (!!session.paperId && paperIds.has(session.paperId))
+        )
         .reduce((sum, session) => sum + session.minutes, 0);
       const targetMinutes = (goal.targetHoursPerWeek ?? 0) * 60;
       const covered = plannedMinutes + loggedMinutes;

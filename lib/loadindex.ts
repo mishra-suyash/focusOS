@@ -1,12 +1,14 @@
 import { getDay, parseISO } from "date-fns";
 import { isModuleEnabled } from "@/lib/features";
-import { goalTargetMinutesForDay } from "@/lib/goals";
+import { isGoalActiveForDate } from "@/lib/goals";
+import type { PlannedWork } from "@/lib/planned-work";
 import { MINUTES_PER_REVISION } from "@/lib/revision";
 import { DEFAULT_WORKING_WINDOW } from "@/lib/weekplan";
 import type { Checkpoint, Course, Goal, LoadIndexBand, LoadIndexSnapshot, RevisionItem, Term, Topic, UserSettings } from "@/types";
 
 export interface LoadIndexInputs {
-  scheduledDeepWorkMinutes: number;
+  /** The day's planned sittings and what they're booked toward (`plannedWorkOf`, lib/planned-work.ts). */
+  planned: PlannedWork;
   revisionDueCount: number;
   revisionsCompletedCount: number;
   checkpoints: Checkpoint[];
@@ -48,38 +50,55 @@ function daysBetween(laterKey: string, earlierKey: string): number {
   return Math.round((new Date(laterKey).getTime() - new Date(earlierKey).getTime()) / 86_400_000);
 }
 
+/** One checkpoint's prep for today: prepEstimateMin spread evenly over its prep lead window, 0 outside it. */
+function checkpointPrepShare(checkpoint: Checkpoint, todayKey: string): number {
+  if (!checkpoint.requiresPrep || checkpoint.status === "done" || checkpoint.status === "missed" || checkpoint.status === "submitted") return 0;
+  const daysUntilDue = daysBetween(checkpoint.dueAt, todayKey);
+  if (daysUntilDue < 0 || daysUntilDue > checkpoint.prepLeadDays || checkpoint.prepLeadDays <= 0) return 0;
+  return checkpoint.prepEstimateMin / checkpoint.prepLeadDays;
+}
+
 /** prepEstimateMin spread evenly over the checkpoint's prep lead window, summed across every checkpoint whose window covers today. */
 export function checkpointPrepOwedMinutes(checkpoints: Checkpoint[], todayKey: string): number {
-  return checkpoints.reduce((sum, checkpoint) => {
-    if (!checkpoint.requiresPrep || checkpoint.status === "done" || checkpoint.status === "missed" || checkpoint.status === "submitted") return sum;
-    const daysUntilDue = daysBetween(checkpoint.dueAt, todayKey);
-    if (daysUntilDue < 0 || daysUntilDue > checkpoint.prepLeadDays || checkpoint.prepLeadDays <= 0) return sum;
-    return sum + checkpoint.prepEstimateMin / checkpoint.prepLeadDays;
-  }, 0);
+  return checkpoints.reduce((sum, checkpoint) => sum + checkpointPrepShare(checkpoint, todayKey), 0);
 }
 
 /** The other half of the plan's required-minutes formula, alongside `goalTargetMinutesForDay` (lib/goals.ts) — courses carry their own weekly target independent of any goal. */
-export function courseTargetMinutesForDay(courses: Course[], todayKey: string, daysInWeek = 7): number {
-  const active = courses.filter((course) => {
-    if (course.status === "dropped") return false;
-    if (course.endDate && todayKey > course.endDate) return false;
-    if (course.startDate && todayKey < course.startDate) return false;
-    return true;
-  });
-  return active.reduce((sum, course) => sum + (course.targetMinutesPerWeek ?? 0) / daysInWeek, 0);
+function isCourseLive(course: Course, todayKey: string): boolean {
+  if (course.status === "dropped") return false;
+  if (course.endDate && todayKey > course.endDate) return false;
+  if (course.startDate && todayKey < course.startDate) return false;
+  return true;
 }
 
+export function courseTargetMinutesForDay(courses: Course[], todayKey: string, daysInWeek = 7): number {
+  return courses.filter((course) => isCourseLive(course, todayKey)).reduce((sum, course) => sum + (course.targetMinutesPerWeek ?? 0) / daysInWeek, 0);
+}
+
+/**
+ * plan/20 §2 — what the day asks for: every planned sitting (deep work, reading, admin), plus each
+ * standing target's daily share **less what the day's sittings already book toward it**. Before, only
+ * deep-work blocks counted while every focus minute counted as done, so a planned reading day read as
+ * "Overrun" and a goal sitting was counted twice (as a block and as the goal's share).
+ */
 export function computeRequiredMinutes(inputs: LoadIndexInputs): number {
   if (inputs.isDayOff) return 0;
-  if (isNonWorkingDay(inputs)) return inputs.scheduledDeepWorkMinutes;
+  const planned = inputs.planned;
+  if (isNonWorkingDay(inputs)) return planned.minutes;
   const daysInWeek = inputs.workingDaysOfWeek?.length || 7;
-  return (
-    inputs.scheduledDeepWorkMinutes +
-    inputs.revisionDueCount * MINUTES_PER_REVISION +
-    checkpointPrepOwedMinutes(inputs.checkpoints, inputs.todayKey) +
-    courseTargetMinutesForDay(inputs.courses, inputs.todayKey, daysInWeek) +
-    goalTargetMinutesForDay(inputs.goals ?? [], inputs.terms ?? [], inputs.todayKey, daysInWeek)
-  );
+  const net = (share: number, booked: number) => Math.max(0, share - booked);
+  const revision = net(inputs.revisionDueCount * MINUTES_PER_REVISION, planned.revisionQueue);
+  const prep = inputs.checkpoints.reduce((sum, checkpoint) => sum + net(checkpointPrepShare(checkpoint, inputs.todayKey), planned.byCheckpoint[checkpoint.id] ?? 0), 0);
+  const courses = inputs.courses
+    .filter((course) => isCourseLive(course, inputs.todayKey))
+    .reduce((sum, course) => sum + net((course.targetMinutesPerWeek ?? 0) / daysInWeek, planned.byCourseRevision[course.id] ?? 0), 0);
+  const goals = (inputs.goals ?? [])
+    .filter((goal) => isGoalActiveForDate(goal, inputs.terms ?? [], inputs.todayKey) && goal.targetHoursPerWeek)
+    .reduce((sum, goal) => {
+      const booked = (planned.byGoal[goal.id] ?? 0) + goal.linked.courseIds.reduce((total, courseId) => total + (planned.byGoalCourse[courseId] ?? 0), 0);
+      return sum + net(((goal.targetHoursPerWeek ?? 0) * 60) / daysInWeek, booked);
+    }, 0);
+  return planned.minutes + revision + prep + courses + goals;
 }
 
 export function computeActualMinutes(inputs: Pick<LoadIndexInputs, "focusedMinutes" | "revisionsCompletedCount">): number {

@@ -77,19 +77,34 @@ export type CalendarMode = "push" | "skip" | "dryRun";
  * not only the day just edited, so anything it creates or removes elsewhere is listed by title and
  * date rather than hidden in a count. Only events FocusOS created in its own calendar are ever removed.
  */
+const MAX_NAMED = 25;
+
 function describePush(outcome: PushOutcome, date: string | undefined, verb: "Pushed" | "Would push") {
-  const named = (action: "create" | "delete", here: boolean) =>
-    outcome.items
+  const named = (action: "create" | "update" | "delete", here: boolean) => {
+    const items = outcome.items
       .filter((item) => item.action === action && (date === undefined || (item.date === date) === here))
-      .map((item) => compact({ title: item.title ?? "(untitled)", date: item.date, kind: item.kind }));
+      .map((item) =>
+        compact({
+          title: item.title ?? "(untitled)",
+          date: item.date,
+          kind: item.kind,
+          // An update says what changed when the link doc knows: "renamed from", "moved from". Otherwise
+          // the time, notes or colour changed.
+          was: item.was ? compact({ title: item.was.title, date: item.was.date }) : undefined
+        })
+      );
+    return items.length > MAX_NAMED ? [...items.slice(0, MAX_NAMED), { title: `…and ${items.length - MAX_NAMED} more` }] : items;
+  };
   return compact({
     summary: `${verb} to Google Calendar: ${outcome.created} created, ${outcome.updated} updated, ${outcome.deleted} removed.`,
     created: named("create", true),
+    updated: named("update", true),
     removed: named("delete", true),
     otherDates: date
       ? compact({
-          note: "The push reconciles every FocusOS event in its window, so these changes were on other dates (an unsaved edit elsewhere, a finished task, a block removed in the app). Only events FocusOS created are ever removed.",
+          note: "The push reconciles every FocusOS event in its window, so these changes were on other dates (an unsaved edit elsewhere, a finished task, a block removed in the app). Only events FocusOS created are ever removed. An update with no \"was\" changed its time, notes or colour.",
           created: named("create", false),
+          updated: named("update", false),
           removed: named("delete", false)
         })
       : undefined

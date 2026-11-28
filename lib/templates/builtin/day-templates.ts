@@ -9,11 +9,11 @@ import type { PackId } from "@/types";
  *
  * Slot-type mapping notes (the plan's own [ASSUMPTION] in §6.2, resolved here):
  * "meeting" blocks map onto the existing `admin` type (no schema change needed).
- * "reading" is a new `ScheduleSlotType` value (types/index.ts) rather than
- * `deep_work`, because `scheduleSummary().plannedDeepWork` — which feeds
- * `computeRequiredMinutes` (lib/loadindex.ts) — sums `deep_work` slots only.
- * Typing reading as deep_work would silently inflate required minutes past
- * the plan's own "keep deep work between 2.5 and 4h" guardrail.
+ * "reading" is its own `ScheduleSlotType` value (types/index.ts) rather than
+ * `deep_work`, so the day shape and the reading habit can tell it apart.
+ * (It used to be kept out of Workload's required minutes too; since plan/20
+ * §2 every planned sitting counts, reading included, because its focus time
+ * always counted as done.)
  *
  * The Writing Day table in the plan sums to 4.5h of deep_work-typed time as
  * written; it's trimmed by 30 minutes here (see the "Edit and revise" block)

@@ -64,7 +64,7 @@ export function taskPatch(patch: Partial<Task>, del: unknown, nowIso: string): R
  * by passing `undefined` (the exit patches in lib/papers.ts do), so without this "Read now" or "Undo
  * drop" would do nothing. `shelvedUntil: null` is a real value and is kept.
  */
-const PAPER_CLEARED_BY_UNDEFINED = ["readAt", "fileId", "weeklyTargetDay", "queuedAt", "shelvedUntil", "droppedAt", "inbox"] as const;
+const PAPER_CLEARED_BY_UNDEFINED = ["readAt", "fileId", "weeklyTargetDay", "queuedAt", "shelvedUntil", "droppedAt", "inbox", "goalId"] as const;
 
 /** `updatePaper`'s payload: the patch, `updatedAt`, the clear-field rule, and the attached-PDF invalidation. */
 export function paperPatch(patch: Partial<Paper>, del: unknown, nowIso: string): Record<string, unknown> {

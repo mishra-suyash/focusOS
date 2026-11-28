@@ -1,5 +1,6 @@
 import { taskBucketLabels } from "@/lib/options";
-import { derivePaperStatus } from "@/lib/papers";
+import { todayKey } from "@/lib/dates";
+import { cleanPaperTitle, derivePaperStatus, PASS_LABELS, readingCandidates } from "@/lib/papers";
 import { categoryForSlotType } from "@/lib/timeline";
 import { sittingRemainingMinutes } from "@/lib/tracking";
 import type { Category, Checkpoint, Course, Goal, Paper, PomodoroSession, ScheduleSlot, Task, TaskBucket } from "@/types";
@@ -110,8 +111,13 @@ export function describeObjective(slot: ScheduleSlot, ctx: ObjectiveContext): Ob
       };
     }
     if (ref.kind === "readingHabit") {
-      // plan/17 §5.1 — an open sitting: the time is planned, the paper is chosen when it starts.
-      return { label: "Reading · pick at start", attribution: {} };
+      // plan/17 §5.1 — an open sitting: the time is planned, the paper is chosen when it starts. plan/20
+      // (3.3) — it names the pick it would make now (the reading queue's first), derived so it stays
+      // current; the picker at start, or pinning the block to a paper, changes it.
+      const pick = nextReadingPick(ctx.papers);
+      return pick
+        ? { label: "Reading · next up", detail: `${PASS_LABELS[pick.passNo]}: ${cleanPaperTitle(pick.paper)}`, href: pick.paper.fileId ? `/read/${pick.paper.id}` : `/papers/${pick.paper.id}`, attribution: {} }
+        : { label: "Reading · pick at start", attribution: {} };
     }
     // revisionQueue — the spaced-repetition queue itself, which has no per-item reference: the block
     // is "work the queue", and which items come up is decided at review time, not planning time.
@@ -189,4 +195,10 @@ export interface SittingStartArgs {
   paperId?: string;
   passNo?: 1 | 2 | 3;
   minutes?: number;
+}
+
+/** The paper pass an open reading sitting would start with now, if the papers loaded are full records. */
+function nextReadingPick(papers: ObjectiveContext["papers"]) {
+  if (papers.length === 0 || !papers.every((paper) => "updatedAt" in paper)) return null;
+  return readingCandidates(papers as Paper[], todayKey(), 1).plannable[0] ?? null;
 }

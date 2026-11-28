@@ -379,10 +379,13 @@ function Pass1Form({ paper, compact, onFinish }: { paper: Paper; compact?: boole
   const allStepsChecked = Object.values(steps).every(Boolean);
   const draftContributions = [takeaway.trim(), ...lines(contributions)].filter(Boolean);
   const thin = verdict ? passOutputShortfall(1, { contributions: draftContributions, verdict } as Pass1Output) : null;
+  // plan/20 (1.4): a Skim that goes on, or is all the paper needs, has to leave its contribution; the
+  // weekly gap search and the Read build on it. Parking or dropping the paper is a stop, and may close thin.
+  const outputRequired = Boolean(thin) && (verdict === "continue" || verdict === "done");
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!verdict) return;
+    if (!verdict || outputRequired) return;
     onFinish(
       {
         steps,
@@ -482,11 +485,13 @@ function Pass1Form({ paper, compact, onFinish }: { paper: Paper; compact?: boole
       </MoreOptions>
       {thin ? (
         <p className="text-xs text-amber-700 dark:text-amber-400">
-          A Skim should leave at least one contribution (the one-line takeaway counts). Finishing now closes it as done (thin).
+          {outputRequired
+            ? "Write at least one contribution to finish (the one-line takeaway counts): it's what the Read and the gap search build on."
+            : "A Skim should leave at least one contribution (the one-line takeaway counts). Finishing now closes it as done (thin)."}
         </p>
       ) : null}
-      <button className="btn-primary" disabled={!verdict}>
-        {verdict ? `Finish Skim${thin ? " as thin" : ""} · ${VERDICT_LABELS[verdict]}` : "Choose how this Skim ends"}
+      <button className="btn-primary" disabled={!verdict || outputRequired}>
+        {!verdict ? "Choose how this Skim ends" : outputRequired ? "Write a contribution to finish" : `Finish Skim${thin ? " as thin" : ""} · ${VERDICT_LABELS[verdict]}`}
       </button>
     </form>
   );
@@ -537,7 +542,8 @@ function Pass2Form({
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!outcome || (summaryRequired && !summary.trim())) return;
+    // plan/20 (1.4): a Read that ends grasped or persevering needs its key points; stopping endings are exempt.
+    if (!outcome || (summaryRequired && !summary.trim()) || thin) return;
     const output: Pass2Output = {
       keyPoints: lines(keyPoints),
       figures: figures.filter((figure) => figure.ref.trim()),
@@ -635,17 +641,19 @@ function Pass2Form({
         />
         <textarea className="input min-h-14" value={unclear} onChange={(e) => setUnclear(e.target.value)} placeholder="What's unclear, one per line" />
       </MoreOptions>
-      {thin && !(summaryRequired && !summary.trim()) ? (
+      {thin ? (
         <p className="text-xs text-amber-700 dark:text-amber-400">
-          A Read should leave at least {PASS_OUTPUT_MINIMUM.readKeyPoints} key points. Finishing now closes it as done (thin).
+          Write at least {PASS_OUTPUT_MINIMUM.readKeyPoints} key points to finish ({thin}): they&apos;re what a review or the gap search builds on. Setting the paper aside or returning later doesn&apos;t need them.
         </p>
       ) : null}
-      <button className="btn-primary" disabled={!outcome || (summaryRequired && !summary.trim())}>
+      <button className="btn-primary" disabled={!outcome || (summaryRequired && !summary.trim()) || Boolean(thin)}>
         {!outcome
           ? "Choose how this Read ends"
-          : summaryRequired && !summary.trim()
-            ? "Write the summary to finish"
-            : `Finish Read${thin ? " as thin" : ""} · ${PASS2_OUTCOMES.find((item) => item.value === outcome)!.label}`}
+          : thin
+            ? `Write ${PASS_OUTPUT_MINIMUM.readKeyPoints} key points to finish`
+            : summaryRequired && !summary.trim()
+              ? "Write the summary to finish"
+              : `Finish Read · ${PASS2_OUTCOMES.find((item) => item.value === outcome)!.label}`}
       </button>
     </form>
   );

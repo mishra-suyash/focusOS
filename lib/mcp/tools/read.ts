@@ -15,11 +15,11 @@ import { computeCourseCoverage, computeDebtHours, daysSinceCatchUpClear, compute
 import { computeDayReadout, formatDayReadout, isScoredSitting } from "@/lib/gamify";
 import { compact, fail, isPlainId, ok, paginate, requireModule, type ToolContext } from "@/lib/mcp/context";
 import { dayAsOpened } from "@/lib/mcp/day";
-import { blocksView, courseView, paperView, taskOrder, taskView } from "@/lib/mcp/views";
+import { blocksView, courseView, nextReadingLabel, paperView, taskOrder, taskView } from "@/lib/mcp/views";
 import { pickNextAction } from "@/lib/next-action";
 import { DEADLINE_ALERT_DAYS, unplannedHardDeadlines } from "@/lib/deadlines";
 import { dayShapeWindows, DEFAULT_MAX_SITTINGS_PER_DAY } from "@/lib/weekplan";
-import { derivePaperStatus } from "@/lib/papers";
+import { cleanPaperTitle, derivePaperStatus } from "@/lib/papers";
 import { buildReviewQueue, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, DEFAULT_MAX_REVISIONS_PER_DAY } from "@/lib/revision";
 import { getActiveSlot, getNextSlot, minutesFromTime, slotDuration, sortedSlots } from "@/lib/schedule";
 import { pastBlockOutcome, sittingPlannedMinutes, slotCoverageMinutes } from "@/lib/tracking";
@@ -88,8 +88,8 @@ function sessionsOn(sessions: PomodoroSession[], date: string, slotDay: (s: Pomo
 
 /**
  * What catch-up hours are made of. The figure is Workload's shortfall (required − actual minutes) summed
- * over the last 14 day records, not a list of blocks; required minutes are the day's deep_work blocks,
- * revision due, assessment prep and the daily share of course and goal targets. So each short day is listed with its numbers, and
+ * over the last 14 day records, not a list of blocks; required minutes are the day's planned sittings plus
+ * whatever of revision due, assessment prep and the course and goal shares those sittings don't cover (plan/20 §2). So each short day is listed with its numbers, and
  * beside it the work blocks that day that passed with no focus time (missed) or too little (partial).
  */
 async function catchUpBreakdown(ctx: ToolContext, history: { date: string; requiredMinutes: number; actualMinutes: number }[], sessions: PomodoroSession[], slotDay: (s: PomodoroSession) => string, scheduleDay: string, minute: number) {
@@ -188,7 +188,7 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
     dayShape: settings.dayShape ? { ...settings.dayShape, note: "Deep work goes only in deep windows; light work (admin, revision) in light windows first; no work outside them." } : undefined,
     enabledModules: [...modules],
     dayOff: clockDayDoc?.dayOff ?? workload.day?.dayOff,
-    blocks: slots.length > 0 ? blocksView(slots, { dateKey: scheduleDay, scheduleDay: frame.scheduleDay, minute, sessionsOnDate: sessionsOn(sessions, scheduleDay, frame.slotDay) }) : "No plan saved for this date yet (the app shows only its classes, commitments and routine until something is added).",
+    blocks: slots.length > 0 ? blocksView(slots, { dateKey: scheduleDay, scheduleDay: frame.scheduleDay, minute, sessionsOnDate: sessionsOn(sessions, scheduleDay, frame.slotDay), nextReading: nextReadingLabel(papers, today) }) : "No plan saved for this date yet (the app shows only its classes, commitments and routine until something is added).",
     workload: modules.has("workload")
       ? {
           ...workload.snapshot,
@@ -197,7 +197,7 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
           catchUpHours14Days: computeDebtHours(daysSinceCatchUpClear(historyDays, settings.catchUpClearedOn).map((d) => d.loadIndex!)),
           catchUpClearedOn: settings.catchUpClearedOn ? `${settings.catchUpClearedOn} (the person cleared catch-up hours; only later days count)` : undefined,
           catchUpBreakdown: compact({
-            how: "Sum of each day's Workload shortfall (required − actual minutes) over the last 14 day records, capped at 40 h. Required = that day's deep_work blocks + 3 min per revision due + assessment prep owed + the daily share of course and goal weekly targets; actual = focus minutes + 3 per revision done. Reading/admin blocks aren't in required, so the work blocks that passed unworked (missed = no focus time, partial = under 60%) are listed per day beside the numbers, not as what the figure is made of.",
+            how: "Sum of each day's Workload shortfall (required − actual minutes) over the last 14 day records, capped at 40 h. Required = that day's planned sittings (deep work, reading, admin; not tentative, skipped or rescheduled) + whatever of the revision due (3 min each), assessment prep and the daily share of course and goal weekly targets those sittings don't already cover; actual = focus minutes + 3 per revision done. Days closed before this formula (plan/20, late Nov 2026) keep the figure they closed with, when only deep_work blocks counted. The work blocks that passed unworked (missed = no focus time, partial = under 60%) are listed per day beside the numbers.",
             days: catchUpDays
           }),
           note: "Derived live from today's data; never stored until the day closes."
@@ -230,7 +230,7 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
       ? await (async () => {
           const dates = weekDates(weekStart);
           const week = await Promise.all(dates.map(async (d) => ({ dateKey: d, slots: (await ctx.get<DailySchedule>("dailySchedules", d))?.slots ?? [] })));
-          const warnings = goalWeekPace({ goals, schedules: week, sessions, weekDateKeys: dates, todayKey: frame.scheduleDay, nowMinutes: minute }).filter((g) => g.warning).map((g) => g.warning!);
+          const warnings = goalWeekPace({ goals, schedules: week, sessions, weekDateKeys: dates, todayKey: frame.scheduleDay, nowMinutes: minute, papers }).filter((g) => g.warning).map((g) => g.warning!);
           return warnings.length > 0 ? warnings : undefined;
         })()
       : undefined,
@@ -374,7 +374,7 @@ export function registerReadTools(server: McpServer, ctx: ToolContext) {
           date: key,
           readOnly: key < frame.today || Boolean(day?.closedAt || day?.session?.endedAt) ? "Past or closed day: read-only through this connection." : undefined,
           savedSchedule: schedule ? undefined : "Nothing saved for this date yet; the blocks below are its classes, commitments and routine, as the app shows them.",
-          blocks: blocksView(opened, { dateKey: key, scheduleDay: frame.scheduleDay, minute: frame.minute, sessionsOnDate: onDate }).map((block) => (saved.has(block.slotId as string) || !schedule ? block : { ...block, notYetSaved: true })),
+          blocks: blocksView(opened, { dateKey: key, scheduleDay: frame.scheduleDay, minute: frame.minute, sessionsOnDate: onDate, nextReading: nextReadingLabel(await ctx.list<Paper>("papers"), frame.today) }).map((block) => (saved.has(block.slotId as string) || !schedule ? block : { ...block, notYetSaved: true })),
           day: dayView(day),
           focus: {
             sessions: countedForDay.map((s) => compact({ label: s.label, minutes: s.minutes, completedAt: s.completedAt, category: s.category, taskId: s.taskId, slotId: s.slotId, paperId: s.paperId, passNo: s.passNo, courseId: s.courseId, rating: s.productivityRating, comment: s.comment })),
@@ -406,8 +406,10 @@ export function registerReadTools(server: McpServer, ctx: ToolContext) {
         ctx.list<PomodoroSession>("pomodoroSessions"),
         ctx.list<Goal>("goals")
       ]);
+      const papers = await ctx.list<Paper>("papers");
+      const nextReading = nextReadingLabel(papers, frame.today);
       const cap = settings.maxSittingsPerDay ?? DEFAULT_MAX_SITTINGS_PER_DAY;
-      const views = dates.map((d, i) => blocksView(schedules[i], { dateKey: d, scheduleDay: frame.scheduleDay, minute: frame.minute, sessionsOnDate: sessionsOn(sessions, d, frame.slotDay) }).map((b) => compact({ ...b, note: undefined })));
+      const views = dates.map((d, i) => blocksView(schedules[i], { dateKey: d, scheduleDay: frame.scheduleDay, minute: frame.minute, sessionsOnDate: sessionsOn(sessions, d, frame.slotDay), nextReading }).map((b) => compact({ ...b, note: undefined })));
       // The routine repeats every day; in compact mode it is listed once, with the days it's on.
       const routineKey = (b: { slotId: string; startTime: string; endTime: string }) => `${b.slotId}|${b.startTime}|${b.endTime}`;
       const routine = new Map<string, { title?: string; time: string; days: string[] }>();
@@ -423,7 +425,7 @@ export function registerReadTools(server: McpServer, ctx: ToolContext) {
         });
       }
       const sittingCounts = schedules.map((slots) => slots.filter(isScoredSitting).length);
-      const pace = goalWeekPace({ goals, schedules: dates.map((d, i) => ({ dateKey: d, slots: schedules[i] })), sessions, weekDateKeys: dates, todayKey: frame.scheduleDay, nowMinutes: frame.minute });
+      const pace = goalWeekPace({ goals, schedules: dates.map((d, i) => ({ dateKey: d, slots: schedules[i] })), sessions, weekDateKeys: dates, todayKey: frame.scheduleDay, nowMinutes: frame.minute, papers });
       return ok(
         compact({
           weekStart: start,
@@ -556,12 +558,14 @@ export function registerReadTools(server: McpServer, ctx: ToolContext) {
 
   server.registerTool(
     "list_goals",
-    { title: "List goals", description: "Goals with milestones, horizon, weekly hours target, and linked courses. Defaults to active; status: active | paused | achieved | dropped | all.", inputSchema: z.object({ status: z.enum(["active", "paused", "achieved", "dropped", "all"]).optional() }), annotations: READ },
+    { title: "List goals", description: "Goals with milestones, horizon, weekly hours target, linked courses, and linked papers (papers whose reading counts toward the goal; link one with update_paper goalId). Defaults to active; status: active | paused | achieved | dropped | all.", inputSchema: z.object({ status: z.enum(["active", "paused", "achieved", "dropped", "all"]).optional() }), annotations: READ },
     async ({ status = "active" }) => {
       const blocked = await requireModule(ctx, "goals", "Goals");
       if (blocked) return blocked;
-      const goals = await ctx.list<Goal>("goals");
-      return ok(goals.filter((g) => status === "all" || g.status === status).map((g) => compact({ id: g.id, title: g.title, status: g.status, horizon: g.horizon, termId: g.termId, why: g.why, definitionOfDone: g.definitionOfDone, targetHoursPerWeek: g.targetHoursPerWeek, milestones: g.milestones, linkedCourseIds: g.linked?.courseIds, reviewCadence: g.reviewCadence, lastReviewedAt: g.lastReviewedAt })));
+      const [goals, papers] = await Promise.all([ctx.list<Goal>("goals"), ctx.list<Paper>("papers")]);
+      // Papers whose reading counts toward the goal (Paper.goalId, set with update_paper).
+      const linkedPapers = (goalId: string) => papers.filter((p) => p.goalId === goalId).map((p) => ({ id: p.id, title: cleanPaperTitle(p) }));
+      return ok(goals.filter((g) => status === "all" || g.status === status).map((g) => compact({ id: g.id, title: g.title, status: g.status, horizon: g.horizon, termId: g.termId, why: g.why, definitionOfDone: g.definitionOfDone, targetHoursPerWeek: g.targetHoursPerWeek, milestones: g.milestones, linkedCourseIds: g.linked?.courseIds, linkedPapers: linkedPapers(g.id), reviewCadence: g.reviewCadence, lastReviewedAt: g.lastReviewedAt })));
     }
   );
 

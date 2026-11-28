@@ -1084,12 +1084,16 @@ function PlanWeekContent() {
   // `free` is measured *after* the locked layer, which includes every block already accepted onto a
   // day — so it is compared with what is still to place, never with the whole ask. The old meter set
   // the whole ask against it, counting placed work once as committed and again as no longer free.
-  // A milestone's sittings are that goal's hours, so they leave the "plan yourself" remainder.
+  // A milestone's sittings are that goal's hours, so they leave the "plan yourself" remainder. So does
+  // reading on a paper linked to the goal (plan/20 §4): its sittings are already in the reading row.
   const goalMinutes = activeGoals.reduce((sum, goal) => {
     const onMilestones = upcomingRows
       .filter((row) => row.objectiveRef?.kind === "goal" && row.objectiveRef.id === goal.id)
       .reduce((total, row) => total + row.planned + (upcomingAdds[row.id] ? row.minutes : 0), 0);
-    return sum + Math.max(0, (goal.targetHoursPerWeek ?? 0) * 60 - onMilestones);
+    const onPapers = papers
+      .filter((paper) => paper.goalId === goal.id)
+      .reduce((total, paper) => total + plannedMinutesForObjective(planningSchedules, { kind: "paper", id: paper.id }, weekDateKeys, cutoff), 0);
+    return sum + Math.max(0, (goal.targetHoursPerWeek ?? 0) * 60 - onMilestones - onPapers);
   }, 0);
   const capacity = weekCapacity({ workingWindow, weekDateKeys, claimedSlotsByDate, committedMinutes: totals.ask + goalMinutes, offDateKeys, now });
   const toPlacePct = capacity.freeMinutes > 0 ? (totals.toPlace / capacity.freeMinutes) * 100 : totals.toPlace > 0 ? 100 : 0;

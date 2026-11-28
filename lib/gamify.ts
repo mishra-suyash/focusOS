@@ -63,14 +63,16 @@ export interface DayScore {
  * rather than half-wired.
  */
 export function computeDayScore(input: {
-  slots: Pick<ScheduleSlot, "id" | "type" | "startTime" | "endTime" | "plannedMinutes">[];
+  slots: Pick<ScheduleSlot, "id" | "type" | "startTime" | "endTime" | "plannedMinutes" | "rescheduledTo">[];
   sessions: Pick<PomodoroSession, "slotId" | "mode" | "minutes">[];
   loadIndex?: Pick<LoadIndexSnapshot, "value">;
   isDayOff?: boolean;
   classAttendedSlotIds?: ReadonlySet<string>;
 }): DayScore {
   const { slots, sessions, loadIndex, isDayOff, classAttendedSlotIds } = input;
-  const sittings = slots.filter(isScoredSitting);
+  // A rescheduled original's work moved to its copy (plan/20 §3), so only the copy is scored. A plain
+  // skip still counts: the plan was missed.
+  const sittings = slots.filter((slot) => isScoredSitting(slot) && !slot.rescheduledTo);
 
   const minutesPlanned = sittings.reduce(
     (sum, slot) => sum + sittingPlannedMinutes(slot),
@@ -137,7 +139,7 @@ export interface DayReadout extends DayScore {
 }
 
 export function computeDayReadout(input: {
-  slots: Pick<ScheduleSlot, "id" | "type" | "startTime" | "endTime" | "plannedMinutes">[];
+  slots: Pick<ScheduleSlot, "id" | "type" | "startTime" | "endTime" | "plannedMinutes" | "rescheduledTo">[];
   sessions: Pick<PomodoroSession, "slotId" | "mode" | "minutes">[];
   loadIndex?: Pick<LoadIndexSnapshot, "value">;
   isDayOff?: boolean;
@@ -161,7 +163,7 @@ export function computeDayReadout(input: {
 
   const nowMinute = input.nowMinute!;
   const elapsed = input.slots
-    .filter(isScoredSitting)
+    .filter((slot) => isScoredSitting(slot) && !slot.rescheduledTo)
     .filter((slot) => minutesFromTime(slot.endTime) <= nowMinute)
     .reduce((sum, slot) => sum + sittingPlannedMinutes(slot), 0);
 

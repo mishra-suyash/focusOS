@@ -27,7 +27,7 @@ import {
 } from "@/lib/firestore";
 import { isModuleEnabled } from "@/lib/features";
 import { buildLoadIndexSnapshot, loadIndexScope } from "@/lib/loadindex";
-import { currentMinute, getActiveSlot, minutesFromTime, REST_SLOT_TYPES, scheduleFromTemplate, scheduleSummary, sortedSlots } from "@/lib/schedule";
+import { currentMinute, getActiveSlot, minutesFromTime, REST_SLOT_TYPES, scheduleFromTemplate, sortedSlots } from "@/lib/schedule";
 import { materializeBuiltinDayTemplate, resolvePackBreakDayTemplate, resolvePackWorkdayTemplate } from "@/lib/templates/builtin";
 import { isBreakMode } from "@/lib/terms";
 import { computeDayScore, isScoredSitting } from "@/lib/gamify";
@@ -35,7 +35,8 @@ import { slotAutoStatus } from "@/lib/tracking";
 import { finishedWorkNotice, withoutFinishedWork } from "@/lib/plan-release";
 import { sittingBounds, splitLongBlocks } from "@/lib/timeline";
 import { isPlannerMade, weeklyPlanningSlotForDate } from "@/lib/weekplan";
-import type { Course, DailySchedule, DayTemplate, Goal, PomodoroSession, RevisionItem, ScheduleSlot, Term, WeeklyReview } from "@/types";
+import { plannedWorkOf } from "@/lib/planned-work";
+import type { Course, DailySchedule, DayTemplate, Goal, Paper, PomodoroSession, RevisionItem, ScheduleSlot, Term, WeeklyReview } from "@/types";
 
 function slotsOverlap(a: ScheduleSlot, b: ScheduleSlot) {
   return minutesFromTime(a.startTime) < minutesFromTime(b.endTime) && minutesFromTime(b.startTime) < minutesFromTime(a.endTime);
@@ -386,7 +387,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
   const end = useCallback(async () => {
     if (!user) return;
     try {
-      const [courses, dueItems, reviewedToday, sessions, schedules, goals, terms] = await Promise.all([
+      const [courses, dueItems, reviewedToday, sessions, schedules, goals, terms, papers] = await Promise.all([
         fetchCollection<Course>(user.uid, "courses"),
         fetchCollection<RevisionItem>(user.uid, "revisionItems", [
           where("suspended", "==", false),
@@ -397,7 +398,8 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         fetchCollection<PomodoroSession>(user.uid, "pomodoroSessions"),
         fetchCollection<DailySchedule>(user.uid, "dailySchedules"),
         fetchCollection<Goal>(user.uid, "goals"),
-        fetchCollection<Term>(user.uid, "terms")
+        fetchCollection<Term>(user.uid, "terms"),
+        fetchCollection<Paper>(user.uid, "papers")
       ]);
       const checkpoints = (await Promise.all(courses.map((course) => fetchCourseCheckpoints(user.uid, course.id)))).flat();
       const todaySchedule = schedules.find((item) => item.dateKey === today);
@@ -441,7 +443,7 @@ export function WorkdaySessionProvider({ children }: { children: React.ReactNode
         .filter((item) => item.mode === "work" && sessionDayKey(item) === today)
         .reduce((sum, item) => sum + item.minutes, 0);
       const snapshot = buildLoadIndexSnapshot({
-        scheduledDeepWorkMinutes: scheduleSummary(todaySlots).plannedDeepWork,
+        planned: plannedWorkOf(todaySlots, papers),
         revisionDueCount: dueItems.length,
         revisionsCompletedCount: reviewedToday.length,
         checkpoints,

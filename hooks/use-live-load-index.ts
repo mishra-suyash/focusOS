@@ -9,8 +9,8 @@ import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
 import { todayMetrics } from "@/lib/analytics";
 import { buildLoadIndexSnapshot, loadIndexScope } from "@/lib/loadindex";
-import { scheduleSummary } from "@/lib/schedule";
-import type { Course, DailySchedule, Goal, PomodoroSession, Task, Term } from "@/types";
+import { plannedWorkOf } from "@/lib/planned-work";
+import type { Course, DailySchedule, Goal, Paper, PomodoroSession, Task, Term } from "@/types";
 
 /**
  * The same live Workload computation the Dashboard's widget shows, recomputed from current data
@@ -26,6 +26,7 @@ export function useLiveLoadIndex(todayKey: string) {
   const { items: terms } = useUserCollection<Term>("terms", useMemo(() => [orderBy("startDate", "desc")], []));
   const { items: courses } = useUserCollection<Course>("courses", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [orderBy("createdAt", "desc")], []));
+  const { items: papers } = useUserCollection<Paper>("papers", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { allCheckpoints } = useCourseCheckpoints(courses);
   const { dueCount, reviewedTodayCount } = useRevisionCounts(todayKey);
   const { day } = useDay(todayKey);
@@ -33,7 +34,7 @@ export function useLiveLoadIndex(todayKey: string) {
   const metrics = todayMetrics(tasks, sessions);
 
   return buildLoadIndexSnapshot({
-    scheduledDeepWorkMinutes: scheduleSummary(dailySchedule?.slots ?? []).plannedDeepWork,
+    planned: plannedWorkOf(dailySchedule?.slots ?? [], papers),
     revisionDueCount: dueCount,
     revisionsCompletedCount: reviewedTodayCount,
     checkpoints: allCheckpoints,

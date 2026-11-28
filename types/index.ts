@@ -295,6 +295,11 @@ export interface ScheduleSlot {
   /** A one-off meeting (`type: "meeting"`): who's in it and, while its time isn't fixed, the part of
    *  the day it's expected in. Not a scored sitting: nobody runs a focus timer through a meeting. */
   meeting?: { attendees?: string[]; window?: "morning" | "afternoon" | "evening"; agenda?: string[]; actionItems?: string[] };
+  /** plan/20 §3 — set with `status: "skipped"` when the block's work was moved to another time
+   *  (`reschedule_block`). The copy carries the work, so the original leaves the day score, Workload's
+   *  required minutes, the planner's minute accounting and the calendar push. A plain skip has no
+   *  `rescheduledTo` and still counts against the day score. */
+  rescheduledTo?: { dateKey: string; slotId: string };
   /** plan/17 §7.3 — this sitting's time was set by hand (a drag or typed time in weekly planning)
    *  before it was accepted. "Keep my moves" re-offers it at the same time when a replan releases it. */
   placedByUser?: boolean;
@@ -680,6 +685,10 @@ export interface Paper {
   revisionItemId?: string;
   relatedCourseId?: string;
   relatedTaskId?: string;
+  /** plan/20 §4 — the Goal (`goals/{id}`) this paper's reading counts toward: its sittings and focus
+   *  time count in that goal's weekly pace and come off the goal's share of Workload. Distinct from
+   *  `goal`, which is the reading-goal text asked before a Skim. */
+  goalId?: string;
   citationKey?: string;
   /** The reference the paper was captured from, when its title was pasted as a citation ("Marty et
    *  al. 2019, 'Snap: …' (SOSP)"). `title` keeps only the paper's own title (`splitCitation`). */

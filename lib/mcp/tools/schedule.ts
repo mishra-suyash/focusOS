@@ -27,7 +27,7 @@ import { renumberSittings, sittingBounds, sittingTitle, splitIntoChunks } from "
 import { dayShapeConflict, dayShapeWindows, DEFAULT_MAX_SITTINGS_PER_DAY, DEFAULT_WORKING_WINDOW, energyOf, layOutBackwards, TIME_OF_DAY_WINDOWS, type LeadUpDay } from "@/lib/weekplan";
 import { addDaysToKey } from "@/lib/dates";
 import { getDay, parseISO } from "date-fns";
-import { slotCoverageMinutes } from "@/lib/tracking";
+import { sittingPlannedMinutes, sittingRemainingMinutes, slotAutoStatus, slotCoverageMinutes } from "@/lib/tracking";
 import type { Checkpoint, Course, DailySchedule, Day, Goal, Paper, PomodoroSession, ScheduleSlot, SlotObjectiveRef, Task } from "@/types";
 
 const dateKey = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "yyyy-MM-dd");
@@ -61,8 +61,8 @@ function editableRefusal(slot: ScheduleSlot, day: DayContext): string | null {
   if (isLockedSlot(slot) || slot.id.startsWith("routine-")) return `"${slot.title}" is part of the locked layer (a class, routine block or calendar event) and can't be moved or removed.`;
   if (isFixedSlot(slot) || slot.id === "weekly-planning") return `"${slot.title}" is a fixed commitment and can't be moved or removed here.`;
   if (slot.status !== "upcoming") return `"${slot.title}" is marked ${slot.status}; finished blocks are part of the day's record.`;
-  if (day.isClockDay && minutesFromTime(slot.startTime) <= day.minute) return `"${slot.title}" has already started; its coverage history depends on where it is.`;
-  if (slotCoverageMinutes(slot, day.sessionsOnDate) > 0) return `"${slot.title}" already has focus time logged against it.`;
+  if (day.isClockDay && minutesFromTime(slot.startTime) <= day.minute) return `"${slot.title}" has already started; its coverage history depends on where it is. To do its work later use reschedule_block; to let it go use skip_block.`;
+  if (slotCoverageMinutes(slot, day.sessionsOnDate) > 0) return `"${slot.title}" already has focus time logged against it. To do the rest later use reschedule_block.`;
   return null;
 }
 
@@ -104,11 +104,24 @@ interface DayEdit {
  * one that spans other days is left alone, since its other sittings aren't read here.
  */
 function renumberDay(date: string, before: ScheduleSlot[], after: ScheduleSlot[]): ScheduleSlot[] {
+  return renumberDays([{ date, before, after }])[0];
+}
+
+/**
+ * The same, over several days edited together (a sitting moved to another day): a split counts as
+ * wholly here when all its sittings were on the edited days, and is numbered across them by date and
+ * time, so moving "1 of 2" to tomorrow makes it "2 of 2" rather than two unnumbered halves.
+ */
+function renumberDays(parts: { date: string; before: ScheduleSlot[]; after: ScheduleSlot[] }[]): ScheduleSlot[][] {
   const counts = new Map<string, number>();
-  for (const slot of before) if (slot.chunk) counts.set(slot.chunk.groupId, (counts.get(slot.chunk.groupId) ?? 0) + 1);
+  for (const part of parts) for (const slot of part.before) if (slot.chunk) counts.set(slot.chunk.groupId, (counts.get(slot.chunk.groupId) ?? 0) + 1);
+  const seenBefore = (groupId: string | undefined) => parts.some((part) => part.before.some((b) => b.chunk?.groupId === groupId));
   const wholeHere = (slot: ScheduleSlot) => Boolean(slot.chunk && (counts.get(slot.chunk.groupId) ?? 0) >= slot.chunk.total);
-  const entries = after.map((slot) => ({ ...slot, dateKey: date, chunk: wholeHere(slot) || !before.some((b) => b.chunk?.groupId === slot.chunk?.groupId) ? slot.chunk : undefined, _keep: slot.chunk }));
-  return renumberSittings(entries).map(({ dateKey: _d, _keep, ...slot }) => (slot.chunk || !_keep ? (slot as ScheduleSlot) : ({ ...slot, chunk: _keep } as ScheduleSlot)));
+  const entries = parts.flatMap((part, index) =>
+    part.after.map((slot) => ({ ...slot, dateKey: part.date, _part: index, chunk: wholeHere(slot) || !seenBefore(slot.chunk?.groupId) ? slot.chunk : undefined, _keep: slot.chunk }))
+  );
+  const numbered = renumberSittings(entries).map(({ dateKey: _d, _keep, ...slot }) => (slot.chunk || !_keep ? slot : { ...slot, chunk: _keep }));
+  return parts.map((_, index) => numbered.filter((slot) => slot._part === index).map(({ _part, ...slot }) => slot as ScheduleSlot));
 }
 
 /**
@@ -325,7 +338,150 @@ function slotSummary(slot: ScheduleSlot) {
   return `${slot.startTime}–${slot.endTime} ${slot.title}`;
 }
 
+/**
+ * A write that touches more than one day (reschedule_block across dates): each day is renumbered,
+ * validated and warned about exactly as `scheduleWrite` does for one, nothing is saved unless every day
+ * passes, and the calendar is pushed once at the end.
+ */
+async function multiDayWrite(ctx: ToolContext, tool: string, key: string | undefined, mode: CalendarMode | undefined, build: () => Promise<{ edits: DayEdit[]; result: Record<string, unknown> } | CallToolResult>): Promise<CallToolResult> {
+  const prepare = async () => {
+    const plan = await build();
+    if ("content" in plan) return plan;
+    const numberedDays = renumberDays(plan.edits.map((edit) => ({ date: edit.date, before: edit.day.slots, after: edit.slots })));
+    for (const [index, edit] of plan.edits.entries()) {
+      const numbered = numberedDays[index];
+      const renamed = numbered.filter((slot, i) => slot.title !== edit.slots[i].title).map((slot) => `${edit.slots.find((s) => s.id === slot.id)!.title} → ${slot.title}`);
+      if (renamed.length > 0) plan.result.sittingsRenumbered = [...((plan.result.sittingsRenumbered as string[] | undefined) ?? []), ...renamed];
+      edit.slots = numbered;
+      const errors = validateSlots(edit.slots);
+      if (errors.length > 0) return fail(`${mode === "dryRun" ? "Would be refused" : "Not saved"} (${edit.date}): ${errors.join(" ")}`);
+      Object.assign(plan.result, await shapeWarnings(ctx, edit));
+    }
+    return plan;
+  };
+  if (mode === "dryRun") {
+    const plan = await prepare();
+    if ("content" in plan) return plan;
+    const last = plan.edits[plan.edits.length - 1];
+    const calendar = await pushCalendar(ctx.uid, { mode, date: last.date, override: { dateKey: last.date, slots: sortedSlots(last.slots) } });
+    return ok(compact({ dryRun: "Nothing was saved. Call again without dryRun to make this change.", ...plan.result, calendar }));
+  }
+  return runWrite(ctx, tool, key, async () => {
+    const plan = await prepare();
+    if ("content" in plan) return plan;
+    for (const edit of plan.edits) {
+      await saveDailySchedule(ctx.uid, { dateKey: edit.date, templateId: edit.day.schedule?.templateId, slots: sortedSlots(edit.slots) });
+      ctx.meter.writes += 1;
+    }
+    const calendar = await pushCalendar(ctx.uid, { mode, date: plan.edits.length === 1 ? plan.edits[0].date : undefined });
+    return { result: compact({ ...plan.result, calendar }), changes: plan.edits.flatMap((edit) => edit.changes) };
+  });
+}
+
+/** Why a block that has started or passed can't be skipped or rescheduled, or null when it can. */
+function pastBlockRefusal(slot: ScheduleSlot, day: DayContext): string | null {
+  if (isLockedSlot(slot) || slot.id.startsWith("routine-")) return `"${slot.title}" is part of the locked layer (a class, routine block or calendar event).`;
+  if (isFixedSlot(slot) || slot.id === "weekly-planning") return `"${slot.title}" is a fixed commitment.`;
+  if (slot.rescheduledTo) return `"${slot.title}" was already rescheduled to ${slot.rescheduledTo.dateKey}.`;
+  if (slot.status === "completed" || slotAutoStatus(slot, day.sessionsOnDate) === "completed") return `"${slot.title}" is closed (done); there's nothing left to move.`;
+  return null;
+}
+
 export function registerScheduleTools(server: McpServer, ctx: ToolContext) {
+  server.registerTool(
+    "skip_block",
+    {
+      title: "Mark a missed block skipped",
+      description:
+        "For a block that has started or passed (today) without being finished: marks it Skipped, as the app's wrap-up \"Skipped\" button does, so the wrap-up stops asking about it. A skipped block leaves Workload's planned minutes (the day's standing targets still apply) but still counts against the day score: the plan was missed. To do its work at another time instead, use reschedule_block. A block that hasn't started is removed with remove_block.",
+      inputSchema: z.object({ date: dateKey, slotId: z.string(), calendar: calendarMode, idempotencyKey }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      scopeChallenge: needsWrite
+    },
+    async ({ date, slotId, calendar, idempotencyKey: key }) =>
+      scheduleWrite(ctx, "skip_block", key, calendar, async () => {
+        const day = await openDay(ctx, date);
+        if (typeof day === "string") return fail(day);
+        const slot = day.schedule?.slots.find((s) => s.id === slotId);
+        if (!slot) return fail(day.slots.some((s) => s.id === slotId) ? "That block is part of the fixed layer of the day and can't be skipped." : `No block ${slotId} on ${date}.`);
+        const refused = pastBlockRefusal(slot, day);
+        if (refused) return fail(refused);
+        if (slot.status === "skipped") return fail(`"${slot.title}" is already skipped.`);
+        if (editableRefusal(slot, day) === null) return fail(`"${slot.title}" hasn't started yet: remove it with remove_block, or move it with move_block / reschedule_block.`);
+        const skipped: ScheduleSlot = { ...slot, status: "skipped" };
+        return {
+          date,
+          day,
+          slots: day.slots.map((s) => (s.id === slotId ? skipped : s)),
+          result: { skipped: slotSummary(slot), date, note: "Out of Workload's planned minutes; still counted in the day score." },
+          changes: [{ targetType: "block", targetId: `${date}/${slotId}`, title: slot.title, ...diff(slot, skipped, ["status"]) }]
+        };
+      })
+  );
+
+  server.registerTool(
+    "reschedule_block",
+    {
+      title: "Do a block's work at another time",
+      description:
+        "Moves a block's work to a new time, today or a later date (toDate). For a block that has started or passed without being finished (e.g. a missed morning sitting): a copy with the same title, type, objective, tasks, course/bucket and sitting number is placed at the new time, and the original is marked Skipped and \"rescheduled\", so it leaves Workload and the day score and the wrap-up stops asking about it (the copy carries the work). For a block that hasn't started, it is simply moved (across dates too). endTime defaults to the minutes still left on the block. The copy follows add_block's rules (sitting bounds, no overlaps, not in the past).",
+      inputSchema: z.object({ date: dateKey, slotId: z.string(), toDate: dateKey.optional().describe("Default: the same date."), startTime: clock, endTime: clock.optional(), calendar: calendarMode, idempotencyKey }),
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      scopeChallenge: needsWrite
+    },
+    async ({ date, slotId, toDate, startTime, endTime, calendar, idempotencyKey: key }) =>
+      multiDayWrite(ctx, "reschedule_block", key, calendar, async () => {
+        const target = toDate ?? date;
+        if (target < date) return fail("A block's work can only move to the same date or a later one.");
+        const day = await openDay(ctx, date);
+        if (typeof day === "string") return fail(day);
+        const slot = day.schedule?.slots.find((s) => s.id === slotId);
+        if (!slot) return fail(day.slots.some((s) => s.id === slotId) ? "That block is part of the fixed layer of the day and can't be rescheduled." : `No block ${slotId} on ${date}.`);
+        const refused = pastBlockRefusal(slot, day);
+        if (refused) return fail(refused);
+        const untouched = editableRefusal(slot, day) === null;
+        const targetDay = target === date ? day : await openDay(ctx, target);
+        if (typeof targetDay === "string") return fail(targetDay);
+        // The copy carries what's still to do: a sitting 20 minutes into 55 moves its other 35.
+        const { minChunkMinutes } = sittingBounds(await ctx.settings());
+        const left = isScoredSitting(slot) ? Math.max(minChunkMinutes, sittingRemainingMinutes(slot, day.sessionsOnDate)) : slotDuration(slot);
+        const end = endTime ?? minutesToTime(Math.min(minutesFromTime(startTime) + left, 24 * 60 - 1));
+        const copyId = untouched ? slot.id : crypto.randomUUID();
+        const copy = await buildBlock(ctx, targetDay, { startTime, endTime: end }, { ...slot, id: copyId, status: "upcoming" });
+        if (typeof copy === "string") return fail(copy);
+        copy.plannedMinutes = untouched ? Math.min(sittingPlannedMinutes(slot), slotDuration(copy)) : slotDuration(copy);
+        copy.placedByUser = slot.placedByUser || undefined;
+        if (slot.tentative) copy.tentative = true;
+        if (slot.meeting) copy.meeting = slot.meeting;
+        const where = `${target === date ? "" : `${target} `}${copy.startTime}–${copy.endTime}`;
+        // A passed original stays on its day as the record of what was planned, marked as moved.
+        const original: ScheduleSlot | null = untouched
+          ? null
+          : { ...slot, status: "skipped", rescheduledTo: { dateKey: target, slotId: copy.id }, chunk: undefined, note: [slot.note, `Moved to ${where}`].filter(Boolean).join(" · ") };
+        const withoutOriginal = day.slots.filter((s) => s.id !== slotId);
+        const originalSlots = original ? [...withoutOriginal, original] : withoutOriginal;
+        const view = { dateKey: target, scheduleDay: targetDay.scheduleDay, minute: targetDay.minute, sessionsOnDate: targetDay.sessionsOnDate };
+        const changes: ActivityChange[] = [
+          { targetType: "block", targetId: `${date}/${slotId}`, title: slot.title, before: { date, startTime: slot.startTime, endTime: slot.endTime, status: slot.status }, after: original ? { date, status: "skipped", rescheduledTo: original.rescheduledTo } : null },
+          { targetType: "block", targetId: `${target}/${copy.id}`, title: copy.title, before: null, after: { date: target, startTime: copy.startTime, endTime: copy.endTime, type: copy.type, objective: copy.objectiveRef ?? null } }
+        ];
+        const result = compact({
+          rescheduled: `${slot.title}: ${date} ${slot.startTime}–${slot.endTime} → ${where}`,
+          original: original ? "Kept on its day as Skipped (rescheduled): out of Workload and the day score." : "Hadn't started, so it was moved rather than copied.",
+          placed: blockView(copy, view),
+          builtDay: builtDayNote(targetDay)
+        });
+        if (target === date) return { edits: [{ date, day, slots: [...originalSlots, copy], result: {}, changes }], result };
+        return {
+          edits: [
+            { date, day, slots: originalSlots, result: {}, changes: [changes[0]] },
+            { date: target, day: targetDay, slots: [...targetDay.slots, copy], result: {}, changes: [changes[1]] }
+          ],
+          result
+        };
+      })
+  );
+
   server.registerTool(
     "add_block",
     {

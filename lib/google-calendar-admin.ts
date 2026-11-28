@@ -345,9 +345,18 @@ function buildDesiredEvents(
     }
   }
 
+  // plan/20 §5 — a task with a block for it in the window is on the calendar through that block; pushing
+  // its due-date event as well put the same errand there twice. Once the block is gone (removed, or its
+  // day has rolled out of the window), the task's own event comes back.
+  const tasksWithBlocks = new Set(
+    pushEnabled.planBlocks
+      ? planBlockSchedules.flatMap((schedule) => schedule.slots.filter((slot) => !isLockedSlot(slot) && slot.type !== "class" && !slot.rescheduledTo && slot.status !== "skipped").flatMap((slot) => slot.assignedTaskIds ?? []))
+      : []
+  );
+
   if (pushEnabled.tasksWithDueDate) {
     for (const task of tasks) {
-      if (!task.dueDate) continue;
+      if (!task.dueDate || tasksWithBlocks.has(task.id)) continue;
       drafts.push(taskEventDraft({ taskId: task.id, title: task.title, dueDate: task.dueDate }));
     }
   }
@@ -362,6 +371,8 @@ function buildDesiredEvents(
         // `isLockedSlot` is this set, plus a class copied in by an old template (unlocked so it can be
         // deleted, but still a class) — see plan/13 A3 for why a hand-rolled equivalent of it drifts.
         if (isLockedSlot(slot) || slot.type === "class") continue;
+        // A rescheduled original's work is on its copy (plan/20 §3); pushing both would show it twice.
+        if (slot.rescheduledTo) continue;
         drafts.push(
           planBlockEventDraft({
             dateKey: schedule.dateKey,
@@ -391,6 +402,8 @@ export interface PushItemSummary {
   title?: string;
   /** The date the event is on, for a dated event (a plan block, a task's due date). */
   date?: string;
+  /** For an update: what it was before, when that's known from its link doc (its title, its date). */
+  was?: { title?: string; date?: string };
 }
 
 export interface PushOutcome {
@@ -467,8 +480,13 @@ export async function planGoogleCalendarPush(uid: string, opts: { override?: { d
  */
 async function summarizePlan(plan: PushPlanItem[], linkByKey: Map<string, GoogleCalendarLinkRecord & { title?: string; dateKey?: string }>, lookup?: (eventId: string) => Promise<{ title?: string; date?: string } | null>): Promise<PushItemSummary[]> {
   const items: PushItemSummary[] = plan.map((item) => {
-    if (item.action !== "delete") return { action: item.action, kind: refKind(item.refKey), title: item.draft.summary, date: draftDate(item.draft) };
     const link = linkByKey.get(item.refKey);
+    if (item.action === "update") {
+      const date = draftDate(item.draft);
+      const was = { title: link?.title && link.title !== item.draft.summary ? link.title : undefined, date: link?.dateKey && link.dateKey !== date ? link.dateKey : undefined };
+      return { action: "update", kind: refKind(item.refKey), title: item.draft.summary, date, ...(was.title || was.date ? { was } : {}) };
+    }
+    if (item.action !== "delete") return { action: item.action, kind: refKind(item.refKey), title: item.draft.summary, date: draftDate(item.draft) };
     return { action: "delete", kind: refKind(item.refKey), title: link?.title, date: link?.dateKey ?? planBlockRefKeyDateKey(item.refKey) };
   });
   if (!lookup) return items;

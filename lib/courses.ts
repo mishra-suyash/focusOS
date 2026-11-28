@@ -191,10 +191,12 @@ export interface PlanningCutoff {
  * 60% completion rule reads), never more than its length. No cutoff = the pre-plan/17 behaviour, the
  * slot's length wherever it is.
  */
-export function accountedSlotMinutes(slot: Pick<ScheduleSlot, "id" | "startTime" | "endTime">, dateKey: string, cutoff?: PlanningCutoff): number {
+export function accountedSlotMinutes(slot: Pick<ScheduleSlot, "id" | "startTime" | "endTime" | "rescheduledTo">, dateKey: string, cutoff?: PlanningCutoff): number {
   const length = slotMinutes(slot);
+  // plan/20 §3 — a rescheduled original's work is its copy's; it counts only through what was logged in it.
+  if (slot.rescheduledTo && !cutoff) return 0;
   if (!cutoff) return length;
-  const behind = dateKey < cutoff.todayKey || (dateKey === cutoff.todayKey && minutesFromTime(slot.endTime) <= cutoff.nowMinutes);
+  const behind = slot.rescheduledTo || dateKey < cutoff.todayKey || (dateKey === cutoff.todayKey && minutesFromTime(slot.endTime) <= cutoff.nowMinutes);
   if (!behind) return length;
   const sameDay = cutoff.sessions.filter((session) => sessionSlotDayKey(session) === dateKey);
   return Math.min(slotCoverageMinutes(slot, sameDay), length);

@@ -18,7 +18,7 @@ Call get_overview first. It returns today in one call: the day frame, today's bl
 ## Words (the UI word, then the field/code name)
 - Block = ScheduleSlot, one entry on a day's plan (dailySchedules/{yyyy-MM-dd}.slots).
 - Sitting = one block of work, between the person's minChunkMinutes and maxChunkMinutes long.
-- Workload = the Load Index (loadIndex): actual ÷ required minutes for the day, as a band (behind / light / on_track / ahead / overrun).
+- Workload = the Load Index (loadIndex): actual ÷ required minutes for the day, as a band (behind / light / on_track / ahead / overrun). Required = the day's planned sittings (deep work, reading, admin) plus whatever of revision due, assessment prep and the course/goal daily shares those sittings don't already cover. A paper linked to a goal (update_paper goalId) counts toward that goal.
 - Skim / Read / Deep dive = paper pass 1 / 2 / 3 (Keshav's three-pass method).
 - Assessment = Checkpoint (quiz, lab, assignment, midsem, endsem, presentation).
 - Revision card = RevisionItem. Topics come back on a spaced ladder.
@@ -51,7 +51,8 @@ Workload, catch-up hours, the on-track streak, the day score, "sessions left" on
 - Standing habits: create_commitment / update_commitment, update_routine (carried onto saved days as the app does), list_routine. defer_revision pushes due cards past a crunch day.
 - Respect the day shape (set_day_shape, shown in get_overview): deep work only in deep windows. Writes warn on a shape conflict and when a day goes past the sitting cap (default 7 a day). get_week (compact: true lists the routine once) shows sittings per day and each goal's weekly hours against its target.
 - calendar: "dryRun" on a schedule write previews the day and the Google Calendar push without saving; "skip" saves without pushing. A push reconciles the whole window and names what it created or removed on other dates. It only ever removes events FocusOS created.
-- Past blocks read as completed, partial (under 60% covered) or missed (no focus time). A pass closed without its minimum output reads "done (thin)".
+- Past blocks read as completed, partial (under 60% covered) or missed (no focus time). A missed or started block can't be moved: reschedule_block puts its work at a new time (today or a later date) and marks the original rescheduled, so it leaves Workload and the day score; skip_block marks it skipped (out of Workload's planned minutes, still counted in the day score). A pass closed without its minimum output reads "done (thin)"; in the app a Skim that continues needs a contribution and a grasped Read 3 key points.
+- An open reading sitting (readingHabit) shows nextUp: the paper pass it would start with now. Link a paper to a goal with update_paper goalId so its reading counts toward that goal (list_goals shows linkedPapers).
 
 ## Writing
 - Only change what the person asked for. Prefer the smallest change. Say what you changed, by title, afterwards.

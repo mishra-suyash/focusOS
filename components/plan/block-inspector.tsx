@@ -202,7 +202,15 @@ export function BlockInspector({
             onChange={(event) => onChange({ ...slot, note: event.target.value })}
             placeholder="Optional note"
           />
-          <select className="input" value={slot.status} onChange={(event) => onChange({ ...slot, status: event.target.value as ScheduleSlot["status"] })}>
+          <select
+            className="input"
+            value={slot.status}
+            onChange={(event) => {
+              const status = event.target.value as ScheduleSlot["status"];
+              // A rescheduled original set back to Upcoming or Completed counts again (plan/20 §3).
+              onChange({ ...slot, status, ...(status !== "skipped" ? { rescheduledTo: undefined } : {}) });
+            }}
+          >
             <option value="upcoming">Upcoming</option>
             <option value="completed">Completed</option>
             <option value="skipped">Skipped</option>

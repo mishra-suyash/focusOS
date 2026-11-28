@@ -42,7 +42,8 @@ import { computeStatusPatch } from "@/lib/tasks";
 import { todayMetrics } from "@/lib/analytics";
 import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak, daysSinceCatchUpClear, loadIndexScope } from "@/lib/loadindex";
 import { downloadDailyFramePdf } from "@/lib/pdf";
-import { createSlot, currentMinute, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
+import { plannedWorkOf } from "@/lib/planned-work";
+import { createSlot, currentMinute, minutesToTime, sortedSlots } from "@/lib/schedule";
 import { describeObjective } from "@/lib/objectives";
 import { createTaskBlock, nearestFreeGap, slotTypeForCategory, taskChunkPlan } from "@/lib/timeline";
 import { sittingRemainingMinutes } from "@/lib/tracking";
@@ -97,7 +98,7 @@ function DashboardContent() {
   const [note, setNote] = useState(day?.scratchpad ?? "");
 
   const loadIndex = buildLoadIndexSnapshot({
-    scheduledDeepWorkMinutes: scheduleSummary(dailySchedule?.slots ?? []).plannedDeepWork,
+    planned: plannedWorkOf(dailySchedule?.slots ?? [], papers),
     revisionDueCount: dueCount,
     revisionsCompletedCount: reviewedTodayCount,
     checkpoints: allCheckpoints,
@@ -300,7 +301,7 @@ function DashboardContent() {
       <DeadlineBanner deadlines={unplannedHardDeadlines({ tasks: plannableTasks(tasks, courses), schedules: dailySchedules, todayKey: today })} onSchedule={scheduleTaskToday} />
       {(() => {
         // Mid-week goal pace: a goal with weekly hours that nothing has been planned or logged toward.
-        const behind = goalWeekPace({ goals, schedules: dailySchedules, sessions, weekDateKeys: weekDates(weekStartKey()), todayKey: clockDay, nowMinutes: currentMinute() }).filter((goal) => goal.warning);
+        const behind = goalWeekPace({ goals, schedules: dailySchedules, sessions, weekDateKeys: weekDates(weekStartKey()), todayKey: clockDay, nowMinutes: currentMinute(), papers }).filter((goal) => goal.warning);
         return behind.length > 0 ? (
           <section className="card p-4 text-sm" aria-label="Goals behind this week">
             <p className="label mb-1">Goal pace this week</p>

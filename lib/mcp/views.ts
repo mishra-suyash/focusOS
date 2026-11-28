@@ -3,7 +3,7 @@
  * plus the derived values computed the way the app computes them (never a second stored copy).
  */
 import { effectiveCourseStatus } from "@/lib/courses";
-import { cleanPaperTitle, derivePaperStatus, isBackFromShelf, isThinPass, nextReadingPass, passOutputShortfall, PASS_LABELS } from "@/lib/papers";
+import { cleanPaperTitle, derivePaperStatus, isBackFromShelf, isThinPass, nextReadingPass, passOutputShortfall, PASS_LABELS, readingCandidates } from "@/lib/papers";
 import { computeSlotStatus, isFixedSlot, isLockedSlot, slotDuration, sortedSlots } from "@/lib/schedule";
 import { isScoredSitting } from "@/lib/gamify";
 import { pastBlockOutcome, sittingPlannedMinutes, slotAutoStatus, slotCoverageMinutes } from "@/lib/tracking";
@@ -20,7 +20,7 @@ export type Timing = "past" | "now" | "upcoming";
  * a work block is completed / partial / missed by its focus time (`pastBlockOutcome`), anything else
  * reads "past"; a hand-set Done or Skipped wins.
  */
-export function blockView(slot: ScheduleSlot, ctx: { dateKey: string; scheduleDay: string; minute: number; sessionsOnDate: PomodoroSession[] }) {
+export function blockView(slot: ScheduleSlot, ctx: { dateKey: string; scheduleDay: string; minute: number; sessionsOnDate: PomodoroSession[]; nextReading?: string }) {
   const timing: Timing =
     ctx.dateKey < ctx.scheduleDay ? "past" : ctx.dateKey > ctx.scheduleDay ? "upcoming" : (({ active: "now", completed: "past", upcoming: "upcoming", skipped: "past" }) as const)[computeSlotStatus({ ...slot, status: "upcoming" }, ctx.minute)];
   const covered = slotCoverageMinutes(slot, ctx.sessionsOnDate);
@@ -28,8 +28,10 @@ export function blockView(slot: ScheduleSlot, ctx: { dateKey: string; scheduleDa
   const fixed = isFixedSlot(slot);
   // The stored status is only what someone last set; the clock doesn't rewrite it. Read it the way the
   // wrap-up does: a work block whose time passed is completed, partial or missed by its focus time.
-  const status =
-    timing === "past"
+  // A rescheduled original (plan/20 §3) is read as such, whatever the clock says: its work is the copy's.
+  const status = slot.rescheduledTo
+    ? "rescheduled"
+    : timing === "past"
       ? isScoredSitting(slot)
         ? pastBlockOutcome(slot, ctx.sessionsOnDate)
         : slot.status === "upcoming" || slot.status === "active"
@@ -57,7 +59,11 @@ export function blockView(slot: ScheduleSlot, ctx: { dateKey: string; scheduleDa
     bucket: slot.bucket,
     objective: slot.objectiveRef,
     sitting: slot.chunk ? `${slot.chunk.index} of ${slot.chunk.total}` : undefined,
-    plannedMinutes: planned !== slotDuration(slot) ? planned : undefined,
+    // Always shown on a sitting (plan/20, 1.1): it is what the day score and Workload measure the block against.
+    plannedMinutes: isScoredSitting(slot) || planned !== slotDuration(slot) ? planned : undefined,
+    rescheduledTo: slot.rescheduledTo,
+    // An open reading sitting picks its paper at start; this is the pick it would make now (3.3).
+    nextUp: slot.objectiveRef?.kind === "readingHabit" && timing !== "past" ? ctx.nextReading : undefined,
     note: slot.note || undefined,
     tentative: slot.tentative || undefined,
     meeting: slot.meeting
@@ -66,6 +72,12 @@ export function blockView(slot: ScheduleSlot, ctx: { dateKey: string; scheduleDa
 
 export function blocksView(slots: ScheduleSlot[], ctx: Parameters<typeof blockView>[1]) {
   return sortedSlots(slots).map((slot) => blockView(slot, ctx));
+}
+
+/** The paper pass an open reading sitting would start with now: the reading queue's first pick. */
+export function nextReadingLabel(papers: Paper[], todayKey: string): string | undefined {
+  const pick = readingCandidates(papers, todayKey, 1).plannable[0];
+  return pick ? `${PASS_LABELS[pick.passNo]}: ${cleanPaperTitle(pick.paper)}` : undefined;
 }
 
 export function taskView(task: Task, opts: { full?: boolean } = {}) {
@@ -129,6 +141,7 @@ export function paperView(paper: Paper, todayKey: string) {
     nextPass: next ? `${next} (${PASS_LABELS[next]})` : undefined,
     passes: compact({ skim: pass(1), read: pass(2), deepDive: pass(3) }),
     goal: paper.goal,
+    goalId: paper.goalId,
     relatedCourseId: paper.relatedCourseId,
     groupIds: paper.groupIds,
     hasPdf: paper.fileId ? true : undefined,

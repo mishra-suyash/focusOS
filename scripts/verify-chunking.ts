@@ -23,6 +23,7 @@ import { minutesFromTime } from "../lib/schedule";
 import { calculateStreak } from "../lib/analytics";
 import { addDaysToKey, dayEndMinutes, scheduleDayKey, sessionDayKey, sessionSlotDayKey, todayKey, zonedDayKey } from "../lib/dates";
 import { buildLoadIndexSnapshot, computeRequiredMinutes, loadIndexScope } from "../lib/loadindex";
+import { plannedMinutesOnly } from "../lib/planned-work";
 import { MINUTES_PER_REVISION } from "../lib/revision";
 import type { Course, DailySchedule, Paper, PomodoroSession, ScheduleSlot, Task } from "../types";
 
@@ -736,17 +737,17 @@ const donePass = (minutes: number, output?: unknown) => ({ status: "done" as con
 // ---- QA decisions 2026-11-05: Workload on non-working days, modules off ----
 {
   const course = { id: "c", status: "active", targetMinutesPerWeek: 300 } as unknown as Course;
-  const base = { scheduledDeepWorkMinutes: 0, revisionDueCount: 2, revisionsCompletedCount: 0, checkpoints: [], courses: [course], focusedMinutes: 0 };
+  const base = { planned: plannedMinutesOnly(0), revisionDueCount: 2, revisionsCompletedCount: 0, checkpoints: [], courses: [course], focusedMinutes: 0 };
   const monFri = [1, 2, 3, 4, 5];
   const monday = "2026-11-02";
   const sunday = "2026-11-01";
   check("with no working days given, nothing changes", Math.round(computeRequiredMinutes({ ...base, todayKey: monday })) === Math.round(300 / 7 + 2 * MINUTES_PER_REVISION));
   check("weekly targets spread over working days", Math.round(computeRequiredMinutes({ ...base, todayKey: monday, workingDaysOfWeek: monFri })) === Math.round(60 + 2 * MINUTES_PER_REVISION));
   check("a non-working day asks for nothing", computeRequiredMinutes({ ...base, todayKey: sunday, workingDaysOfWeek: monFri }) === 0);
-  check("a non-working day with blocks asks for those alone", computeRequiredMinutes({ ...base, scheduledDeepWorkMinutes: 120, todayKey: sunday, workingDaysOfWeek: monFri }) === 120);
+  check("a non-working day with blocks asks for those alone", computeRequiredMinutes({ ...base, planned: plannedMinutesOnly(120), todayKey: sunday, workingDaysOfWeek: monFri }) === 120);
   const rest = buildLoadIndexSnapshot({ ...base, todayKey: sunday, workingDaysOfWeek: monFri });
   check("an empty non-working day reads as a clean day, not Behind", rest.value === 1 && rest.band === "on_track", rest.band);
-  check("a day off still asks for nothing", computeRequiredMinutes({ ...base, scheduledDeepWorkMinutes: 120, todayKey: monday, isDayOff: true }) === 0);
+  check("a day off still asks for nothing", computeRequiredMinutes({ ...base, planned: plannedMinutesOnly(120), todayKey: monday, isDayOff: true }) === 0);
 
   const off = loadIndexScope({ enabledModules: ["today", "tasks", "plan", "focus", "wrapup", "readingList"] });
   check("modules off drop out of the Load Index", off.goals?.length === 0 && off.courses?.length === 0 && off.revisionDueCount === 0);

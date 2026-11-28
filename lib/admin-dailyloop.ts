@@ -8,7 +8,7 @@ import { DEFAULT_TIMEZONE } from "@/lib/google-calendar";
 import { buildLoadIndexSnapshot, computeRequiredMinutes, loadIndexScope } from "@/lib/loadindex";
 import { runAiTask } from "@/lib/ai/run";
 import type { ReviewEodOutput } from "@/lib/ai/schemas";
-import { scheduleSummary } from "@/lib/schedule";
+import { plannedWorkOf } from "@/lib/planned-work";
 import type { DailySchedule, Day, EveningRollup, MorningBrief, PomodoroSession, Task, UserSettings } from "@/types";
 
 /** How far back close-day looks: the day that just ended, and one a run landing early left open. */
@@ -114,10 +114,10 @@ export async function loadIndexForDay(uid: string, dateKey: string, settings: Pa
     adminDb().collection("users").doc(uid).collection("days").doc(dateKey).get(),
     fetchDailySchedule(uid, dateKey)
   ]);
-  const { checkpoints, tasks, sessions, courses, goals, terms } = data;
+  const { checkpoints, tasks, sessions, courses, goals, terms, papers } = data;
   const day = dayDoc.data() as Day | undefined;
   const snapshot = buildLoadIndexSnapshot({
-    scheduledDeepWorkMinutes: scheduleSummary(schedule?.slots ?? []).plannedDeepWork,
+    planned: plannedWorkOf(schedule?.slots ?? [], papers),
     revisionDueCount: dueRevisionCount,
     revisionsCompletedCount,
     checkpoints,
@@ -194,7 +194,7 @@ export async function generateMorningBrief(uid: string): Promise<MorningBrief> {
   ]);
 
   const requiredMinutesTarget = computeRequiredMinutes({
-    scheduledDeepWorkMinutes: scheduleSummary(schedule?.slots ?? []).plannedDeepWork,
+    planned: plannedWorkOf(schedule?.slots ?? [], papers),
     revisionDueCount: dueRevisionCount,
     revisionsCompletedCount: 0,
     checkpoints,

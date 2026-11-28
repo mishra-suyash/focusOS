@@ -17,12 +17,14 @@ import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { useFeatures } from "@/hooks/use-features";
 import { useUserCollection } from "@/hooks/use-user-collection";
+import { useUserSettings } from "@/hooks/use-user-settings";
+import { isModuleEnabled } from "@/lib/features";
 import { callAiTask } from "@/lib/ai/client";
 import type { ReadingPlanOutput } from "@/lib/ai/schemas";
 import { subscribeDoc, updatePaper } from "@/lib/firestore";
 import { dateKeyOfIso } from "@/lib/dates";
 import { derivePaperStatus, nextReadingPass, PASS_LABELS, paperStatusLabels, runningPass, totalReadingMinutes } from "@/lib/papers";
-import type { FileRef, GoalKind, Pass1Output, Pass2Output, Paper, PomodoroSession } from "@/types";
+import type { FileRef, Goal, GoalKind, Pass1Output, Pass2Output, Paper, PomodoroSession } from "@/types";
 
 export default function PaperDetailPage() {
   const params = useParams<{ id: string }>();
@@ -35,6 +37,8 @@ export default function PaperDetailPage() {
   // plan/17 §5.5 — a pass's minutes are its focus sessions, so the pass panels need them.
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [where("paperId", "==", params.id)], [params.id]));
   const { items: library } = useUserCollection<Paper>("papers", useMemo(() => [], []));
+  const { items: goals } = useUserCollection<Goal>("goals", useMemo(() => [], []));
+  const { settings } = useUserSettings();
 
   useEffect(() => {
     if (!user) return;
@@ -196,6 +200,30 @@ export default function PaperDetailPage() {
               </select>
             </MoreOptions>
           </section>
+          {isModuleEnabled(settings, "goals") && (goals.some((item) => item.status === "active") || paper.goalId) ? (
+            <section className="card p-4">
+              <h2 className="mb-1 text-base font-semibold">Counts toward goal</h2>
+              <p className="mb-2 text-xs text-ink-500">Reading this paper counts toward the goal&apos;s weekly hours and its pace.</p>
+              <select
+                className="input"
+                aria-label="Counts toward goal"
+                value={paper.goalId ?? ""}
+                onChange={(e) => {
+                  if (user) updatePaper(user.uid, paper.id, { goalId: e.target.value || undefined });
+                }}
+              >
+                <option value="">No goal</option>
+                {goals
+                  .filter((item) => item.status === "active" || item.id === paper.goalId)
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.title}
+                      {item.status !== "active" ? ` (${item.status})` : ""}
+                    </option>
+                  ))}
+              </select>
+            </section>
+          ) : null}
           <section className="card p-4">
             <h2 className="mb-3 text-base font-semibold">PDF</h2>
             <PaperFileAttach paperId={paper.id} fileId={paper.fileId} file={file} />
