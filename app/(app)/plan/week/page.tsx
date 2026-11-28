@@ -85,7 +85,8 @@ import {
   type OwedPass,
   type ReleasedSlot,
   type WeekProposal,
-  type WeekProposalCandidate
+  type WeekProposalCandidate,
+  dayShapeWindows
 } from "@/lib/weekplan";
 import type {
   ClassLog,
@@ -1138,7 +1139,8 @@ function PlanWeekContent() {
     }
   }
   const orderedCandidates = [...extraCandidates, ...candidates.filter((c) => c.key && keptMoveKeys.has(c.key)), ...candidates.filter((c) => !c.key || !keptMoveKeys.has(c.key))];
-  const freshProposals = placeProposals(orderedCandidates, weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys, now);
+  // The day shape: deep work only in deep windows, light work in light windows first (settings.dayShape).
+  const freshProposals = placeProposals(orderedCandidates, weekDateKeys, claimedSlotsByDate, workingWindow, offDateKeys, now, dayShapeWindows(settings.dayShape));
   /** A committed week shows what was committed and can't be edited — except in Replan mode. */
   const frozen = committed && !replan;
   // A plan saved by an earlier replan kept the sittings it put on days in this list too; one already

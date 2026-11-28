@@ -6,6 +6,11 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { clsx } from "clsx";
+import { DeadlineBanner } from "@/components/deadline-banner";
+import { unplannedHardDeadlines } from "@/lib/deadlines";
+import { goalWeekPace } from "@/lib/goals";
+import { dayShapeWindows, energyOf, windowsForEnergy, workWindowsOf } from "@/lib/weekplan";
+import { plannableTasks } from "@/lib/courses";
 import { AlertsBanner } from "@/components/alerts-banner";
 import { NudgeBanner } from "@/components/nudge-banner";
 import { DashboardCustomizeDialog } from "@/components/dashboard-customize";
@@ -27,7 +32,7 @@ import { useNextAction } from "@/hooks/use-next-action";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
 import { useUserSettings } from "@/hooks/use-user-settings";
-import { friendlyDate, scheduleDayKey, sessionDayKey, sessionSlotDayKey, todayKey } from "@/lib/dates";
+import { friendlyDate, scheduleDayKey, sessionDayKey, sessionSlotDayKey, todayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { resolveDashboardWidgets } from "@/lib/dashboard-widgets";
 import { saveDailySchedule, saveDayFields, updateTask } from "@/lib/firestore";
 import { categoryLabels } from "@/lib/options";
@@ -38,7 +43,7 @@ import { buildLoadIndexSnapshot, computeDebtHours, computeLoadIndexStreak, loadI
 import { downloadDailyFramePdf } from "@/lib/pdf";
 import { createSlot, currentMinute, minutesToTime, scheduleSummary, sortedSlots } from "@/lib/schedule";
 import { describeObjective } from "@/lib/objectives";
-import { createTaskBlock, nearestFreeGap, taskChunkPlan } from "@/lib/timeline";
+import { createTaskBlock, nearestFreeGap, slotTypeForCategory, taskChunkPlan } from "@/lib/timeline";
 import { sittingRemainingMinutes } from "@/lib/tracking";
 import { isBreakMode } from "@/lib/terms";
 import type { Course, DailySchedule, Day, Goal, Paper, PomodoroSession, ScheduleSlotType, Task, Term } from "@/types";
@@ -162,6 +167,35 @@ function DashboardContent() {
     router.replace("/dashboard", { scroll: false });
   }, [searchParams, clockSchedule, dailySchedulesLoading, papersLoading]);
 
+  /** A hard deadline's first sitting, in today's next free gap (the deadline banner). False when nothing fits today. */
+  async function scheduleTaskToday(taskId: string): Promise<boolean> {
+    const task = tasks.find((item) => item.id === taskId);
+    if (!user || !task) return false;
+    const currentSlots = clockSchedule?.slots ?? [];
+    const workMinutes = settings.workMinutes ?? 25;
+    const chunkSettings = { maxChunkMinutes: settings.maxChunkMinutes, minChunkMinutes: settings.minChunkMinutes };
+    const plan = taskChunkPlan(task, workMinutes, chunkSettings);
+    // Only inside today's remaining work windows (the day shape, else the working window): a hard
+    // deadline still doesn't get planned after the evening cutoff. Nothing fits = plan the week instead.
+    const now = currentMinute();
+    const energy = energyOf({ type: slotTypeForCategory(task.category) });
+    const windows = windowsForEnergy(dayShapeWindows(settings.dayShape), energy) ?? workWindowsOf(settings);
+    let gapStart: number | null = null;
+    for (const window of windows) {
+      if (window.end <= now) continue;
+      const found = nearestFreeGap(currentSlots, Math.max(now, window.start), plan.firstMinutes);
+      if (found !== null && found >= Math.max(now, window.start) && found + plan.firstMinutes <= window.end) {
+        gapStart = found;
+        break;
+      }
+    }
+    if (gapStart === null) return false;
+    const block = createTaskBlock(task, workMinutes, gapStart, chunkSettings);
+    await saveDailySchedule(user.uid, { dateKey: clockDay, templateId: clockSchedule?.templateId, slots: sortedSlots([...currentSlots, block]) });
+    router.push(`/plan/day?date=${clockDay}`);
+    return true;
+  }
+
   /** S5 "Schedule it" on the Up next card — places it in the next free gap after now and opens Plan — Day. */
   async function scheduleAction() {
     if (!user || !nextAction || nextAction.kind === "rest") return;
@@ -260,6 +294,26 @@ function DashboardContent() {
         </div>
       </div>
       <AlertsBanner />
+      <DeadlineBanner deadlines={unplannedHardDeadlines({ tasks: plannableTasks(tasks, courses), schedules: dailySchedules, todayKey: today })} onSchedule={scheduleTaskToday} />
+      {(() => {
+        // Mid-week goal pace: a goal with weekly hours that nothing has been planned or logged toward.
+        const behind = goalWeekPace({ goals, schedules: dailySchedules, sessions, weekDateKeys: weekDates(weekStartKey()), todayKey: clockDay, nowMinutes: currentMinute() }).filter((goal) => goal.warning);
+        return behind.length > 0 ? (
+          <section className="card p-4 text-sm" aria-label="Goals behind this week">
+            <p className="label mb-1">Goal pace this week</p>
+            <ul className="space-y-1">
+              {behind.map((goal) => (
+                <li key={goal.goalId} className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-amber-700 dark:text-amber-400">{goal.warning}</span>
+                  <Link href="/plan/week" className="btn-secondary py-1 text-xs">
+                    Plan it
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null;
+      })()}
       <NudgeBanner data={{ tasks, sessions, papers, courses, goals, recentDays }} />
       <GettingStartedChecklist data={{ tasks, sessions, papers, courses, goals, recentDays }} />
       {widgets.has("morningOverview") ? <MorningBriefCard brief={day?.brief} schedule={dailySchedule} /> : null}

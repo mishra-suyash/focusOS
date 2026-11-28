@@ -1,4 +1,4 @@
-import { Book, Briefcase, Brain, CalendarClock, Car, Coffee, Dumbbell, GraduationCap, Moon, Sparkles, Utensils, type LucideIcon } from "lucide-react";
+import { Book, Briefcase, Brain, CalendarClock, Car, Coffee, Dumbbell, GraduationCap, Moon, Sparkles, Users, Utensils, type LucideIcon } from "lucide-react";
 import type { DailySchedule, DayTemplate, ScheduleSlot, ScheduleSlotStatus, ScheduleSlotType, Task } from "@/types";
 
 /** Blocks that are rest, not work: no focus sitting is started from them, the idle timer doesn't follow
@@ -17,6 +17,7 @@ export const slotTypes: ScheduleSlotType[] = [
   "gym",
   "class",
   "custom",
+  "meeting",
   "external"
 ];
 
@@ -42,6 +43,7 @@ export const slotTypeLabels: Record<ScheduleSlotType, string> = {
   gym: "Gym",
   class: "Class",
   custom: "Custom",
+  meeting: "Meeting",
   external: "Google Calendar"
 };
 
@@ -57,6 +59,7 @@ export const slotTypeStyles: Record<ScheduleSlotType, string> = {
   gym: "border-rose-500 bg-rose-500/10 text-rose-700 dark:text-rose-300",
   class: "border-fuchsia-500 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300",
   custom: "border-ink-400 bg-white text-ink-700 dark:bg-ink-900 dark:text-ink-200",
+  meeting: "border-orange-500 bg-orange-500/10 text-orange-700 dark:text-orange-300",
   external: "border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300"
 };
 
@@ -73,6 +76,7 @@ export const slotTypeIcons: Record<ScheduleSlotType, LucideIcon> = {
   gym: Dumbbell,
   class: GraduationCap,
   custom: Sparkles,
+  meeting: Users,
   external: CalendarClock
 };
 
@@ -164,6 +168,8 @@ export function validateSlots(slots: ScheduleSlot[]) {
     const end = minutesFromTime(slot.endTime);
     if (!slot.title.trim()) errors.push(`Slot ${index + 1} needs a title.`);
     if (end <= start) errors.push(`${slot.title || `Slot ${index + 1}`} must end after it starts.`);
+    // A tentative block is soft: it holds time without blocking it, so it neither clashes nor is clashed with.
+    if (slot.tentative) return;
     if (reaching && start < minutesFromTime(reaching.endTime) && !(isFixedSlot(slot) && isFixedSlot(reaching))) {
       errors.push(`${slot.title || `Slot ${index + 1}`} overlaps with ${reaching.title}.`);
     }
@@ -245,7 +251,9 @@ export function createSlot(partial: Partial<ScheduleSlot> = {}): ScheduleSlot {
     // That is exactly how `acceptProposals` used to lose `refType`/`refId` (plan/16 §2.2).
     objectiveRef: partial.objectiveRef,
     chunk: partial.chunk,
-    plannedMinutes: partial.plannedMinutes
+    plannedMinutes: partial.plannedMinutes,
+    tentative: partial.tentative,
+    meeting: partial.meeting
   };
 }
 

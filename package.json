@@ -31,7 +31,8 @@
     "verify:reading": "tsx scripts/verify-reading.ts",
     "verify:notify": "tsx scripts/verify-notify.ts",
     "verify:terms": "tsx scripts/verify-terms.ts",
-    "verify:patches": "tsx scripts/verify-patches.ts"
+    "verify:patches": "tsx scripts/verify-patches.ts",
+    "verify:planning-feedback": "tsx scripts/verify-planning-feedback.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",

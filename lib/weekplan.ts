@@ -12,6 +12,76 @@ export const DEFAULT_WORKING_WINDOW: WorkingWindow = {
   daysOfWeek: [1, 2, 3, 4, 5, 6]
 };
 
+export type DayShape = NonNullable<UserSettings["dayShape"]>;
+export type Energy = "deep" | "light";
+export interface ShapeWindow {
+  start: number;
+  end: number;
+  energy: Energy;
+}
+
+/**
+ * What kind of attention a block asks for: deep (deep_work, reading, an assessment or paper sitting)
+ * or light (admin, working the revision queue). Anything else (meals, commutes, classes) isn't work
+ * the planner places, so it has no energy.
+ */
+export function energyOf(item: { type?: ScheduleSlotType; objectiveRef?: SlotObjectiveRef }): Energy | null {
+  if (item.objectiveRef?.kind === "revisionQueue") return "light";
+  if (item.type === "admin") return "light";
+  if (item.type === "deep_work" || item.type === "reading") return "deep";
+  return null;
+}
+
+/** A day shape as minute ranges, sorted, empty and inverted ranges dropped. `null` when there is no shape. */
+export function dayShapeWindows(shape: DayShape | undefined): ShapeWindow[] | null {
+  if (!shape) return null;
+  const windows = [
+    ...shape.deep.map((range) => ({ start: minutesFromTime(range.startTime), end: minutesFromTime(range.endTime), energy: "deep" as const })),
+    ...shape.light.map((range) => ({ start: minutesFromTime(range.startTime), end: minutesFromTime(range.endTime), energy: "light" as const }))
+  ].filter((window) => window.end > window.start);
+  return windows.length > 0 ? windows.sort((a, b) => a.start - b.start) : null;
+}
+
+/**
+ * Where work of this energy may go, in the order to try: deep work only in deep windows (never a
+ * light one: that is the whole point of a shape), light work in light windows first and then deep.
+ * Without a shape, or for a block with no energy, `null`: anywhere in the usable window.
+ */
+export function windowsForEnergy(windows: ShapeWindow[] | null, energy: Energy | null): ShapeWindow[] | null {
+  if (!windows || !energy) return null;
+  return energy === "deep" ? windows.filter((w) => w.energy === "deep") : [...windows.filter((w) => w.energy === "light"), ...windows.filter((w) => w.energy === "deep")];
+}
+
+/**
+ * Whether a block placed at this time breaks the day shape: deep work in a light window or outside
+ * every window, light work outside every window. `null` when it fits (or there's no shape).
+ */
+export function dayShapeConflict(windows: ShapeWindow[] | null, item: { type?: ScheduleSlotType; objectiveRef?: SlotObjectiveRef; startTime: string; endTime: string }): string | null {
+  const energy = energyOf(item);
+  const allowed = windowsForEnergy(windows, energy);
+  if (!allowed) return null;
+  const start = minutesFromTime(item.startTime);
+  const end = minutesFromTime(item.endTime);
+  if (allowed.some((w) => start >= w.start && end <= w.end)) return null;
+  const range = (w: ShapeWindow) => `${minutesToTime(w.start)}–${minutesToTime(w.end)}`;
+  if (energy === "deep" && windows!.some((w) => w.energy === "light" && start < w.end && w.start < end)) {
+    return `This is deep work inside a light window; deep windows are ${allowed.map(range).join(", ")}.`;
+  }
+  return `This falls outside the ${energy} work windows (${allowed.map(range).join(", ")}).`;
+}
+
+/**
+ * Work time as windows: the day shape when there is one, else the working window as one deep window.
+ * Used where a placement must stay inside work time (the deadline banner's "Schedule a sitting").
+ * Up next uses the day shape alone, since without one the working window isn't a hard cutoff.
+ */
+export function workWindowsOf(settings: Pick<UserSettings, "dayShape" | "workingWindow">): ShapeWindow[] {
+  const shaped = dayShapeWindows(settings.dayShape);
+  if (shaped) return shaped;
+  const working = settings.workingWindow ?? DEFAULT_WORKING_WINDOW;
+  return [{ start: minutesFromTime(working.startTime), end: minutesFromTime(working.endTime), energy: "deep" }];
+}
+
 /**
  * plan/14 §5.6 — the fixed weekly-planning admin block, mirroring `routineSlotsForDate`/
  * `courseSlotsForDate` in shape: pure, no Firestore. Returns a locked slot with the stable id
@@ -42,6 +112,8 @@ export function weeklyPlanningSlotForDate(setting: UserSettings["weeklyPlanning"
  */
 function coveredMinutesInWindow(windowStart: number, windowEnd: number, slots: Pick<ScheduleSlot, "startTime" | "endTime">[]): number {
   const intervals = slots
+    // A tentative block doesn't use up free time: planning may still place work there.
+    .filter((slot) => !(slot as { tentative?: boolean }).tentative)
     .map((slot): [number, number] => [Math.max(windowStart, minutesFromTime(slot.startTime)), Math.min(windowEnd, minutesFromTime(slot.endTime))])
     .filter(([start, end]) => end > start)
     .sort((a, b) => a[0] - b[0]);
@@ -159,7 +231,7 @@ export function placeInWindow(
   // overlap is ever detected) when both are `undefined`, exactly the shape a synthetic candidate
   // slot built for this placement search has. A plain range check has no such foot-gun.
   const overlaps = (start: number, end: number) =>
-    slots.some((slot) => start < minutesFromTime(slot.endTime) && minutesFromTime(slot.startTime) < end);
+    slots.some((slot) => !(slot as { tentative?: boolean }).tentative && start < minutesFromTime(slot.endTime) && minutesFromTime(slot.startTime) < end);
   for (let start = windowStart; start + durationMinutes <= windowEnd; start += stepMinutes) {
     if (!overlaps(start, start + durationMinutes)) return start;
   }
@@ -334,7 +406,9 @@ export function placeProposals(
   claimedSlotsByDate: Record<string, (Pick<ScheduleSlot, "startTime" | "endTime"> & { type?: ScheduleSlotType })[]>,
   workingWindow: WorkingWindow,
   offDateKeys: ReadonlySet<string> = new Set(),
-  now?: NowFloor
+  now?: NowFloor,
+  /** The day shape, as `dayShapeWindows` returns it. Absent = anywhere in the usable window. */
+  shape?: ShapeWindow[] | null
 ): WeekProposal[] {
   const workingDates = weekDateKeys.filter(
     (d) => workingWindow.daysOfWeek.includes(getDay(parseISO(d))) && !offDateKeys.has(d) && usableWindow(workingWindow, d, now) !== null
@@ -364,9 +438,29 @@ export function placeProposals(
     }
   }
 
-  function tryPlace(dateKey: string, durationMinutes: number, preferredWindow?: { start: number; end: number }): number | null {
+  function tryPlace(dateKey: string, durationMinutes: number, preferredWindow?: { start: number; end: number }, allowed?: ShapeWindow[] | null): number | null {
     const window = usableWindow(workingWindow, dateKey, now);
     if (!window) return null;
+    if (allowed) {
+      // A shaped day: only inside the windows this energy may use, in their order, each clipped to
+      // what's usable; a preferred part of the day is tried first inside each.
+      for (const shapeWindow of allowed) {
+        const start = Math.max(window.start, shapeWindow.start);
+        const end = Math.min(window.end, shapeWindow.end);
+        if (end <= start) continue;
+        if (preferredWindow) {
+          const ps = Math.max(start, preferredWindow.start);
+          const pe = Math.min(end, preferredWindow.end);
+          if (pe > ps) {
+            const inPreferred = placeInWindow(simulated[dateKey] ?? [], ps, pe, durationMinutes);
+            if (inPreferred !== null) return inPreferred;
+          }
+        }
+        const placed = placeInWindow(simulated[dateKey] ?? [], start, end, durationMinutes);
+        if (placed !== null) return placed;
+      }
+      return null;
+    }
     if (preferredWindow) {
       const start = Math.max(window.start, preferredWindow.start);
       const end = Math.min(window.end, preferredWindow.end);
@@ -400,7 +494,7 @@ export function placeProposals(
       const end = start + candidate.durationMinutes;
       const window = usableWindow(workingWindow, candidate.dateKey, now);
       const occupied = (simulated[candidate.dateKey] ?? []).some(
-        (slot) => start < minutesFromTime(slot.endTime) && minutesFromTime(slot.startTime) < end
+        (slot) => !(slot as { tentative?: boolean }).tentative && start < minutesFromTime(slot.endTime) && minutesFromTime(slot.startTime) < end
       );
       // A pinned time that has already passed is refused like an occupied one: proposing a sitting
       // into the past is a block that can only ever be missed.
@@ -414,8 +508,9 @@ export function placeProposals(
       candidate = { ...candidate, dateKey: undefined, fixedStartTime: undefined, softPin: undefined, preferredDateKeys: [candidate.dateKey, ...(candidate.preferredDateKeys ?? [])] };
     }
 
+    const allowed = windowsForEnergy(shape ?? null, energyOf(candidate));
     if (candidate.dateKey) {
-      const start = tryPlace(candidate.dateKey, candidate.durationMinutes);
+      const start = tryPlace(candidate.dateKey, candidate.durationMinutes, undefined, allowed);
       if (start !== null) {
         const slot = commit(candidate.dateKey, start, candidate.durationMinutes, null);
         return { ...candidate, key, dateKey: candidate.dateKey, ...slot, fits: true };
@@ -438,7 +533,7 @@ export function placeProposals(
     }
 
     for (const dateKey of order) {
-      const start = tryPlace(dateKey, candidate.durationMinutes, candidate.preferredWindow);
+      const start = tryPlace(dateKey, candidate.durationMinutes, candidate.preferredWindow, allowed);
       if (start !== null) {
         const slot = commit(dateKey, start, candidate.durationMinutes, capGroup);
         if (spread) spreadCount[`${spread}|${dateKey}`] = (spreadCount[`${spread}|${dateKey}`] ?? 0) + 1;
@@ -842,4 +937,90 @@ export function replanDiff(released: ReleasedSlot[], proposals: WeekProposal[]):
     }
   }
   return { moved, added: placed.filter((p) => !used.has(p.key)), dropped, unplaced };
+}
+
+/** A soft cap on how many sittings a day holds before it stops being a sustainable day (3.5). */
+export const DEFAULT_MAX_SITTINGS_PER_DAY = 7;
+
+export interface LeadUpDay {
+  dateKey: string;
+  /** Where work may go on this day, minutes from midnight, already clipped to what's usable. */
+  windows: { start: number; end: number; energy?: Energy }[];
+  /** Time already taken (firm blocks only; tentative ones are soft). */
+  busy: { start: number; end: number }[];
+  /** Sittings already on the day, counted against `maxSittings`. */
+  sittings: number;
+}
+
+export interface LeadUpPlacement {
+  key: string;
+  dateKey: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Lays sittings out backwards from a deadline (3.4 "prepare for"): the last sitting goes as late as
+ * fits on the last day, then each earlier one before it, stepping back a day when a day is full or at
+ * its sitting cap, with `gapMinutes` between sittings on the same day. Deep sittings only use deep
+ * windows when a window carries an energy. Returns the placements in the sittings' own order and the
+ * keys that didn't fit; nothing is placed after the deadline because `days` stop there.
+ */
+export function layOutBackwards(params: {
+  sittings: { key: string; minutes: number; energy?: Energy | null }[];
+  days: LeadUpDay[];
+  maxSittings?: number;
+  gapMinutes?: number;
+  stepMinutes?: number;
+  /** Spread: at most this many new sittings on one day. Default about an even share (total ÷ days,
+   *  plus one), so a lead-up doesn't pile everything onto the last days while earlier ones sit empty.
+   *  If that leaves sittings unplaced, the layout is retried without it. */
+  maxNewPerDay?: number;
+}): { placed: LeadUpPlacement[]; unplaced: string[] } {
+  const even = Math.ceil(params.sittings.length / Math.max(1, params.days.length)) + 1;
+  const spread = layOutBackwardsOnce({ ...params, maxNewPerDay: params.maxNewPerDay ?? even });
+  return spread.unplaced.length === 0 || params.maxNewPerDay !== undefined ? spread : layOutBackwardsOnce({ ...params, maxNewPerDay: Infinity });
+}
+
+function layOutBackwardsOnce(params: Parameters<typeof layOutBackwards>[0] & { maxNewPerDay: number }): { placed: LeadUpPlacement[]; unplaced: string[] } {
+  const { sittings, maxSittings = DEFAULT_MAX_SITTINGS_PER_DAY, gapMinutes = 10, stepMinutes = 5, maxNewPerDay } = params;
+  const added = new Map<string, number>();
+  const days = [...params.days].sort((a, b) => b.dateKey.localeCompare(a.dateKey));
+  const busy = new Map(days.map((day) => [day.dateKey, [...day.busy]]));
+  const count = new Map(days.map((day) => [day.dateKey, day.sittings]));
+  const placed: LeadUpPlacement[] = [];
+  const unplaced: string[] = [];
+  // The latest a sitting may end on each day: before the next (later) sitting placed there, less the gap.
+  const ceiling = new Map<string, number>();
+  let dayIndex = 0;
+  for (const sitting of [...sittings].reverse()) {
+    let done = false;
+    for (let i = dayIndex; i < days.length && !done; i += 1) {
+      const day = days[i];
+      if ((count.get(day.dateKey) ?? 0) >= maxSittings || (added.get(day.dateKey) ?? 0) >= maxNewPerDay) continue;
+      const windows = day.windows
+        .filter((w) => !(sitting.energy === "deep" && w.energy === "light"))
+        .sort((a, b) => b.end - a.end);
+      for (const window of windows) {
+        const top = Math.min(window.end, ceiling.get(day.dateKey) ?? Infinity);
+        for (let end = top; end - sitting.minutes >= window.start; end -= stepMinutes) {
+          const start = end - sitting.minutes;
+          const clash = (busy.get(day.dateKey) ?? []).some((b) => start < b.end + gapMinutes && b.start - gapMinutes < end);
+          if (clash) continue;
+          placed.push({ key: sitting.key, dateKey: day.dateKey, start, end });
+          busy.get(day.dateKey)!.push({ start, end });
+          count.set(day.dateKey, (count.get(day.dateKey) ?? 0) + 1);
+          added.set(day.dateKey, (added.get(day.dateKey) ?? 0) + 1);
+          ceiling.set(day.dateKey, start - gapMinutes);
+          dayIndex = i;
+          done = true;
+          break;
+        }
+        if (done) break;
+      }
+    }
+    if (!done) unplaced.push(sitting.key);
+  }
+  const order = new Map(sittings.map((sitting, index) => [sitting.key, index]));
+  return { placed: placed.sort((a, b) => order.get(a.key)! - order.get(b.key)!), unplaced: unplaced.reverse() };
 }

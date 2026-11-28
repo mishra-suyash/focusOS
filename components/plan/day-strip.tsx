@@ -6,7 +6,7 @@ import { laneLayout, MINUTES_PER_DAY } from "@/lib/timeline";
 import type { PomodoroSession, ScheduleSlot } from "@/types";
 
 type MiniStripSlot = Pick<ScheduleSlot, "type" | "startTime" | "endTime">;
-type FullStripSlot = Pick<ScheduleSlot, "id" | "title" | "type" | "startTime" | "endTime">;
+type FullStripSlot = Pick<ScheduleSlot, "id" | "title" | "type" | "startTime" | "endTime"> & { tentative?: boolean };
 type DoneSession = Pick<PomodoroSession, "completedAt" | "minutes">;
 
 export type DayStripProps =
@@ -63,8 +63,8 @@ function pct(minutes: number): string {
 }
 
 function FullDayStrip({ slots, isToday = false, nowMinute = 0, viewportRange, onScrubTo, sessions }: Extract<DayStripProps, { variant: "full" }>) {
-  const laned = laneLayout(slots);
-  const overlappingIds = new Set(laned.filter((item) => item.laneCount > 1).map((item) => item.slot.id));
+  // A clash is between firm blocks: one sitting on a tentative block is allowed, so it isn't ringed.
+  const overlappingIds = new Set(laneLayout(slots.filter((slot) => !slot.tentative)).filter((item) => item.laneCount > 1).map((item) => item.slot.id));
   // "Actual", not "assigned" — this reads the session's own real completedAt/minutes rather than
   // whichever block its `slotId` points at, so the lane shows *when work actually happened*, which
   // can legitimately differ from when it was planned.
@@ -104,7 +104,7 @@ function FullDayStrip({ slots, isToday = false, nowMinute = 0, viewportRange, on
             <div
               key={slot.id}
               title={`${slot.title} · ${slot.startTime}–${slot.endTime}`}
-              className={clsx("absolute top-1 bottom-1 rounded border", slotTypeStyles[slot.type], overlappingIds.has(slot.id) && "ring-2 ring-red-500")}
+              className={clsx("absolute top-1 bottom-1 rounded border", slotTypeStyles[slot.type], slot.tentative && "border-dashed opacity-80", overlappingIds.has(slot.id) && !slot.tentative && "ring-2 ring-red-500")}
               style={{ left: pct(start), width: `max(2px, calc(${pct(end)} - ${pct(start)}))` }}
             />
           );

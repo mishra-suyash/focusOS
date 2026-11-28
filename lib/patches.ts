@@ -9,7 +9,7 @@
  * keys, and the Admin SDK's `ignoreUndefinedProperties` silently does the same, so a port that
  * didn't go through here would leave "Reopen" or "Undo drop" doing nothing at all.
  */
-import type { Paper, Task } from "@/types";
+import type { Paper, ScheduleSlot, Task } from "@/types";
 
 export function withoutUndefined<T extends Record<string, unknown>>(value: T): Record<string, unknown> {
   return Object.fromEntries(
@@ -82,4 +82,23 @@ export function paperPatch(patch: Partial<Paper>, del: unknown, nowIso: string):
   if ("anthropicFileId" in patch && patch.anthropicFileId === undefined) payload.anthropicFileId = del;
   if ("layeredNotes" in patch && patch.layeredNotes === undefined) payload.layeredNotes = del;
   return payload;
+}
+
+/**
+ * Every schedule save (the app's and the MCP server's) runs its slots through this: a sitting's
+ * `plannedMinutes` is never more than the block is long. Shortening a planned 55-minute sitting to 40
+ * leaves it planned at 40, so the day score and Workload don't count 15 minutes that can't fit.
+ * Lengthening keeps the smaller planned figure (the min of old and new); a tool that moves a block on
+ * purpose sets it to the new length itself.
+ */
+export function fitPlannedMinutes(slots: ScheduleSlot[]): ScheduleSlot[] {
+  const minutes = (time: string) => {
+    const [h, m] = time.split(":").map(Number);
+    return h * 60 + m;
+  };
+  return slots.map((slot) => {
+    if (slot.plannedMinutes == null) return slot;
+    const length = Math.max(0, minutes(slot.endTime) - minutes(slot.startTime));
+    return slot.plannedMinutes > length ? { ...slot, plannedMinutes: length } : slot;
+  });
 }

@@ -1,5 +1,5 @@
 import { sessionDayKey } from "@/lib/dates";
-import type { Pass2Output, Paper, PaperStatus, Pass1Output, PomodoroSession, Priority, ReadingHabit } from "@/types";
+import type { Pass2Output, Paper, PaperStatus, Pass1Output, PassState, PomodoroSession, Priority, ReadingHabit } from "@/types";
 
 export const PASS_SEED_MINUTES: Record<1 | 2 | 3, number> = { 1: 7, 2: 60, 3: 90 };
 const MAX_HONEST_PASS_MINUTES = 6 * 60;
@@ -387,6 +387,65 @@ export function runningPass(paper: Pick<Paper, "pass1" | "pass2" | "pass3">): 1 
   if (paper.pass2?.status === "in_progress") return 2;
   if (paper.pass3?.status === "in_progress") return 3;
   return null;
+}
+
+/**
+ * The least a finished pass should leave behind: a Skim at least one contribution (the one-line
+ * takeaway counts), a Read at least three key points. A pass closed with less is still done, so
+ * progress and status are unchanged, but it reads "done (thin)" everywhere, so a review or a gap
+ * search knows its output isn't there. Endings that are about stopping, not finishing, are exempt: a
+ * Skim that drops the paper, a Read set aside or left to return to later.
+ * Derived, never stored, so passes closed before this existed read correctly with no backfill.
+ */
+export const PASS_OUTPUT_MINIMUM = { skimContributions: 1, readKeyPoints: 3 } as const;
+
+export function passOutputShortfall(passNo: 1 | 2 | 3, output: PassState["output"] | undefined): string | null {
+  if (passNo === 1) {
+    const skim = output as Pass1Output | undefined;
+    if (skim?.verdict === "drop") return null;
+    const contributions = (skim?.contributions ?? []).filter((item) => item.trim()).length;
+    return contributions >= PASS_OUTPUT_MINIMUM.skimContributions ? null : "no contribution written";
+  }
+  if (passNo === 2) {
+    const read = output as Pass2Output | undefined;
+    if (read?.outcome === "set-aside" || read?.outcome === "return-later") return null;
+    const points = (read?.keyPoints ?? []).filter((item) => item.trim()).length;
+    return points >= PASS_OUTPUT_MINIMUM.readKeyPoints ? null : `${points === 0 ? "no" : points} key point${points === 1 ? "" : "s"} (${PASS_OUTPUT_MINIMUM.readKeyPoints} expected)`;
+  }
+  return null;
+}
+
+/** A pass marked done whose output falls short of `PASS_OUTPUT_MINIMUM`. */
+export function isThinPass(passNo: 1 | 2 | 3, pass: Pick<PassState, "status" | "output"> | undefined): boolean {
+  return pass?.status === "done" && passOutputShortfall(passNo, pass.output) !== null;
+}
+
+/**
+ * A reference pasted as a title ("Marty et al. 2019, 'Snap: a microkernel approach…' (ACM SOSP) — the
+ * network stack used") split into the paper's own title and the citation it came in. A quoted span is
+ * the title; failing that, a leading "Author et al. 2019," and a trailing "(Venue)" or " — note" are
+ * peeled off. Text that doesn't look like a citation comes back unchanged, with no citation.
+ */
+export function splitCitation(text: string): { title: string; citation?: string } {
+  const raw = text.trim();
+  // Only text that starts like a citation ("Marty et al. 2019, …") is split. A real title may hold a
+  // quoted phrase ("Why Should I Trust You?": …) or apostrophes (Don't Stop Pretraining), and must
+  // come back exactly as written.
+  const authorYear = /^[A-Z][\p{L}'’-]+(?:\s+(?:et\s+al\.?|(?:and|&)\s+[A-Z][\p{L}'’-]+))?,?\s+\(?(?:19|20)\d{2}[a-z]?\)?[,.:]?\s+/u;
+  if (!authorYear.test(raw)) return { title: raw };
+  const rest = raw.replace(authorYear, "");
+  // After the author-year, a title in quotes is the title (quotes paired by kind, so an apostrophe
+  // inside it doesn't end it early).
+  const quoted = rest.match(/^[‘'](.{6,}?)[’'](?=\s|[,.;:(—–]|$)/) ?? rest.match(/^["“](.{6,}?)["”]/);
+  const title = (quoted ? quoted[1] : rest.replace(/\s+[—–]\s+.*$/, "").replace(/\s*\([^()]*\)\s*$/, ""))
+    .trim()
+    .replace(/[,.;:]+$/, "");
+  return title.length >= 6 ? { title, citation: raw } : { title: raw };
+}
+
+/** The title to show for a paper: its own, without citation text a capture may have kept in it. */
+export function cleanPaperTitle(paper: Pick<Paper, "title">): string {
+  return splitCitation(paper.title).title;
 }
 
 /** Plan §5 vocabulary — Pass 1 / Pass 2 / Pass 3 are Skim / Read / Deep dive everywhere a person reads them. */

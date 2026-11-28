@@ -39,7 +39,8 @@ const PLAN_BLOCK_COLOR_BY_TYPE: Partial<Record<ScheduleSlotType, string>> = {
   commute: GOOGLE_EVENT_COLOR_IDS.grape,
   sleep: GOOGLE_EVENT_COLOR_IDS.blueberry,
   gym: GOOGLE_EVENT_COLOR_IDS.flamingo,
-  custom: GOOGLE_EVENT_COLOR_IDS.tangerine
+  custom: GOOGLE_EVENT_COLOR_IDS.tangerine,
+  meeting: GOOGLE_EVENT_COLOR_IDS.tomato
 };
 
 /**
@@ -159,6 +160,8 @@ export interface GoogleEventDraft {
   recurrence?: string[];
   /** One of `GOOGLE_EVENT_COLOR_IDS`. Absent = Google's calendar-default color. */
   colorId?: string;
+  /** "transparent" = shows as free: a tentative block holds time without blocking it, on Google too. */
+  transparency?: "transparent";
 }
 
 /**
@@ -276,15 +279,17 @@ export function planBlockEventDraft(params: {
   endTime: string;
   type: ScheduleSlotType;
   timezone: string;
+  tentative?: boolean;
 }): GoogleEventDraft {
-  const { dateKey, slotId, title, note, startTime, endTime, type, timezone } = params;
+  const { dateKey, slotId, title, note, startTime, endTime, type, timezone, tentative } = params;
   return {
     refKey: planBlockRefKey(dateKey, slotId),
     summary: title,
     description: note,
     start: { dateTime: `${dateKey}T${startTime}:00`, timeZone: timezone },
     end: { dateTime: `${dateKey}T${endTime}:00`, timeZone: timezone },
-    colorId: PLAN_BLOCK_COLOR_BY_TYPE[type]
+    colorId: PLAN_BLOCK_COLOR_BY_TYPE[type],
+    ...(tentative ? { transparency: "transparent" as const } : {})
   };
 }
 
@@ -306,7 +311,9 @@ export function hashEventDraft(draft: GoogleEventDraft): string {
     start: draft.start,
     end: draft.end,
     recurrence: draft.recurrence,
-    colorId: draft.colorId
+    colorId: draft.colorId,
+    // Absent on every draft that isn't tentative, so JSON.stringify drops it and existing hashes don't change.
+    transparency: draft.transparency
   });
 }
 

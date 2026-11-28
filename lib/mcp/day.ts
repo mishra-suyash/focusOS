@@ -13,7 +13,7 @@ import { weeklyPlanningSlotForDate } from "@/lib/weekplan";
 import type { Course, RecurringTaskTemplate, ScheduleSlot, Term } from "@/types";
 
 /** `/plan/week`'s `daySlotsWithFixed`, with `/plan/day`'s course-module gate and routine yield: the day as the app would open it. */
-/** Terms, courses and commitments, read once per request: no MCP tool writes any of them. */
+/** Terms, courses and commitments, read once per request. Commitment tools write templates, but each tool call is its own request (and context), so a write is seen by the next call. */
 const fixedSources = new WeakMap<ToolContext, Promise<[Term[], Course[], RecurringTaskTemplate[]]>>();
 
 export async function dayAsOpened(ctx: ToolContext, date: string, saved: ScheduleSlot[]): Promise<ScheduleSlot[]> {

@@ -20,7 +20,8 @@ import {
   type GoogleEventDraft,
   type PushPlanItem
 } from "@/lib/google-calendar";
-import type { Checkpoint, Course, DailySchedule, GoogleCalendarConnection, GoogleCalendarLink, RecurringTaskTemplate, Task } from "@/types";
+import { withoutUndefined } from "@/lib/patches";
+import type { Checkpoint, Course, DailySchedule, GoogleCalendarConnection, GoogleCalendarLink, RecurringTaskTemplate, ScheduleSlot, Task } from "@/types";
 
 /** §13 — how far ahead of today /plan/day blocks get pushed, mirroring the recurring-tasks cron's
  * own rolling window (`addDaysToKey(today, 13)`): far enough to cover what a user has actually
@@ -271,11 +272,11 @@ async function fetchPlanBlockSchedules(uid: string, fromDateKey: string, toDateK
   return snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as DailySchedule);
 }
 
-async function fetchExistingLinks(uid: string): Promise<GoogleCalendarLinkRecord[]> {
+async function fetchExistingLinks(uid: string): Promise<(GoogleCalendarLinkRecord & { title?: string; dateKey?: string })[]> {
   const snapshot = await adminDb().collection("users").doc(uid).collection("googleCalendarLinks").get();
   return snapshot.docs.map((item) => {
     const link = item.data() as GoogleCalendarLink;
-    return { refKey: item.id, googleEventId: link.googleEventId, contentHash: link.contentHash };
+    return { refKey: item.id, googleEventId: link.googleEventId, contentHash: link.contentHash, title: link.title, dateKey: link.dateKey };
   });
 }
 
@@ -365,12 +366,14 @@ function buildDesiredEvents(
           planBlockEventDraft({
             dateKey: schedule.dateKey,
             slotId: slot.id,
-            title: slot.title,
-            note: slot.note,
+            // A tentative block is pushed as held time, named so on the calendar.
+            title: slot.tentative ? `${slot.title} (tentative)` : slot.title,
+            note: [slot.note, slot.meeting?.attendees?.length ? `With: ${slot.meeting.attendees.join(", ")}` : ""].filter(Boolean).join("\n") || undefined,
             startTime: slot.startTime,
             endTime: slot.endTime,
             type: slot.type,
-            timezone
+            timezone,
+            tentative: slot.tentative
           })
         );
       }
@@ -380,12 +383,39 @@ function buildDesiredEvents(
   return drafts;
 }
 
+/** One event a push creates, updates or removes, named the way a person would recognise it. */
+export interface PushItemSummary {
+  action: "create" | "update" | "delete";
+  /** planBlock | task | checkpoint | courseSession | recurringTemplate */
+  kind: string;
+  title?: string;
+  /** The date the event is on, for a dated event (a plan block, a task's due date). */
+  date?: string;
+}
+
+export interface PushOutcome {
+  created: number;
+  updated: number;
+  deleted: number;
+  items: PushItemSummary[];
+}
+
+function refKind(refKey: string) {
+  return refKey.split(":")[0];
+}
+
+function draftDate(draft: GoogleEventDraft): string | undefined {
+  return ("date" in draft.start ? draft.start.date : draft.start.dateTime).slice(0, 10);
+}
+
 /**
- * The whole of Phase 1: reconcile the FocusOS calendar to match current, enabled-category FocusOS
- * data. Safe to call as often as needed (manual "Sync now" today; a cron on the same cadence as
- * every other cron once Phase 2 adds pull) — see `planPushDiff`'s own doc comment for why.
+ * The read half of the push: every change it would make, without making it. `override` swaps in one
+ * day's blocks as they would be after an edit that hasn't been saved, so a dry run can say exactly
+ * what saving it would do to the calendar. Only events with a link doc are ever considered for
+ * removal, and links are only written for events this app created in its own FocusOS calendar, so a
+ * push can never remove an event FocusOS didn't create.
  */
-export async function runGoogleCalendarPush(uid: string): Promise<{ created: number; updated: number; deleted: number }> {
+export async function planGoogleCalendarPush(uid: string, opts: { override?: { dateKey: string; slots: ScheduleSlot[] } } = {}) {
   const connection = await getConnection(uid);
   if (!connection?.connected || !connection.focusOsCalendarId) {
     throw new Error(NOT_CONNECTED_ERROR);
@@ -398,7 +428,7 @@ export async function runGoogleCalendarPush(uid: string): Promise<{ created: num
   const planBlockToDateKey = addDaysToKey(today, PLAN_BLOCK_WINDOW_DAYS);
 
   const courses = await fetchActiveCourses(uid);
-  const [checkpoints, templates, tasks, planBlockSchedules, records] = await Promise.all([
+  const [checkpoints, templates, tasks, fetchedSchedules, records] = await Promise.all([
     fetchCheckpointsForCourses(uid, courses),
     fetchTimedActiveTemplates(uid),
     // Skipped entirely (not just filtered out later) when the toggle is off — no reason to read
@@ -407,6 +437,11 @@ export async function runGoogleCalendarPush(uid: string): Promise<{ created: num
     pushEnabled.planBlocks ? fetchPlanBlockSchedules(uid, today, planBlockToDateKey) : Promise.resolve([]),
     fetchExistingLinks(uid)
   ]);
+  const override = opts.override;
+  const planBlockSchedules =
+    override && override.dateKey >= today && override.dateKey <= planBlockToDateKey && pushEnabled.planBlocks
+      ? [...fetchedSchedules.filter((schedule) => schedule.dateKey !== override.dateKey), { id: override.dateKey, dateKey: override.dateKey, slots: override.slots } as DailySchedule]
+      : fetchedSchedules;
 
   const desired = buildDesiredEvents(courses, checkpoints, templates, tasks, planBlockSchedules, pushEnabled, timezone);
 
@@ -421,9 +456,75 @@ export async function runGoogleCalendarPush(uid: string): Promise<{ created: num
   });
 
   const plan = planPushDiff(desired, consideredLinks);
+  const linkByKey = new Map(records.map((link) => [link.refKey, link]));
+  return { plan, connection, linkByKey };
+}
+
+/**
+ * Names each change. A create or update is named from its draft; a removal from the title and date
+ * recorded on its link doc when it was pushed, or, for a link written before those were recorded,
+ * from the event itself on Google (`lookup`), falling back to the date in its ref key.
+ */
+async function summarizePlan(plan: PushPlanItem[], linkByKey: Map<string, GoogleCalendarLinkRecord & { title?: string; dateKey?: string }>, lookup?: (eventId: string) => Promise<{ title?: string; date?: string } | null>): Promise<PushItemSummary[]> {
+  const items: PushItemSummary[] = plan.map((item) => {
+    if (item.action !== "delete") return { action: item.action, kind: refKind(item.refKey), title: item.draft.summary, date: draftDate(item.draft) };
+    const link = linkByKey.get(item.refKey);
+    return { action: "delete", kind: refKind(item.refKey), title: link?.title, date: link?.dateKey ?? planBlockRefKeyDateKey(item.refKey) };
+  });
+  if (!lookup) return items;
+  // Links written before titles were recorded are named from Google, conservatively: at most
+  // MAX_NAME_LOOKUPS calls, LOOKUP_CONCURRENCY at a time (the push's own limit), the rest left unnamed.
+  const MAX_NAME_LOOKUPS = 25;
+  const LOOKUP_CONCURRENCY = 5;
+  const unnamed = plan.map((item, index) => ({ item, index })).filter(({ item, index }) => item.action === "delete" && !items[index].title).slice(0, MAX_NAME_LOOKUPS);
+  for (let i = 0; i < unnamed.length; i += LOOKUP_CONCURRENCY) {
+    await Promise.all(
+      unnamed.slice(i, i + LOOKUP_CONCURRENCY).map(async ({ item, index }) => {
+        if (item.action !== "delete") return;
+        const found = await lookup(item.googleEventId).catch(() => null);
+        if (found?.title) items[index] = { ...items[index], title: found.title, date: items[index].date ?? found.date };
+      })
+    );
+  }
+  return items;
+}
+
+/** What a push would do right now (or after `override` were saved), without calling Google to change anything. */
+export async function previewGoogleCalendarPush(uid: string, opts: { override?: { dateKey: string; slots: ScheduleSlot[] } } = {}): Promise<PushOutcome> {
+  const { plan, connection, linkByKey } = await planGoogleCalendarPush(uid, opts);
+  const calendar = plan.some((item) => item.action === "delete") ? await calendarClientForUser(uid) : null;
+  const items = await summarizePlan(plan, linkByKey, calendar ? (eventId) => readEventSummary(calendar, connection.focusOsCalendarId!, eventId) : undefined);
+  return {
+    created: plan.filter((item) => item.action === "create").length,
+    updated: plan.filter((item) => item.action === "update").length,
+    deleted: plan.filter((item) => item.action === "delete").length,
+    items
+  };
+}
+
+async function readEventSummary(calendar: calendar_v3.Calendar, calendarId: string, eventId: string): Promise<{ title?: string; date?: string } | null> {
+  try {
+    const { data } = await calendar.events.get({ calendarId, eventId });
+    return { title: data.summary ?? undefined, date: (data.start?.date ?? data.start?.dateTime ?? undefined)?.slice(0, 10) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The whole of Phase 1: reconcile the FocusOS calendar to match current, enabled-category FocusOS
+ * data. Safe to call as often as needed (manual "Sync now" today; a cron on the same cadence as
+ * every other cron once Phase 2 adds pull) — see `planPushDiff`'s own doc comment for why. It
+ * reconciles the whole window, not only the day just edited, so the result names every change.
+ */
+export async function runGoogleCalendarPush(uid: string, opts: { nameRemovals?: boolean } = {}): Promise<PushOutcome> {
+  const { plan, connection, linkByKey } = await planGoogleCalendarPush(uid);
 
   const calendar = await calendarClientForUser(uid);
   const linksCollection = adminDb().collection("users").doc(uid).collection("googleCalendarLinks");
+  // Named before applying: a removed event can't be looked up once it's gone. Only when a caller will
+  // show the names (Claude's writes); the scheduled sync never asks Google for them.
+  const items = await summarizePlan(plan, linkByKey, opts.nameRemovals ? (eventId) => readEventSummary(calendar, connection.focusOsCalendarId!, eventId) : undefined);
 
   // Bounded concurrency, not a plain sequential loop: a first sync (or one after a long gap) can
   // carry 100+ items once planBlocks' up-to-14-day window is in the mix, and one `await` per item
@@ -440,7 +541,8 @@ export async function runGoogleCalendarPush(uid: string): Promise<{ created: num
   return {
     created: outcomes.filter((outcome) => outcome === "created").length,
     updated: outcomes.filter((outcome) => outcome === "updated").length,
-    deleted: outcomes.filter((outcome) => outcome === "deleted").length
+    deleted: outcomes.filter((outcome) => outcome === "deleted").length,
+    items
   };
 }
 
@@ -476,11 +578,15 @@ async function applyPushPlanItem(
         requestBody: toEventRequestBody(item.draft)
       });
     }
-    await linksCollection.doc(item.refKey).set({
-      googleEventId: eventId,
-      contentHash: hashEventDraft(item.draft),
-      updatedAt: new Date().toISOString()
-    });
+    await linksCollection.doc(item.refKey).set(
+      withoutUndefined({
+        googleEventId: eventId,
+        contentHash: hashEventDraft(item.draft),
+        title: item.draft.summary,
+        dateKey: draftDate(item.draft),
+        updatedAt: new Date().toISOString()
+      })
+    );
     return "created";
   }
   if (item.action === "update") {
@@ -501,7 +607,7 @@ async function applyPushPlanItem(
       return "deleted";
     }
     await linksCollection.doc(item.refKey).set(
-      { googleEventId: item.googleEventId, contentHash: hashEventDraft(item.draft), updatedAt: new Date().toISOString() },
+      withoutUndefined({ googleEventId: item.googleEventId, contentHash: hashEventDraft(item.draft), title: item.draft.summary, dateKey: draftDate(item.draft), updatedAt: new Date().toISOString() }),
       { merge: true }
     );
     return "updated";
@@ -526,6 +632,7 @@ function toEventRequestBody(draft: GoogleEventDraft): calendar_v3.Schema$Event {
     end: draft.end,
     recurrence: draft.recurrence,
     colorId: draft.colorId,
+    transparency: draft.transparency,
     extendedProperties: { private: { focusOsRef: draft.refKey } }
   };
 }

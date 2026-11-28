@@ -8,7 +8,7 @@
  */
 import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebase-admin";
-import { expandDotPaths, paperPatch, taskPatch, withoutUndefined } from "@/lib/patches";
+import { expandDotPaths, fitPlannedMinutes, paperPatch, taskPatch, withoutUndefined } from "@/lib/patches";
 import type { ReleasedSlot } from "@/lib/weekplan";
 import type { Checkpoint, DailySchedule, Goal, NewCheckpoint, NewClassLog, NewGoal, NewPaper, NewPaperNote, NewTask, Paper, Task } from "@/types";
 
@@ -114,6 +114,7 @@ export async function saveDailySchedule(uid: string, schedule: Pick<DailySchedul
   await ref.set(
     withoutUndefined({
       ...schedule,
+      slots: fitPlannedMinutes(schedule.slots),
       createdAt: existing.exists ? existing.data()?.createdAt ?? updatedAt : updatedAt,
       updatedAt
     }),

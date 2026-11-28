@@ -21,8 +21,11 @@ import {
   cancelPassPatch,
   DEFAULT_SHELF_DAYS,
   derivePaperFields,
+  isThinPass,
   nextPassEstimateMinutes,
   PASS_LABELS,
+  PASS_OUTPUT_MINIMUM,
+  passOutputShortfall,
   passSessionMinutes,
   passSittingCount
 } from "@/lib/papers";
@@ -227,8 +230,12 @@ function PassSummary({ passNo, pass, paperId }: { passNo: 1 | 2 | 3; pass: PassS
   return (
     <div className="rounded-md bg-moss-600/5 p-4 text-sm">
       <p className="mb-2 font-medium">
-        {PASS_LABELS[passNo]} done{typeof pass.minutes === "number" ? ` · ${pass.minutes}m` : ""}
+        {PASS_LABELS[passNo]} done{isThinPass(passNo, pass) ? " (thin)" : ""}
+        {typeof pass.minutes === "number" ? ` · ${pass.minutes}m` : ""}
       </p>
+      {isThinPass(passNo, pass) ? (
+        <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">Closed with {passOutputShortfall(passNo, pass.output)}, so there&apos;s little here to build on.</p>
+      ) : null}
       {passNo === 1 ? <Pass1Summary output={pass.output as Pass1Output} /> : null}
       {passNo === 2 ? <Pass2Summary output={pass.output as Pass2Output} paperId={paperId} /> : null}
       {passNo === 3 ? <Pass3Summary output={pass.output as Pass3Output} /> : null}
@@ -370,6 +377,8 @@ function Pass1Form({ paper, compact, onFinish }: { paper: Paper; compact?: boole
   }
 
   const allStepsChecked = Object.values(steps).every(Boolean);
+  const draftContributions = [takeaway.trim(), ...lines(contributions)].filter(Boolean);
+  const thin = verdict ? passOutputShortfall(1, { contributions: draftContributions, verdict } as Pass1Output) : null;
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -471,8 +480,13 @@ function Pass1Form({ paper, compact, onFinish }: { paper: Paper; compact?: boole
         <input className="input" value={clarityNote} onChange={(e) => setClarityNote(e.target.value)} placeholder="Clarity note (optional)" />
         {!allStepsChecked ? <p className="text-xs text-amber-700 dark:text-amber-400">Tip: an unticked step is the honest signal the pass wasn&apos;t actually done.</p> : null}
       </MoreOptions>
+      {thin ? (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          A Skim should leave at least one contribution (the one-line takeaway counts). Finishing now closes it as done (thin).
+        </p>
+      ) : null}
       <button className="btn-primary" disabled={!verdict}>
-        {verdict ? `Finish Skim · ${VERDICT_LABELS[verdict]}` : "Choose how this Skim ends"}
+        {verdict ? `Finish Skim${thin ? " as thin" : ""} · ${VERDICT_LABELS[verdict]}` : "Choose how this Skim ends"}
       </button>
     </form>
   );
@@ -519,6 +533,7 @@ function Pass2Form({
   // The summary is the exit test for having grasped the paper. Stopping because you *haven't* is a
   // legitimate ending that shouldn't demand one.
   const summaryRequired = outcome === "grasped" || outcome === "persevere";
+  const thin = outcome ? passOutputShortfall(2, { keyPoints: lines(keyPoints), outcome } as Pass2Output) : null;
 
   function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -547,6 +562,7 @@ function Pass2Form({
         />
         <p className={`mt-1 text-xs ${summaryWords > 70 ? "text-amber-700 dark:text-amber-400" : "text-ink-400"}`}>{summaryWords} words</p>
       </div>
+      <textarea className="input min-h-16" value={keyPoints} onChange={(e) => setKeyPoints(e.target.value)} placeholder={`Key points, one per line (${PASS_OUTPUT_MINIMUM.readKeyPoints} or more)`} />
       <div>
         <p className="label mb-1">How does this Read end?</p>
         <div className={clsx("grid gap-2", compact ? "grid-cols-2" : "grid-cols-2 sm:grid-cols-4")}>
@@ -581,7 +597,6 @@ function Pass2Form({
         </div>
       ) : null}
       <MoreOptions>
-        <textarea className="input min-h-16" value={keyPoints} onChange={(e) => setKeyPoints(e.target.value)} placeholder="Key points, one per line" />
         <div className="space-y-2">
           <p className="label">Figures</p>
           {figures.map((figure, index) => (
@@ -620,12 +635,17 @@ function Pass2Form({
         />
         <textarea className="input min-h-14" value={unclear} onChange={(e) => setUnclear(e.target.value)} placeholder="What's unclear, one per line" />
       </MoreOptions>
+      {thin && !(summaryRequired && !summary.trim()) ? (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          A Read should leave at least {PASS_OUTPUT_MINIMUM.readKeyPoints} key points. Finishing now closes it as done (thin).
+        </p>
+      ) : null}
       <button className="btn-primary" disabled={!outcome || (summaryRequired && !summary.trim())}>
         {!outcome
           ? "Choose how this Read ends"
           : summaryRequired && !summary.trim()
             ? "Write the summary to finish"
-            : `Finish Read · ${PASS2_OUTCOMES.find((item) => item.value === outcome)!.label}`}
+            : `Finish Read${thin ? " as thin" : ""} · ${PASS2_OUTCOMES.find((item) => item.value === outcome)!.label}`}
       </button>
     </form>
   );

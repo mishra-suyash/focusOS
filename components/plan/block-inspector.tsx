@@ -176,6 +176,24 @@ export function BlockInspector({
           </option>
         ))}
       </select>
+      {!isLocked ? (
+        <label className="flex items-center gap-2 text-xs text-ink-500" title="Held time that isn't certain yet. Other blocks may go on top of it, and planning can still use it.">
+          <input type="checkbox" checked={Boolean(slot.tentative)} onChange={(event) => onChange({ ...slot, tentative: event.target.checked || undefined })} />
+          Tentative (time not confirmed; other blocks can still go here)
+        </label>
+      ) : null}
+      {slot.type === "meeting" ? (
+        <input
+          className="input"
+          value={slot.meeting?.attendees?.join(", ") ?? ""}
+          onChange={(event) => {
+            const attendees = event.target.value.split(",").map((name) => name.trimStart());
+            onChange({ ...slot, meeting: { ...slot.meeting, attendees: attendees.some((name) => name.trim()) ? attendees : undefined } });
+          }}
+          placeholder="With (comma-separated)"
+          aria-label="Meeting attendees"
+        />
+      ) : null}
       <MoreOptions>
         <div className="grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-[1fr_180px]">
           <textarea

@@ -1,4 +1,5 @@
 import type { NewPaper, Paper } from "@/types";
+import { splitCitation } from "@/lib/papers";
 
 /**
  * plan/17 §5.6 — capture: a paper you've heard of but not looked at yet goes to the inbox, not
@@ -6,9 +7,12 @@ import type { NewPaper, Paper } from "@/types";
  * (automatic arXiv/DOI metadata lookup is plan/17 §13 Q4, not built).
  */
 export function inboxPaper(params: { title?: string; link?: string; source: NonNullable<Paper["source"]> }): NewPaper {
-  const title = params.title?.trim() || params.link?.trim() || "Untitled paper";
+  // A reference pasted as the title keeps its citation text apart, so the title stays the paper's own.
+  const split = params.title?.trim() ? splitCitation(params.title) : null;
+  const title = split?.title || params.link?.trim() || "Untitled paper";
   return {
     title,
+    ...(split?.citation ? { citation: split.citation } : {}),
     authors: [],
     ...(params.link?.trim() ? { link: params.link.trim() } : {}),
     status: "inbox",

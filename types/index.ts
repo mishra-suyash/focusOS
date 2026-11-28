@@ -4,7 +4,7 @@ export type Category = "research" | "coding" | "reading" | "writing" | "admin" |
 /** A course's four weekly-planning buckets (lib/courses.ts's `bucketWeeklyTarget`) — a different axis from `Category`. */
 export type TaskBucket = "goal" | "assignment" | "backlog" | "revision";
 export type TimerMode = "work" | "short_break" | "long_break";
-export type ScheduleSlotType = "deep_work" | "reading" | "meal" | "free" | "admin" | "break" | "commute" | "sleep" | "gym" | "class" | "custom" | "external";
+export type ScheduleSlotType = "deep_work" | "reading" | "meal" | "free" | "admin" | "break" | "commute" | "sleep" | "gym" | "class" | "custom" | "external" | "meeting";
 export type ScheduleSlotStatus = "upcoming" | "active" | "completed" | "skipped";
 export type CourseStatus = "active" | "completed" | "dropped";
 export type TermKind = "semester" | "break" | "none";
@@ -282,10 +282,19 @@ export interface ScheduleSlot {
    *  (`remainingMinutes`, lib/tracking.ts). Absent = an ordinary single block, unchanged. */
   chunk?: { groupId: string; index: number; total: number };
   /** plan/16 §5.1 — minutes this sitting was *planned* to contribute, as distinct from
-   *  `endTime - startTime`. Normally identical; they diverge when a sitting is resized on the
-   *  timeline after planning, and the planner needs the original intent to compute what's left.
-   *  Absent = fall back to the block's own duration. */
+   *  `endTime - startTime`. Never more than the block is long: every save clamps it
+   *  (`fitPlannedMinutes`) and every reader takes the smaller of the two (`sittingPlannedMinutes`),
+   *  so a shortened sitting is scored against what fits. The week planner measures real duration
+   *  (`plannedMinutesThisWeek`), not this. Absent = fall back to the block's own duration. */
   plannedMinutes?: number;
+  /** A soft block: time that is held but not yet certain (a meeting "probably afternoon, TBC"). It
+   *  never blocks anything else: overlaps with it are allowed (`validateSlots`), planning and free-time
+   *  counts ignore it (`placeInWindow`, `coveredMinutesInWindow`), and the editor lets blocks land on
+   *  it. Clear it once the time is confirmed. */
+  tentative?: boolean;
+  /** A one-off meeting (`type: "meeting"`): who's in it and, while its time isn't fixed, the part of
+   *  the day it's expected in. Not a scored sitting: nobody runs a focus timer through a meeting. */
+  meeting?: { attendees?: string[]; window?: "morning" | "afternoon" | "evening"; agenda?: string[]; actionItems?: string[] };
   /** plan/17 §7.3 — this sitting's time was set by hand (a drag or typed time in weekly planning)
    *  before it was accepted. "Keep my moves" re-offers it at the same time when a replan releases it. */
   placedByUser?: boolean;
@@ -393,6 +402,12 @@ export interface WeekPlan {
   /** plan/17 §7.6 — one entry per accepted replan, so the current `proposedBlocks` can explain how
    *  it got there. */
   revisions?: { at: string; reason: "manual" | "missed" | "dayOff"; released: number; placed: number; keptMoves: number }[];
+  /** Set when the week was committed from Claude (`commit_week`) rather than in /plan/week. */
+  committedFrom?: "chat";
+  /** What was on the calendar when the week was committed: blocks Claude placed are real sittings on
+   *  their days (the record an accepted proposal also becomes), so a commit from chat records them
+   *  here rather than as `proposedBlocks`, which the planner would offer again. */
+  placedAtCommit?: { sittings: number; minutes: number; byDay: Record<string, number> };
 }
 
 export interface CourseSession {
@@ -666,6 +681,9 @@ export interface Paper {
   relatedCourseId?: string;
   relatedTaskId?: string;
   citationKey?: string;
+  /** The reference the paper was captured from, when its title was pasted as a citation ("Marty et
+   *  al. 2019, 'Snap: …' (SOSP)"). `title` keeps only the paper's own title (`splitCitation`). */
+  citation?: string;
   readAt?: string;
   /** plan/15 §5.3 — 0 (Sun) – 6 (Sat), same convention as `Task.weeklyTargetDay`. Only meaningful
    *  for a paper offered as a stale-reading candidate in `/plan/week` Step 4: when set, its reading
@@ -1057,6 +1075,16 @@ export interface UserSettings {
    *  (lib/weekplan.ts). Read by the weekly planner's capacity meter and its block placement bounds —
    *  without it, "free time" means every waking minute, which is not a number anyone plans against. */
   workingWindow?: { startTime: string; endTime: string; daysOfWeek: number[] };
+  /** The shape of a working day: when deep work happens and when only light work does. Absent = no
+   *  shape, and work goes anywhere in `workingWindow` (the behaviour before this existed). When set,
+   *  the weekly planner puts deep work (deep_work, reading) only in `deep` windows and light work
+   *  (admin, the revision queue) in `light` windows first, then `deep`; Up next suggests no work
+   *  outside every window and no assessment prep in a light one; nothing is placed outside them.
+   *  Windows are "HH:mm" ranges inside the working window's days (`lib/weekplan.ts` `dayShapeWindows`). */
+  /** A soft cap on sittings in one day (default 7, `DEFAULT_MAX_SITTINGS_PER_DAY`). Going over it is
+   *  allowed but warned about: in Claude's week view and block writes, and by the lead-up planner. */
+  maxSittingsPerDay?: number;
+  dayShape?: { deep: { startTime: string; endTime: string }[]; light: { startTime: string; endTime: string }[] };
   /** plan/16 §5.1 — global cap on one sitting, minutes. Absent = `DEFAULT_MAX_CHUNK_MINUTES` (50,
    *  lib/timeline.ts). A per-task `Task.maxChunkMinutes` overrides it. */
   maxChunkMinutes?: number;
@@ -1264,5 +1292,10 @@ export interface GoogleCalendarLink {
   /** A fingerprint of the last-pushed content (`lib/google-calendar.ts`'s `hashEventDraft`) — lets
    * the push diff skip a no-op `events.update` call when nothing about the record actually changed. */
   contentHash?: string;
+  /** What was pushed, recorded so a later push can say by name which event it removed. Absent on
+   *  links written before this was recorded; the push then reads the event from Google. */
+  title?: string;
+  /** The date the event is on (yyyy-MM-dd), for a dated event. */
+  dateKey?: string;
   updatedAt: string;
 }

@@ -54,8 +54,9 @@ function rangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: numbe
 
 /** True if `[startMinutes, endMinutes)` would overlap any slot in `slots`, other than `excludeId` (the slot being moved/resized). */
 export function rangeOverlapsSlots(startMinutes: number, endMinutes: number, slots: ScheduleSlot[], excludeId?: string): boolean {
+  // A tentative block holds time softly: nothing is kept out of it.
   return slots.some(
-    (slot) => slot.id !== excludeId && rangesOverlap(startMinutes, endMinutes, minutesFromTime(slot.startTime), minutesFromTime(slot.endTime))
+    (slot) => slot.id !== excludeId && !slot.tentative && rangesOverlap(startMinutes, endMinutes, minutesFromTime(slot.startTime), minutesFromTime(slot.endTime))
   );
 }
 
@@ -70,7 +71,7 @@ export function newOverlap(slots: ScheduleSlot[], id: string, startMinutes: numb
   const overlapsNow = (slot: ScheduleSlot) =>
     current ? rangesOverlap(minutesFromTime(current.startTime), minutesFromTime(current.endTime), minutesFromTime(slot.startTime), minutesFromTime(slot.endTime)) : false;
   return slots.find(
-    (slot) => slot.id !== id && rangesOverlap(startMinutes, endMinutes, minutesFromTime(slot.startTime), minutesFromTime(slot.endTime)) && !overlapsNow(slot)
+    (slot) => slot.id !== id && !slot.tentative && !(current?.tentative ?? false) && rangesOverlap(startMinutes, endMinutes, minutesFromTime(slot.startTime), minutesFromTime(slot.endTime)) && !overlapsNow(slot)
   );
 }
 
@@ -628,7 +629,8 @@ const SLOT_TYPE_CATEGORY: Record<ScheduleSlotType, Category> = {
   break: "personal",
   commute: "personal",
   sleep: "personal",
-  gym: "personal"
+  gym: "personal",
+  meeting: "admin"
 };
 
 /** S4 ("Start focus session from a block") — the inverse of `slotTypeForCategory`, for pre-filling the focus timer's category from whichever block it was started from. */

@@ -10,16 +10,19 @@ import { loadIndexForDay } from "@/lib/admin-dailyloop";
 import { userCol, userRef } from "@/lib/admin-writes";
 import { effectiveCourseStatus, isFromDroppedCourse, plannableTasks } from "@/lib/courses";
 import { addDaysToKey, weekDates, weekStartKey } from "@/lib/dates";
-import { overdueMilestones } from "@/lib/goals";
+import { goalWeekPace, overdueMilestones } from "@/lib/goals";
 import { computeCourseCoverage, computeDebtHours, computeLoadIndexStreak, loadIndexBand, loadIndexBandLabels } from "@/lib/loadindex";
-import { computeDayReadout, formatDayReadout } from "@/lib/gamify";
+import { computeDayReadout, formatDayReadout, isScoredSitting } from "@/lib/gamify";
 import { compact, fail, isPlainId, ok, paginate, requireModule, type ToolContext } from "@/lib/mcp/context";
 import { dayAsOpened } from "@/lib/mcp/day";
 import { blocksView, courseView, paperView, taskOrder, taskView } from "@/lib/mcp/views";
 import { pickNextAction } from "@/lib/next-action";
+import { DEADLINE_ALERT_DAYS, unplannedHardDeadlines } from "@/lib/deadlines";
+import { dayShapeWindows, DEFAULT_MAX_SITTINGS_PER_DAY } from "@/lib/weekplan";
 import { derivePaperStatus } from "@/lib/papers";
 import { buildReviewQueue, DEFAULT_MAX_REVISION_MINUTES_PER_DAY, DEFAULT_MAX_REVISIONS_PER_DAY } from "@/lib/revision";
-import { getActiveSlot, getNextSlot, sortedSlots } from "@/lib/schedule";
+import { getActiveSlot, getNextSlot, minutesFromTime, slotDuration, sortedSlots } from "@/lib/schedule";
+import { pastBlockOutcome, sittingPlannedMinutes, slotCoverageMinutes } from "@/lib/tracking";
 import { getActiveTerm } from "@/lib/terms";
 import { sittingBounds } from "@/lib/timeline";
 import type {
@@ -83,6 +86,29 @@ function sessionsOn(sessions: PomodoroSession[], date: string, slotDay: (s: Pomo
   return sessions.filter((session) => slotDay(session) === date);
 }
 
+/**
+ * What catch-up hours are made of. The figure is Workload's shortfall (required − actual minutes) summed
+ * over the last 14 day records, not a list of blocks; required minutes are the day's deep_work blocks,
+ * revision due, assessment prep and the daily share of course and goal targets. So each short day is listed with its numbers, and
+ * beside it the work blocks that day that passed with no focus time (missed) or too little (partial).
+ */
+async function catchUpBreakdown(ctx: ToolContext, history: { date: string; requiredMinutes: number; actualMinutes: number }[], sessions: PomodoroSession[], slotDay: (s: PomodoroSession) => string, scheduleDay: string, minute: number) {
+  const short = history.slice(-14).filter((day) => day.requiredMinutes > day.actualMinutes);
+  if (short.length === 0) return [];
+  const snap = await userCol(ctx.uid, "dailySchedules").where(FieldPath.documentId(), "in", short.map((day) => day.date)).get();
+  ctx.meter.reads += Math.max(1, snap.size);
+  const slotsByDate = new Map(snap.docs.map((doc) => [doc.id, (doc.data() as DailySchedule).slots ?? []]));
+  return short.map((day) => {
+    const daySessions = sessionsOn(sessions, day.date, slotDay);
+    const unworked = sortedSlots(slotsByDate.get(day.date) ?? [])
+      .filter((slot) => isScoredSitting(slot) && (day.date < scheduleDay || minutesFromTime(slot.endTime) <= minute))
+      .map((slot) => ({ slot, outcome: pastBlockOutcome(slot, daySessions) }))
+      .filter(({ outcome }) => outcome === "missed" || outcome === "partial")
+      .map(({ slot, outcome }) => compact({ title: slot.title, time: `${slot.startTime}–${slot.endTime}`, outcome, plannedMinutes: sittingPlannedMinutes(slot), loggedMinutes: slotCoverageMinutes(slot, daySessions) || undefined }));
+    return compact({ date: day.date, requiredMinutes: day.requiredMinutes, actualMinutes: day.actualMinutes, shortfallMinutes: day.requiredMinutes - day.actualMinutes, unworkedBlocks: unworked });
+  });
+}
+
 export async function buildOverview(ctx: ToolContext, date?: string) {
   const settings = await ctx.settings();
   const frame = await ctx.frame();
@@ -107,7 +133,11 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
       return snap.docs.map((doc) => doc.data() as Day);
     })
   ]);
-  const history = recentDays.filter((d) => d.loadIndex && d.date <= today).sort((a, b) => a.date.localeCompare(b.date)).map((d) => d.loadIndex!);
+  const historyDays = recentDays.filter((d) => d.loadIndex && d.date <= today).sort((a, b) => a.date.localeCompare(b.date));
+  const history = historyDays.map((d) => d.loadIndex!);
+  const catchUpDays = modules.has("workload")
+    ? await catchUpBreakdown(ctx, historyDays.map((d) => ({ date: d.date, requiredMinutes: d.loadIndex!.requiredMinutes, actualMinutes: d.loadIndex!.actualMinutes })), sessions, frame.slotDay, frame.scheduleDay, minute)
+    : [];
   // `useDayReadout`'s inputs: the logical day's own blocks and sessions, paced against the clock only
   // while that day is the date the clock is on.
   const readout = computeDayReadout({
@@ -134,7 +164,8 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
         activeSlot: getActiveSlot(slots, minute),
         nextSlot: getNextSlot(slots, minute),
         minute,
-        isDayOff: Boolean(clockDayDoc?.dayOff)
+        isDayOff: Boolean(clockDayDoc?.dayOff),
+        workWindows: dayShapeWindows(settings.dayShape) ?? undefined
       });
 
   const courseName = new Map(courses.map((course) => [course.id, course.name]));
@@ -154,6 +185,7 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
       note: today !== scheduleDay ? "It's after midnight but before this person's day ends: Workload and stats are still on todayKey; the blocks below are scheduleDayKey's." : undefined
     }),
     sittingBounds: sittingBounds(settings),
+    dayShape: settings.dayShape ? { ...settings.dayShape, note: "Deep work goes only in deep windows; light work (admin, revision) in light windows first; no work outside them." } : undefined,
     enabledModules: [...modules],
     dayOff: clockDayDoc?.dayOff ?? workload.day?.dayOff,
     blocks: slots.length > 0 ? blocksView(slots, { dateKey: scheduleDay, scheduleDay: frame.scheduleDay, minute, sessionsOnDate: sessionsOn(sessions, scheduleDay, frame.slotDay) }) : "No plan saved for this date yet (the app shows only its classes, commitments and routine until something is added).",
@@ -163,6 +195,10 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
           bandLabel: loadIndexBandLabels[loadIndexBand(workload.snapshot.value)],
           onTrackStreakDays: computeLoadIndexStreak(history),
           catchUpHours14Days: computeDebtHours(history),
+          catchUpBreakdown: compact({
+            how: "Sum of each day's Workload shortfall (required − actual minutes) over the last 14 day records, capped at 40 h. Required = that day's deep_work blocks + 3 min per revision due + assessment prep owed + the daily share of course and goal weekly targets; actual = focus minutes + 3 per revision done. Reading/admin blocks aren't in required, so the work blocks that passed unworked (missed = no focus time, partial = under 60%) are listed per day beside the numbers, not as what the figure is made of.",
+            days: catchUpDays
+          }),
           note: "Derived live from today's data; never stored until the day closes."
         }
       : undefined,
@@ -189,6 +225,24 @@ export async function buildOverview(ctx: ToolContext, date?: string) {
           .map((goal) => compact({ id: goal.id, title: goal.title, horizon: goal.horizon, targetHoursPerWeek: goal.targetHoursPerWeek, definitionOfDone: goal.definitionOfDone, openMilestones: goal.milestones.filter((m) => !m.done).map((m) => compact({ id: m.id, title: m.title, dueAt: m.dueAt })) }))
       : undefined,
     overdueMilestones: modules.has("goals") ? overdueMilestones(goals, today) : undefined,
+    goalPaceWarnings: modules.has("goals")
+      ? await (async () => {
+          const dates = weekDates(weekStart);
+          const week = await Promise.all(dates.map(async (d) => ({ dateKey: d, slots: (await ctx.get<DailySchedule>("dailySchedules", d))?.slots ?? [] })));
+          const warnings = goalWeekPace({ goals, schedules: week, sessions, weekDateKeys: dates, todayKey: frame.scheduleDay, nowMinutes: minute }).filter((g) => g.warning).map((g) => g.warning!);
+          return warnings.length > 0 ? warnings : undefined;
+        })()
+      : undefined,
+    hardDeadlinesUnplanned: await (async () => {
+      // External tasks are outside Workload, so nothing else pushes for them: flag one due soon with no time blocked.
+      const horizonKeys = Array.from({ length: DEADLINE_ALERT_DAYS + 1 }, (_, i) => addDaysToKey(scheduleDay, i));
+      const snap = await userCol(ctx.uid, "dailySchedules").where(FieldPath.documentId(), "in", horizonKeys).get();
+      ctx.meter.reads += Math.max(1, snap.size);
+      const due = unplannedHardDeadlines({ tasks: plannableTasks(tasks, courses), schedules: snap.docs.map((doc) => doc.data() as DailySchedule), todayKey: scheduleDay });
+      return due.length > 0
+        ? { note: `Hard deadlines in the next ${DEADLINE_ALERT_DAYS} days with no block assigned. Offer to schedule them (add_block or add_session with taskIds).`, tasks: due.map(({ task, daysLeft }) => compact({ id: task.id, title: task.title, dueDate: task.dueDate, daysLeft, estimatedSessions: task.estimatedPomodoros })) }
+        : undefined;
+    })(),
     openTasks: {
       count: openTasks.length,
       overdue: openTasks.filter((task) => task.dueDate && task.dueDate < today).length,
@@ -334,30 +388,59 @@ export function registerReadTools(server: McpServer, ctx: ToolContext) {
     "get_week",
     {
       title: "Get a week",
-      description: "Seven days (Monday to Sunday) of blocks, days off, the week's plan from /plan/week, and its weekly review. weekStart is that week's Monday; defaults to this week.",
-      inputSchema: z.object({ weekStart: dateKey.optional() }),
+      description:
+        "Seven days (Monday to Sunday) of blocks, days off, the week's plan from /plan/week, and its weekly review. weekStart is that week's Monday; defaults to this week. compact: true lists the routine blocks (Sleep, meals, Gym…) once and then only each day's other blocks. Also: sittings per day against the sustainable cap, and each goal's weekly hours (planned and logged) against its target, with a pace warning.",
+      inputSchema: z.object({ weekStart: dateKey.optional(), compact: z.boolean().optional() }),
       annotations: READ
     },
-    async ({ weekStart }) => {
+    async ({ weekStart, compact: compactView }) => {
       const frame = await ctx.frame();
+      const settings = await ctx.settings();
       const start = weekOf(weekStart ?? frame.today);
       const dates = weekDates(start);
-      const [schedules, days, review, sessions] = await Promise.all([
+      const [schedules, days, review, sessions, goals] = await Promise.all([
         Promise.all(dates.map(async (d) => dayAsOpened(ctx, d, (await ctx.get<DailySchedule>("dailySchedules", d))?.slots ?? []))),
         Promise.all(dates.map((d) => ctx.get<Day>("days", d))),
         ctx.get<WeeklyReview>("weeklyReviews", start),
-        ctx.list<PomodoroSession>("pomodoroSessions")
+        ctx.list<PomodoroSession>("pomodoroSessions"),
+        ctx.list<Goal>("goals")
       ]);
+      const cap = settings.maxSittingsPerDay ?? DEFAULT_MAX_SITTINGS_PER_DAY;
+      const views = dates.map((d, i) => blocksView(schedules[i], { dateKey: d, scheduleDay: frame.scheduleDay, minute: frame.minute, sessionsOnDate: sessionsOn(sessions, d, frame.slotDay) }).map((b) => compact({ ...b, note: undefined })));
+      // The routine repeats every day; in compact mode it is listed once, with the days it's on.
+      const routineKey = (b: { slotId: string; startTime: string; endTime: string }) => `${b.slotId}|${b.startTime}|${b.endTime}`;
+      const routine = new Map<string, { title?: string; time: string; days: string[] }>();
+      if (compactView) {
+        views.forEach((blocks, i) => {
+          for (const b of blocks) {
+            if (!b.slotId?.startsWith("routine-") && b.slotId !== "weekly-planning") continue;
+            const key = routineKey(b as { slotId: string; startTime: string; endTime: string });
+            const entry = routine.get(key) ?? { title: b.title, time: `${b.startTime}–${b.endTime}`, days: [] };
+            entry.days.push(dates[i]);
+            routine.set(key, entry);
+          }
+        });
+      }
+      const sittingCounts = schedules.map((slots) => slots.filter(isScoredSitting).length);
+      const pace = goalWeekPace({ goals, schedules: dates.map((d, i) => ({ dateKey: d, slots: schedules[i] })), sessions, weekDateKeys: dates, todayKey: frame.scheduleDay, nowMinutes: frame.minute });
       return ok(
         compact({
           weekStart: start,
+          routine: compactView ? [...routine.values()].map((r) => ({ title: r.title, time: r.time, days: r.days.length === 7 ? "every day" : r.days })) : undefined,
           days: dates.map((d, i) =>
             compact({
               date: d,
               dayOff: days[i]?.dayOff,
-              blocks: blocksView(schedules[i], { dateKey: d, scheduleDay: frame.scheduleDay, minute: frame.minute, sessionsOnDate: sessionsOn(sessions, d, frame.slotDay) }).map((b) => compact({ ...b, note: undefined }))
+              sittings: sittingCounts[i] || undefined,
+              overSittingCap: sittingCounts[i] > cap ? `${sittingCounts[i]} sittings is over the sustainable ${cap} a day.` : undefined,
+              blocks: compactView ? views[i].filter((b) => !b.slotId?.startsWith("routine-") && b.slotId !== "weekly-planning") : views[i]
             })
           ),
+          load: compact({
+            sittingCapPerDay: cap,
+            plannedWorkHours: Math.round((schedules.flatMap((slots) => slots.filter(isScoredSitting)).reduce((sum, slot) => sum + slotDuration(slot), 0) / 60) * 10) / 10,
+            goals: pace.length > 0 ? pace.map((g) => compact({ ...g, targetHours: g.targetMinutes / 60, plannedHours: Math.round((g.plannedMinutes / 60) * 10) / 10, loggedHours: Math.round((g.loggedMinutes / 60) * 10) / 10, targetMinutes: undefined, plannedMinutes: undefined, loggedMinutes: undefined })) : undefined
+          }),
           plan: review?.plan ? { ...weekPlanSummary(review), proposedBlocks: review.plan.proposedBlocks, dismissedMinutes: review.plan.dismissedMinutes } : { committed: false },
           review: review ? compact({ wins: review.wins, missedGoals: review.missedGoals, blockers: review.blockers, nextWeekPriorities: review.nextWeekPriorities, averageFocusRating: review.averageFocusRating }) : undefined
         })

@@ -25,6 +25,18 @@ export function classMinutesForWeek(
 }
 
 /**
+ * What a sitting can still be measured against: its `plannedMinutes`, but never more than the block is
+ * long now. A sitting resized shorter after planning (by a drag, a typed time, or a move from Claude)
+ * used to keep its old `plannedMinutes`, so the day score and the resume timer compared 40 minutes of
+ * room against a 55-minute plan. Reading the smaller of the two also repairs every block already stored
+ * that way, with no backfill. Writes keep it in step too (`fitPlannedMinutes`, lib/patches.ts).
+ */
+export function sittingPlannedMinutes(slot: Pick<ScheduleSlot, "startTime" | "endTime" | "plannedMinutes">): number {
+  const length = Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime));
+  return Math.min(slot.plannedMinutes ?? length, length);
+}
+
+/**
  * Minutes of real focus-session time logged against one block, clamped to the block's own
  * duration (a session can't "cover" more of a block than the block is long). Callers must pass
  * only sessions from the date the block is being evaluated for: a recurring class/routine slot
@@ -100,6 +112,23 @@ export function sittingOutcome(
 }
 
 /**
+ * How a block whose time has passed went — derived, never stored, so a block the clock left behind at
+ * "upcoming" still reads correctly. A status set by hand (Done/Skipped in the wrap-up) wins; otherwise
+ * it is `slotAutoStatus`'s 60% rule: covered enough is "completed", some focus time is "partial", none
+ * is "missed". Callers decide which block types are work (`isScoredSitting`); classes go through the
+ * class log instead.
+ */
+export type PastBlockOutcome = "completed" | "skipped" | "partial" | "missed";
+export function pastBlockOutcome(
+  slot: Pick<ScheduleSlot, "id" | "type" | "startTime" | "endTime" | "status">,
+  sessions: Pick<PomodoroSession, "slotId" | "mode" | "minutes">[]
+): PastBlockOutcome {
+  if (slot.status === "completed" || slot.status === "skipped") return slot.status;
+  if (slotAutoStatus(slot, sessions) === "completed") return "completed";
+  return slotCoverageMinutes(slot, sessions) > 0 ? "partial" : "missed";
+}
+
+/**
  * plan/16 §5.1/§5.5 — minutes of this sitting still to do: what it was planned to contribute
  * (`plannedMinutes`, falling back to its own duration) minus what real sessions have already
  * covered. This is what arms the focus timer when a sitting is resumed, so a block already 22
@@ -109,6 +138,5 @@ export function sittingRemainingMinutes(
   slot: Pick<ScheduleSlot, "id" | "startTime" | "endTime" | "plannedMinutes">,
   sessions: Pick<PomodoroSession, "slotId" | "mode" | "minutes">[]
 ): number {
-  const planned = slot.plannedMinutes ?? Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime));
-  return Math.max(0, planned - slotCoverageMinutes(slot, sessions));
+  return Math.max(0, sittingPlannedMinutes(slot) - slotCoverageMinutes(slot, sessions));
 }

@@ -1,5 +1,6 @@
 import type { ModuleId } from "@/lib/features";
-import { minutesFromTime } from "@/lib/schedule";
+import { minutesFromTime, minutesToTime } from "@/lib/schedule";
+import type { ShapeWindow } from "@/lib/weekplan";
 import type { Checkpoint, ScheduleSlot, Task } from "@/types";
 
 export type NextActionKind = "checkpoint-prep" | "revision" | "task" | "rest" | "block" | "day-off";
@@ -42,7 +43,8 @@ export function pickNextAction({
   activeSlot,
   nextSlot,
   minute,
-  isDayOff
+  isDayOff,
+  workWindows
 }: {
   checkpoints: Checkpoint[];
   dueRevisionCount: number;
@@ -64,6 +66,9 @@ export function pickNextAction({
    *  block — a day off is a decision that overrides whatever's still sitting on the schedule from
    *  before it was marked, not one more thing competing with it. */
   isDayOff?: boolean;
+  /** The day's work windows (`workWindowsOf`). Outside every one, nothing work-related is suggested;
+   *  in a light window, no assessment prep. Omitted = the cascade as before (existing callers, tests). */
+  workWindows?: ShapeWindow[];
 }): NextAction | null {
   const enabled = (id: ModuleId) => !enabledModules || enabledModules.has(id);
 
@@ -93,7 +98,22 @@ export function pickNextAction({
     }
   }
 
+  // Blocks already on the plan win above; past this point the suggestions are work the person didn't
+  // plan for now, so they wait for a work window.
+  let lightWindow = false;
+  if (workWindows && workWindows.length > 0 && minute != null) {
+    const here = workWindows.find((window) => minute >= window.start && minute < window.end);
+    if (!here) {
+      const next = workWindows.filter((window) => window.start > minute).sort((a, b) => a.start - b.start)[0];
+      return next
+        ? { kind: "rest", title: "Not a work window", why: `Work picks up at ${minutesToTime(next.start)}`, href: "/dashboard" }
+        : { kind: "rest", title: "Done for the day", why: `No work after ${minutesToTime(Math.max(...workWindows.map((window) => window.end)))}`, href: "/dashboard" };
+    }
+    lightWindow = here.energy === "light";
+  }
+
   const urgent =
+    !lightWindow &&
     enabled("courses") &&
     checkpoints
       .filter((checkpoint) => checkpoint.requiresPrep && checkpoint.status !== "done" && checkpoint.status !== "missed" && checkpoint.status !== "submitted")

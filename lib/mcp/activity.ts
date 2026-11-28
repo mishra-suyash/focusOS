@@ -11,10 +11,10 @@
 import type { CallToolResult } from "@modelcontextprotocol/server";
 import { createHash } from "node:crypto";
 import { userCol, removeSittings } from "@/lib/admin-writes";
-import { getConnection, runGoogleCalendarPush } from "@/lib/google-calendar-admin";
-import { fail, ok, type ToolContext } from "@/lib/mcp/context";
+import { getConnection, previewGoogleCalendarPush, runGoogleCalendarPush, type PushOutcome } from "@/lib/google-calendar-admin";
+import { compact, fail, ok, type ToolContext } from "@/lib/mcp/context";
 import { sittingsOfFinishedWork, type FinishedWork } from "@/lib/weekplan";
-import type { DailySchedule, PomodoroSession } from "@/types";
+import type { DailySchedule, PomodoroSession, ScheduleSlot } from "@/types";
 
 export interface ActivityChange {
   targetType: string;
@@ -70,15 +70,45 @@ export async function runWrite(ctx: ToolContext, tool: string, idempotencyKey: s
   return ok(outcome.result);
 }
 
+export type CalendarMode = "push" | "skip" | "dryRun";
+
+/**
+ * What a push did (or, for a dry run, would do), named: the push reconciles the whole 14-day window,
+ * not only the day just edited, so anything it creates or removes elsewhere is listed by title and
+ * date rather than hidden in a count. Only events FocusOS created in its own calendar are ever removed.
+ */
+function describePush(outcome: PushOutcome, date: string | undefined, verb: "Pushed" | "Would push") {
+  const named = (action: "create" | "delete", here: boolean) =>
+    outcome.items
+      .filter((item) => item.action === action && (date === undefined || (item.date === date) === here))
+      .map((item) => compact({ title: item.title ?? "(untitled)", date: item.date, kind: item.kind }));
+  return compact({
+    summary: `${verb} to Google Calendar: ${outcome.created} created, ${outcome.updated} updated, ${outcome.deleted} removed.`,
+    created: named("create", true),
+    removed: named("delete", true),
+    otherDates: date
+      ? compact({
+          note: "The push reconciles every FocusOS event in its window, so these changes were on other dates (an unsaved edit elsewhere, a finished task, a block removed in the app). Only events FocusOS created are ever removed.",
+          created: named("create", false),
+          removed: named("delete", false)
+        })
+      : undefined
+  });
+}
+
 /** Best-effort, like the autosave's: a failed push never fails the write; the result says what happened. */
-export async function pushCalendar(uid: string): Promise<string> {
+export async function pushCalendar(uid: string, opts: { mode?: CalendarMode; date?: string; override?: { dateKey: string; slots: ScheduleSlot[] } } = {}): Promise<unknown> {
+  const mode = opts.mode ?? "push";
   try {
     const connection = await getConnection(uid);
     if (!connection?.connected || !connection.focusOsCalendarId) return "Google Calendar isn't connected; nothing to push.";
-    const counts = await runGoogleCalendarPush(uid);
-    return `Pushed to Google Calendar (${counts.created} created, ${counts.updated} updated, ${counts.deleted} removed).`;
+    if (mode === "skip") return "Not pushed to Google Calendar (calendar: \"skip\"). The next sync from the app or the scheduled sync will push it.";
+    if (mode === "dryRun") return describePush(await previewGoogleCalendarPush(uid, { override: opts.override }), opts.date, "Would push");
+    return describePush(await runGoogleCalendarPush(uid, { nameRemovals: true }), opts.date, "Pushed");
   } catch (error) {
-    return `The change is saved, but the Google Calendar push failed: ${error instanceof Error ? error.message : "unknown error"}. The nightly sync will retry.`;
+    return mode === "dryRun"
+      ? `Couldn't preview the Google Calendar push: ${error instanceof Error ? error.message : "unknown error"}.`
+      : `The change is saved, but the Google Calendar push failed: ${error instanceof Error ? error.message : "unknown error"}. The scheduled sync will retry.`;
   }
 }
 
@@ -90,7 +120,7 @@ export async function releaseFinishedWork(ctx: ToolContext, work: FinishedWork) 
   const frame = await ctx.frame();
   const [schedules, sessions] = await Promise.all([ctx.list<DailySchedule>("dailySchedules"), ctx.list<PomodoroSession>("pomodoroSessions")]);
   const released = sittingsOfFinishedWork({ schedules, work, todayKey: frame.scheduleDay, nowMinutes: frame.minute, sessions });
-  if (released.length === 0) return { released: [] as { date: string; title: string; startTime: string; endTime: string }[], calendar: undefined, changes: [] as ActivityChange[] };
+  if (released.length === 0) return { released: [] as { date: string; title: string; startTime: string; endTime: string }[], calendar: undefined as unknown, changes: [] as ActivityChange[] };
   const touched = await removeSittings(ctx.uid, released);
   ctx.meter.writes += touched.length;
   const calendar = await pushCalendar(ctx.uid);

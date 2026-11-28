@@ -1,6 +1,6 @@
 import { loadIndexBand } from "@/lib/loadindex";
 import { minutesFromTime } from "@/lib/schedule";
-import { sittingOutcome, slotCoverageMinutes } from "@/lib/tracking";
+import { sittingOutcome, sittingPlannedMinutes, slotCoverageMinutes } from "@/lib/tracking";
 import type { LoadIndexBand, LoadIndexSnapshot, PomodoroSession, ScheduleSlot } from "@/types";
 
 /**
@@ -73,7 +73,7 @@ export function computeDayScore(input: {
   const sittings = slots.filter(isScoredSitting);
 
   const minutesPlanned = sittings.reduce(
-    (sum, slot) => sum + (slot.plannedMinutes ?? Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime))),
+    (sum, slot) => sum + sittingPlannedMinutes(slot),
     0
   );
   const minutesLogged = sittings.reduce((sum, slot) => sum + slotCoverageMinutes(slot, sessions), 0);
@@ -163,7 +163,7 @@ export function computeDayReadout(input: {
   const elapsed = input.slots
     .filter(isScoredSitting)
     .filter((slot) => minutesFromTime(slot.endTime) <= nowMinute)
-    .reduce((sum, slot) => sum + (slot.plannedMinutes ?? Math.max(0, minutesFromTime(slot.endTime) - minutesFromTime(slot.startTime))), 0);
+    .reduce((sum, slot) => sum + sittingPlannedMinutes(slot), 0);
 
   // Past the last sitting of the day, "elapsed" and "planned" are the same number, so pace has
   // stopped being a different question from the score — switch to the real thing rather than

@@ -3,9 +3,10 @@
  * plus the derived values computed the way the app computes them (never a second stored copy).
  */
 import { effectiveCourseStatus } from "@/lib/courses";
-import { derivePaperStatus, isBackFromShelf, nextReadingPass, PASS_LABELS } from "@/lib/papers";
+import { cleanPaperTitle, derivePaperStatus, isBackFromShelf, isThinPass, nextReadingPass, passOutputShortfall, PASS_LABELS } from "@/lib/papers";
 import { computeSlotStatus, isFixedSlot, isLockedSlot, slotDuration, sortedSlots } from "@/lib/schedule";
-import { slotAutoStatus, slotCoverageMinutes } from "@/lib/tracking";
+import { isScoredSitting } from "@/lib/gamify";
+import { pastBlockOutcome, sittingPlannedMinutes, slotAutoStatus, slotCoverageMinutes } from "@/lib/tracking";
 import { compact } from "@/lib/mcp/context";
 import type { Course, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
@@ -15,7 +16,9 @@ export type Timing = "past" | "now" | "upcoming";
  * A block as the app shows it at this moment. `timing` is the clock's view (a past date is all past, a
  * future one all upcoming, today is read against the person's own wall-clock minute). `closed` is
  * `slotAutoStatus`'s 60% rule, the one definition of a finished sitting. `editable` is false for the
- * locked layer and for anything that has started.
+ * locked layer and for anything that has started. `status` is derived for blocks the clock has passed:
+ * a work block is completed / partial / missed by its focus time (`pastBlockOutcome`), anything else
+ * reads "past"; a hand-set Done or Skipped wins.
  */
 export function blockView(slot: ScheduleSlot, ctx: { dateKey: string; scheduleDay: string; minute: number; sessionsOnDate: PomodoroSession[] }) {
   const timing: Timing =
@@ -23,6 +26,19 @@ export function blockView(slot: ScheduleSlot, ctx: { dateKey: string; scheduleDa
   const covered = slotCoverageMinutes(slot, ctx.sessionsOnDate);
   const locked = isLockedSlot(slot);
   const fixed = isFixedSlot(slot);
+  // The stored status is only what someone last set; the clock doesn't rewrite it. Read it the way the
+  // wrap-up does: a work block whose time passed is completed, partial or missed by its focus time.
+  const status =
+    timing === "past"
+      ? isScoredSitting(slot)
+        ? pastBlockOutcome(slot, ctx.sessionsOnDate)
+        : slot.status === "upcoming" || slot.status === "active"
+          ? "past"
+          : slot.status
+      : timing === "now" && slot.status === "upcoming"
+        ? "active"
+        : slot.status;
+  const planned = sittingPlannedMinutes(slot);
   return compact({
     slotId: slot.id,
     title: slot.title,
@@ -30,7 +46,7 @@ export function blockView(slot: ScheduleSlot, ctx: { dateKey: string; scheduleDa
     startTime: slot.startTime,
     endTime: slot.endTime,
     minutes: slotDuration(slot),
-    status: slot.status,
+    status,
     timing,
     coveredMinutes: covered || undefined,
     closed: slot.type !== "class" && slotAutoStatus(slot, ctx.sessionsOnDate) === "completed" ? true : undefined,
@@ -41,8 +57,10 @@ export function blockView(slot: ScheduleSlot, ctx: { dateKey: string; scheduleDa
     bucket: slot.bucket,
     objective: slot.objectiveRef,
     sitting: slot.chunk ? `${slot.chunk.index} of ${slot.chunk.total}` : undefined,
-    plannedMinutes: slot.plannedMinutes,
-    note: slot.note || undefined
+    plannedMinutes: planned !== slotDuration(slot) ? planned : undefined,
+    note: slot.note || undefined,
+    tentative: slot.tentative || undefined,
+    meeting: slot.meeting
   });
 }
 
@@ -86,11 +104,17 @@ export function taskOrder(a: Task, b: Task): number {
 
 export function paperView(paper: Paper, todayKey: string) {
   const status = derivePaperStatus(paper);
-  const pass = (n: 1 | 2 | 3) => paper[`pass${n}` as const]?.status;
+  // A pass closed without its minimum output reads "done (thin)": its notes aren't there to build on.
+  const pass = (n: 1 | 2 | 3) => {
+    const state = paper[`pass${n}` as const];
+    return isThinPass(n, state) ? `done (thin: ${passOutputShortfall(n, state?.output)})` : state?.status;
+  };
   const next = nextReadingPass(paper);
   return compact({
     id: paper.id,
-    title: paper.title,
+    // The paper's own title; a citation pasted as the title is kept apart (`splitCitation`).
+    title: cleanPaperTitle(paper),
+    citation: paper.citation ?? (cleanPaperTitle(paper) !== paper.title ? paper.title : undefined),
     authors: paper.authors?.slice(0, 4),
     year: paper.year,
     venue: paper.venue,

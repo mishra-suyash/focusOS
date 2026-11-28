@@ -8,6 +8,7 @@ import { SectionHeader } from "@/components/section-header";
 import { useAuth } from "@/components/auth-provider";
 import { FloatingWidgetCustomizeDialog } from "@/components/floating-widget-customize-dialog";
 import { ConnectedAppsSettings } from "@/components/connected-apps-settings";
+import { DayShapeSettings } from "@/components/day-shape-settings";
 import { GoogleCalendarSettings } from "@/components/google-calendar-settings";
 import { InfoHint } from "@/components/info-hint";
 import { ReadingHabitSettings } from "@/components/reading-habit-settings";
@@ -201,6 +202,7 @@ export default function SettingsPage() {
             </p>
           </div>
         </section>
+        <DayShapeSettings />
         <ReadingHabitSettings />
         <section className="card p-5">
           <h2 className="mb-4 text-lg font-semibold">Floating widget</h2>

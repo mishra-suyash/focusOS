@@ -20,7 +20,7 @@ import {
   type QueryConstraint
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import { expandDotPaths, paperPatch, taskPatch, withoutUndefined } from "@/lib/patches";
+import { expandDotPaths, fitPlannedMinutes, paperPatch, taskPatch, withoutUndefined } from "@/lib/patches";
 import { templateBlocks } from "@/lib/schedule";
 import { trackRead, trackWrite } from "@/lib/usage";
 import type { PublicCatalog } from "@/lib/templates/schema";
@@ -373,6 +373,7 @@ export async function saveDailySchedule(
     ref,
     withoutUndefined({
       ...schedule,
+      slots: fitPlannedMinutes(schedule.slots),
       createdAt: existing.exists() ? existing.data().createdAt : schedule.createdAt ?? now(),
       updatedAt
     }),
@@ -831,6 +832,8 @@ export async function saveUserSettings(uid: string, patch: Partial<Omit<UserSett
   // `enabledModules: undefined` — under merge:true that's normally a no-op (the key is just
   // omitted), the same bug class `setPackDefaultTemplate` had to work around in U2.
   if ("enabledModules" in patch && patch.enabledModules === undefined) payload.enabledModules = deleteField();
+  // Clearing the day shape goes back to "work anywhere in the working window".
+  if ("dayShape" in patch && patch.dayShape === undefined) payload.dayShape = deleteField();
   // plan/17 — `merge: true` deep-merges maps, so clearing the reading habit's preferred days or time
   // of day would otherwise leave the old value in place. Cleared optional keys are deleted explicitly.
   if (patch.readingHabit) {

@@ -113,6 +113,9 @@ export const TimeGrid = forwardRef<
   const [preview, setPreview] = useState<DragPreview | null>(null);
   const [externalPreview, setExternalPreview] = useState<ExternalPreview | null>(null);
   const laned = laneLayout(slots);
+  // Lanes keep overlapping blocks side by side; the red "clash" ring is only for firm blocks, since one
+  // sitting on a tentative block is allowed.
+  const clashingIds = new Set(laneLayout(slots.filter((slot) => !slot.tentative)).filter((item) => item.laneCount > 1).map((item) => item.slot.id));
   const ripplePositions = preview?.rippleResult
     ? new Map(preview.rippleResult.map((slot) => [slot.id, { start: minutesFromTime(slot.startTime), end: minutesFromTime(slot.endTime) }]))
     : null;
@@ -428,8 +431,10 @@ export const TimeGrid = forwardRef<
                   // is most likely (a block actively selected for editing).
                   !isSelected && "overflow-hidden",
                   slotTypeStyles[slot.type],
+                  // Tentative: held, not certain; other blocks may sit beside it without it being a clash.
+                  slot.tentative && "border-dashed opacity-80",
                   isSelected && "ring-2 ring-moss-600",
-                  laneCount > 1 && "ring-1 ring-red-500",
+                  clashingIds.has(slot.id) && "ring-1 ring-red-500",
                   isBeingDragged && (preview!.valid ? "opacity-80" : "opacity-60 ring-2 ring-red-500"),
                   isBeingPushed && "opacity-70 ring-1 ring-amber-500"
                 )}

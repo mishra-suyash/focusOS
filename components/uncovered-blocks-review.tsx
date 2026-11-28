@@ -1,13 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { orderBy } from "firebase/firestore";
+import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { useDay } from "@/hooks/use-day";
-import { scheduleDayKey } from "@/lib/dates";
+import { useUserCollection } from "@/hooks/use-user-collection";
+import { scheduleDayKey, sessionSlotDayKey } from "@/lib/dates";
+import { isScoredSitting } from "@/lib/gamify";
 import { saveDailySchedule, subscribeDoc } from "@/lib/firestore";
 import { currentMinute, isLockedSlot, minutesFromTime, sortedSlots } from "@/lib/schedule";
 import { MINUTES_PER_DAY } from "@/lib/timeline";
-import type { DailySchedule, ScheduleSlot } from "@/types";
+import { pastBlockOutcome, sittingPlannedMinutes, slotCoverageMinutes } from "@/lib/tracking";
+import type { DailySchedule, PomodoroSession, ScheduleSlot } from "@/types";
 
 /**
  * plan/14 §6.5 — the honest half of block auto-completion. `slotAutoStatus` (lib/tracking.ts,
@@ -39,6 +43,7 @@ export function UncoveredBlocksReview({
   const [schedule, setSchedule] = useState<DailySchedule | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const { day } = useDay(date);
+  const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc")], []));
 
   useEffect(() => {
     if (!user) {
@@ -60,6 +65,15 @@ export function UncoveredBlocksReview({
   );
 
   if (uncovered.length === 0) return null;
+  // Coverage is read against this date's own sessions: recurring slots reuse ids across dates.
+  const daySessions = sessions.filter((session) => sessionSlotDayKey(session) === date);
+  const outcomeLabel = (slot: ScheduleSlot) => {
+    if (!isScoredSitting(slot)) return null;
+    const outcome = pastBlockOutcome(slot, daySessions);
+    if (outcome === "missed") return { text: "Missed · no focus logged", tone: "text-rose-600 dark:text-rose-400" };
+    if (outcome === "partial") return { text: `Partial · ${slotCoverageMinutes(slot, daySessions)} of ${sittingPlannedMinutes(slot)} min`, tone: "text-amber-700 dark:text-amber-400" };
+    return null;
+  };
 
   async function setStatus(slotId: string, status: ScheduleSlot["status"]) {
     if (!user || !schedule) return;
@@ -76,13 +90,17 @@ export function UncoveredBlocksReview({
     <>
       <p className="label mb-1">Blocks that timed out</p>
       <p className="mb-3 text-xs text-ink-500 dark:text-ink-400">
-        Their time passed without enough logged work to mark them done automatically. Done or skipped?
+        Their time passed without enough logged work to mark them done automatically. Done or skipped? Missed ones had no focus time at all.
       </p>
       <div className="space-y-2">
         {uncovered.map((slot) => (
           <div key={slot.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-ink-50 px-3 py-2 text-sm dark:bg-ink-800">
             <span>
               {slot.title} <span className="text-xs text-ink-500 dark:text-ink-400">{slot.startTime}–{slot.endTime}</span>
+              {(() => {
+                const label = outcomeLabel(slot);
+                return label ? <span className={`ml-2 text-xs ${label.tone}`}>{label.text}</span> : null;
+              })()}
             </span>
             <div className="flex gap-2">
               <button

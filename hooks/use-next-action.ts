@@ -10,11 +10,13 @@ import { useFeatures } from "@/hooks/use-features";
 import { useLiveLoadIndex } from "@/hooks/use-live-load-index";
 import { useRevisionCounts } from "@/hooks/use-revision-counts";
 import { useUserCollection } from "@/hooks/use-user-collection";
+import { useUserSettings } from "@/hooks/use-user-settings";
 import { plannableTasks } from "@/lib/courses";
 import { scheduleDayKey, sessionSlotDayKey, weekDates, weekStartKey } from "@/lib/dates";
 import { pickNextAction, type NextAction } from "@/lib/next-action";
 import { describeObjective, sittingStartArgs, type SittingStartArgs } from "@/lib/objectives";
 import { currentMinute, getActiveSlot, getNextSlot, REST_SLOT_TYPES, sortedSlots } from "@/lib/schedule";
+import { dayShapeWindows } from "@/lib/weekplan";
 import type { Course, DailySchedule, Goal, Paper, PomodoroSession, ScheduleSlot, Task } from "@/types";
 
 /** Exactly `startFocus`'s parameter shape (components/focus-session-provider.tsx). */
@@ -48,6 +50,7 @@ export function useNextAction(todayKey: string): {
   const { startFocus } = useFocusSession();
   const { startReadingSlot } = useReadingPicker();
   const { enabledModules } = useFeatures();
+  const { settings } = useUserSettings();
   const { items: tasks } = useUserCollection<Task>("tasks", useMemo(() => [orderBy("createdAt", "desc")], []));
   const { items: sessions } = useUserCollection<PomodoroSession>("pomodoroSessions", useMemo(() => [orderBy("completedAt", "desc"), limit(200)], []));
   const { items: dailySchedules } = useUserCollection<DailySchedule>("dailySchedules", useMemo(() => [orderBy("updatedAt", "desc")], []));
@@ -76,7 +79,9 @@ export function useNextAction(todayKey: string): {
     activeSlot: getActiveSlot(slots, minute),
     nextSlot: getNextSlot(slots, minute),
     minute,
-    isDayOff: Boolean(clockDayRecord?.dayOff)
+    isDayOff: Boolean(clockDayRecord?.dayOff),
+    // Only a day shape limits Up next: without one, the working window was never meant as a hard cutoff.
+    workWindows: dayShapeWindows(settings.dayShape) ?? undefined
   });
 
   const todaysSessions = sessions.filter((session) => sessionSlotDayKey(session) === clockDay);
