@@ -62,7 +62,7 @@ The plan for the work is `plan/20.FocusOS-v2-Suggestions-Followup.md`.
 
 ---
 
-## Run 1 — 2026-11-28 (uncommitted, on main)
+## Run 1 — 2026-11-28 (`53d9a78`, pushed and deployed)
 
 **Built:** 1.1 (view), 1.3 (update names), 1.4 (requirement), 1.5, 1.6, 1.7, 3.3, and the §4 duplicate events.
 
@@ -93,7 +93,10 @@ The plan for the work is `plan/20.FocusOS-v2-Suggestions-Followup.md`.
 **Not checked:**
 - Google Calendar pushes. The test account isn't connected, so update names, the task dedupe and leaving out rescheduled originals are only covered as code paths.
 
+**After deploy (owner's go-ahead):** LithOS and Janus were linked to "Literature / SOTA track" through the
+connector (`update_paper goalId`). Its pace warning cleared. PagedAttention and SGLang are also named in
+that goal's milestones but aren't linked; that's the owner's call.
+
 **Left for the owner:**
-- Link LithOS / Janus to "Literature / SOTA track" (`update_paper goalId`, or the paper page select). Until then 1.7 changes nothing for them.
 - Set a day shape if Up next should go quiet after 18:00.
 - Older thin passes (LithOS Skim, Agentix Read) stay "done (thin)". There's no backfill form yet.
